@@ -32,7 +32,7 @@
 
   if (window.SpotiDuckUI && window.SpotiDuckUI.version) return; // idempotent
 
-  var VERSION = "2.4.1";
+  var VERSION = "2.4.2";
   var STYLE_ID = "spotiduck-ui-style";
   var BODY_CLASS = "sd-mobile";
 
@@ -133,6 +133,8 @@
       groupPlay: "Lecture",
       groupUi: "Interface",
       groupAbout: "À propos",
+      display: "Affichage",
+      displayHint: "Appuie pour copier les infos d'affichage",
       theme: "Thème",
       themeAuto: "Auto",
       themeDark: "Sombre",
@@ -1113,6 +1115,7 @@
       if (!this.built) return;
       var e = this.el;
 
+
       /* titles */
       if (e.miniTitle.textContent !== s.title) e.miniTitle.textContent = s.title || "";
       if (e.miniArtist.textContent !== s.artist) e.miniArtist.textContent = s.artist || "";
@@ -1712,6 +1715,34 @@
     density: "normal",
   };
 
+  /**
+   * Ce que la WebView voit réellement : c'est la seule façon de savoir
+   * pourquoi un rendu diffère d'un appareil à l'autre (le réglage de taille
+   * du système Android n'est pas transmis au CSS, donc on mesure).
+   */
+  function describeDisplay(withUA) {
+    var d = document.documentElement;
+    var cs = window.getComputedStyle(d);
+    var u = parseFloat(cs.getPropertyValue("--sd-u")) || 1;
+    var txt =
+      d.clientWidth +
+      "×" +
+      d.clientHeight +
+      " · " +
+      (window.devicePixelRatio || 1).toFixed(2) +
+      "× · " +
+      Math.round(u * 100) +
+      " %";
+    if (withUA) {
+      txt +=
+        " · innerWidth " +
+        window.innerWidth +
+        " · " +
+        (navigator.userAgent || "").replace(/^Mozilla\/5\.0 /, "");
+    }
+    return txt;
+  }
+
   /** Applique la densité choisie (classe sur <html>, tout le reste est en CSS). */
   function applyDensity(value) {
     var html = document.documentElement;
@@ -1826,11 +1857,28 @@
       );
       self.el.settingsBody.appendChild(
         self.group(Settings.labels.groupAbout, [
+          (self.el.diagRow = self.infoRow(Settings.labels.display, "")),
           self.infoRow(Settings.labels.version, VERSION),
           self.actionRow("reload", Settings.labels.reload, ICONS.refreshLine),
           self.actionRow("reset", Settings.labels.reset, ICONS.arrowUndo),
         ])
       );
+
+      /* La ligne « Affichage » sert au diagnostic à distance : taille réellement
+         vue par la WebView, densité de pixels et facteur appliqué. Un appui la
+         copie — c'est ce que l'on demande quand un rendu diffère d'un appareil
+         à l'autre. */
+      this.el.diagValue = $(".sd-row-value", this.el.diagRow);
+      this.el.diagRow.setAttribute("title", Settings.labels.displayHint);
+      this.el.diagRow.addEventListener("click", function () {
+        var txt = describeDisplay(true);
+        try {
+          navigator.clipboard.writeText(txt);
+          Toast.show(Settings.labels.copied);
+        } catch (e) {
+          Toast.show(txt, 4000);
+        }
+      });
 
       UI.layer.appendChild(frag);
       this.built = true;
@@ -1967,6 +2015,13 @@
     /** Re-evaluate row availability + control states. */
     paint: function () {
       if (!this.built) return;
+
+      /* Diagnostic d'affichage : mesuré à chaque ouverture de la feuille. */
+      if (this.el.diagValue) {
+        var d = describeDisplay(false);
+        if (this.el.diagValue.textContent !== d) this.el.diagValue.textContent = d;
+      }
+
       var menu = this.el.menuBody;
       $$("[data-row]", menu).forEach(function (row) {
         var def = MENU[row.getAttribute("data-row")];

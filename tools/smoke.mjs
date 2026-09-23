@@ -359,7 +359,7 @@ await checkAsync("interface size setting scales the whole shell", async () => {
     await tick(40);
     assert(SD.settings.density === "compact", "density setting not applied");
     assert(doc.documentElement.classList.contains("sd-density-compact"), "density class missing");
-    assert(u() === 0.86, `compact should scale to 0.86, got ${u()}`);
+    assert(u() === 0.8, `compact should scale to 0.8, got ${u()}`);
     assert(
       JSON.parse(window.localStorage.getItem("sd.ui.settings")).density === "compact",
       "density not persisted"
@@ -377,13 +377,36 @@ await checkAsync("interface size setting scales the whole shell", async () => {
       /--sd-tap:\s*calc\(48px \* var\(--sd-u\)\)/.test(css),
       "the tap target is not tied to the scale factor"
     );
-    return "compact 0.86 · normal 1 · large 1.12 (cibles 48 dp × facteur)";
+    return "compact 0.8 · normal 1 · large 1.12 (cibles 48 dp × facteur)";
   } finally {
     /* A failing check must never leave the sheet open: the next checks would
        otherwise collide with it (open() toggles). */
     SD.close();
     await tick(40);
   }
+});
+
+check("the player is reflowed to Spotify's mobile metrics", () => {
+  const css = Array.from(doc.querySelectorAll("style")).map((st) => st.textContent).join("");
+  const rules = [
+    [/\[data-testid="grid-container"\][^{]*\{[^}]*grid-template-columns:\s*repeat\(2,/, "cards are not 2-up"],
+    [/--m-card:\s*calc\(160px \* var\(--sd-u\)\)/, "the card size is not tied to the scale factor"],
+    [/--m-row:\s*calc\(56px \* var\(--sd-u\)\)/, "the row height is not tied to the scale factor"],
+    [/--m-hero:\s*calc\(200px \* var\(--sd-u\)\)/, "the hero art size is missing"],
+    [/--m-pad:\s*calc\(16px \* var\(--sd-u\)\)/, "the page gutter is not mobile-sized"],
+  ];
+  rules.forEach(([re, msg]) => assert(re.test(css), msg));
+  return "grille 2 colonnes · tuile 160 dp · ligne 56 dp · hero 200 dp · marge 16 dp";
+});
+
+check("settings expose a display diagnostic row", () => {
+  const row = q(".sd-sheet-settings .sd-row-info .sd-row-value");
+  assert(row, "no info row found");
+  const rows = Array.from(doc.querySelectorAll(".sd-sheet-settings .sd-row-info .sd-row-value"));
+  const diag = rows.map((r) => r.textContent).find((t) => /×/.test(t));
+  assert(diag, "no diagnostic row (expected « 360×640 · 1.00× · 100 % »)");
+  assert(/×\s*\d/.test(diag) && /%/.test(diag), `unexpected diagnostic format: ${diag}`);
+  return diag;
 });
 
 await checkAsync("take control clicks Spotify's transfer prompt", async () => {

@@ -595,7 +595,7 @@ html.sd-mobile.sd-welcome-on body {
    -------------------------------------------------------------------------- */
 
 html.sd-mobile.sd-density-compact {
-  --sd-u: 0.86;
+  --sd-u: 0.8;
 }
 html.sd-mobile.sd-density-normal {
   --sd-u: 1;

@@ -26,13 +26,14 @@ l'application Android et comment la tester.
 | `tools/build.mjs` | Concatène CSS + runtime → **`dist/spotiduck-ui.js`**, un seul fichier à injecter. |
 | `demo/` | Banc d'essai : un faux web player Spotify (mêmes `data-testid`), cadre téléphone et **scénarios** (transfert, connexion, hors ligne). |
 | `src/inject/50-android.css` | Passe **Android / Material 3** : Roboto, échelle typographique, cibles 48 dp, formes et surfaces Material, courbes de mouvement, barres système, écran d'accueil (voir §9). |
+| `src/inject/60-metrics.css` | **Métriques de l'application mobile** : le web player est remis à l'échelle mobile (2 tuiles par ligne, 56 dp de ligne, titres 20 px, hero 200 dp, marges 16 dp) au lieu de garder ses dimensions desktop. |
 | `src/inject/40-audit.css` | Durcissement de l'interface : cibles tactiles ≥ 44 px, débordements, en-têtes collants, modales natives, clavier, contraste, focus, mouvement réduit (section 8). |
-| `tools/smoke.mjs` | 37 tests de comportement (jsdom) sur le bundle réel. |
+| `tools/smoke.mjs` | 39 tests de comportement (jsdom) sur le bundle réel. |
 | `tools/screenshots.mjs` | Capture d'écran des écrans clés (nécessite Chrome/Chromium). |
 
 ```bash
 npm run build            # génère dist/spotiduck-ui.js
-npm run smoke            # lance les 37 tests
+npm run smoke            # lance les 39 tests
 npm run demo             # http://localhost:5173 → aperçu dans un cadre téléphone
 ```
 
@@ -290,7 +291,9 @@ prioritaire) plus deux changements de comportement.
 | WebView | barres de défilement, rebond | barres masquées, `overscroll-behavior: none`, appui long neutralisé sur la coque |
 | Interrupteurs / segments | dessin maison | interrupteur 52×32 (M3), segments à contour 1 px et sélection teintée |
 | Contrôles natifs | chevrons 16 px | boîte 48 px sur tous les boutons-icônes de Spotify |
-| Taille globale | fixe | réglage **Taille de l'interface** : `--sd-u` = 0,86 / 1 / 1,12 multiplie l'échelle typographique, les cibles tactiles, la hauteur des barres et les gouttières |
+| Contenu du player | dimensions desktop (tuiles ~330 px sur une colonne, titres 24-32 px, hero plein écran) | **métriques de l'app mobile** : 2 colonnes de ~160 dp, ligne 56 dp, pochette 40 dp, titre de section 20 px, hero 200 dp, gouttière 16 dp (§ `60-metrics.css`) |
+| Diagnostic | aucun | ligne **Affichage** dans les paramètres (`360×640 · 2,75× · 100 %`), copiable — sert à expliquer un rendu qui diffère d'un appareil à l'autre |
+| Taille globale | fixe | réglage **Taille de l'interface** : `--sd-u` = 0,80 / 1 / 1,12 multiplie l'échelle typographique, les cibles tactiles, la hauteur des barres et les gouttières |
 
 Deux comportements changent en plus :
 
@@ -305,7 +308,15 @@ Deux comportements changent en plus :
    de toute l'interface est un réglage — `--sd-u` (0,86 / 1 / 1,12) multiplie la
    typographie, les cibles, les barres et les marges, et le choix est conservé
    dans `localStorage`.
-3. **Écran d'accueil maison** (`.sd-welcome`) : quand la session est déconnectée,
+3. **Le contenu du web player est remis aux métriques mobiles**
+   (`src/inject/60-metrics.css`). C'était la cause principale du « tout est
+   trop gros » : le site desktop garde ses tuiles de ~330 px en une seule
+   colonne, ses titres de 24-32 px et son en-tête de playlist plein écran,
+   donc l'écran ne montre que deux éléments et il faut tout chercher. Les
+   métriques sont maintenant celles de l'application Android — 2 colonnes,
+   tuile ~160 dp, ligne 56 dp, pochette 40 dp, hero 200 dp, marges 16 dp —
+   toutes exprimées en `calc(... * var(--sd-u))` pour rester réglables.
+4. **Écran d'accueil maison** (`.sd-welcome`) : quand la session est déconnectée,
    la page marketing est remplacée par un écran SpotiDuck (logo, une phrase,
    bouton « Se connecter ») qui pointe vers la connexion e-mail/mot de passe.
 
