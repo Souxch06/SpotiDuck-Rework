@@ -9,7 +9,12 @@ android/.gradle/
 android/build/
 android/app/build/
 android/local.properties
-android/keystore/
+# keystores stay local; only the public certificate is versioned (the CI needs
+# it to sign every release with the same, frozen certificate — see
+# android/keystore/README.md)
+android/keystore/*
+!android/keystore/README.md
+!android/keystore/spotiduck.crt
 *.jks
 *.keystore
 *.p12
