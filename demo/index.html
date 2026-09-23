@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SpotiDuck · aperçu de l'interface mobile</title>
+    <style>
+      :root {
+        --bg: #0b0b0d;
+        --panel: #16161a;
+        --panel-2: #1e1e24;
+        --text: #f2f2f4;
+        --sub: #9a9aa5;
+        --accent: #1ed760;
+        --border: rgba(255, 255, 255, 0.08);
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: radial-gradient(1200px 600px at 20% -10%, #1b2a20 0%, var(--bg) 60%);
+        color: var(--text);
+        font: 14px/1.5 "Segoe UI", Roboto, -apple-system, system-ui, sans-serif;
+      }
+      header.top {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 20px 28px;
+        border-bottom: 1px solid var(--border);
+        flex-wrap: wrap;
+      }
+      header.top h1 {
+        font-size: 18px;
+        margin: 0;
+        letter-spacing: -0.01em;
+      }
+      header.top .duck {
+        font-size: 24px;
+      }
+      .pill {
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: var(--panel-2);
+        color: var(--sub);
+        font-size: 12px;
+        border: 1px solid var(--border);
+      }
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(280px, 360px) 1fr;
+        gap: 28px;
+        padding: 28px;
+        align-items: start;
+      }
+      @media (max-width: 900px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 18px;
+        margin-bottom: 18px;
+      }
+      .card h2 {
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--sub);
+        margin: 0 0 12px;
+      }
+      .row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+      button.choice {
+        font: inherit;
+        font-size: 13px;
+        padding: 8px 12px;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        background: var(--panel-2);
+        color: var(--text);
+        cursor: pointer;
+      }
+      button.choice[aria-pressed="true"] {
+        background: var(--accent);
+        color: #04160a;
+        border-color: transparent;
+        font-weight: 600;
+      }
+      label.check {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        color: var(--sub);
+        margin: 8px 0;
+        cursor: pointer;
+      }
+      ul.checklist {
+        margin: 0;
+        padding-left: 18px;
+        color: var(--sub);
+        font-size: 13px;
+      }
+      ul.checklist b {
+        color: var(--text);
+      }
+      /* ---- phone frame ---- */
+      .stage {
+        display: flex;
+        justify-content: center;
+        padding: 8px 0 40px;
+      }
+      .device {
+        position: relative;
+        width: var(--dw, 390px);
+        height: var(--dh, 844px);
+        border-radius: 40px;
+        padding: 12px;
+        background: linear-gradient(160deg, #2a2a31, #101013 60%);
+        box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6), inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+        transition: width 200ms ease, height 200ms ease;
+      }
+      .device::after {
+        content: "";
+        position: absolute;
+        bottom: 20px;
+        left: 50%;
+        width: 120px;
+        height: 5px;
+        margin-left: -60px;
+        border-radius: 3px;
+        background: rgba(255, 255, 255, 0.35);
+        pointer-events: none;
+      }
+      .device iframe {
+        width: 100%;
+        height: 100%;
+        border: 0;
+        border-radius: 30px;
+        background: #000;
+        display: block;
+      }
+      .hint {
+        color: var(--sub);
+        font-size: 12px;
+        text-align: center;
+        margin-top: 10px;
+      }
+      code {
+        background: var(--panel-2);
+        border: 1px solid var(--border);
+        border-radius: 5px;
+        padding: 1px 5px;
+        font-size: 12px;
+      }
+      a {
+        color: var(--accent);
+      }
+    </style>
+  </head>
+  <body>
+    <header class="top">
+      <span class="duck">🦆</span>
+      <h1>SpotiDuck — interface mobile</h1>
+      <span class="pill" id="version">bundle v…</span>
+      <span class="pill">mock du web player Spotify</span>
+      <a class="pill" href="player.html" target="_blank" rel="noopener">ouvrir en plein écran ↗</a>
+    </header>
+
+    <div class="layout">
+      <div>
+        <div class="card">
+          <h2>Appareil</h2>
+          <div class="row" id="devices"></div>
+          <label class="check">
+            <input type="checkbox" id="insets" />
+            Simuler l'encoche + la barre de gestes (44 / 24 px)
+          </label>
+          <label class="check">
+            <input type="checkbox" id="off" />
+            Désactiver la couche SpotiDuck (avant / après)
+          </label>
+        </div>
+
+        <div class="card">
+          <h2>À vérifier</h2>
+          <ul class="checklist">
+            <li><b>Barre d'onglets</b> : 3 onglets, l'actif est blanc et rempli.</li>
+            <li><b>Mini-player</b> : apparaît dès qu'un titre joue, la ligne de progression avance, swipe ←/→ = piste suivante/précédente, swipe ↑ = plein écran.</li>
+            <li><b>Lecteur plein écran</b> : chevron pour fermer, glisser vers le bas pour fermer, poser le doigt sur la barre de progression pour scrubber.</li>
+            <li><b>Bibliothèque</b> : plein écran, titre collant, lignes de 64 px, sous-titre sans les « • • » cassés.</li>
+            <li><b>Recherche</b> : champ unique en haut, cartes en 2 colonnes.</li>
+            <li><b>Aucun chevauchement</b> avec la barre système, même en paysage.</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <h2>Notes</h2>
+          <p style="color: var(--sub); font-size: 13px; margin: 0">
+            Le mock reproduit la structure DOM du web player desktop (mêmes
+            <code>data-testid</code>). La couche mobile ne modifie jamais le DOM
+            de Spotify : elle lit les nœuds existants et dessine sa propre
+            interface par-dessus.
+          </p>
+        </div>
+      </div>
+
+      <div class="stage">
+        <div>
+          <div class="device" id="device">
+            <iframe id="frame" title="Aperçu SpotiDuck" src="player.html"></iframe>
+          </div>
+          <div class="hint" id="hint">390 × 844</div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      var DEVICES = [
+        { id: "android", label: "Android 360×800", w: 360, h: 800 },
+        { id: "pixel", label: "Pixel 412×915", w: 412, h: 915 },
+        { id: "iphone", label: "iPhone 390×844", w: 390, h: 844 },
+        { id: "small", label: "Petit 320×568", w: 320, h: 568 },
+        { id: "landscape", label: "Paysage 844×390", w: 844, h: 390, landscape: true },
+      ];
+      var current = DEVICES[2];
+      var devicesEl = document.getElementById("devices");
+      var frame = document.getElementById("frame");
+      var deviceEl = document.getElementById("device");
+      var hint = document.getElementById("hint");
+      var insetsEl = document.getElementById("insets");
+      var offEl = document.getElementById("off");
+
+      // The version badge is read from the bundle itself, so "what you see is
+      // what is built" is always true in this harness.
+      fetch("../dist/spotiduck-ui.js")
+        .then(function (r) {
+          return r.text();
+        })
+        .then(function (t) {
+          var m = t.match(/v(\d+\.\d+\.\d+)/);
+          document.getElementById("version").textContent = "bundle v" + (m ? m[1] : "?");
+        })
+        .catch(function () {
+          document.getElementById("version").textContent = "bundle manquant — lancer npm run build";
+        });
+
+      function render() {
+        devicesEl.innerHTML = "";
+        DEVICES.forEach(function (d) {
+          var b = document.createElement("button");
+          b.className = "choice";
+          b.textContent = d.label;
+          b.setAttribute("aria-pressed", String(d.id === current.id));
+          b.onclick = function () {
+            current = d;
+            render();
+          };
+          devicesEl.appendChild(b);
+        });
+        deviceEl.style.setProperty("--dw", current.w + "px");
+        deviceEl.style.setProperty("--dh", current.h + "px");
+        hint.textContent = current.w + " × " + current.h + (current.landscape ? " · paysage" : "");
+        var qs = [];
+        if (offEl.checked) qs.push("off=1");
+        if (insetsEl.checked) qs.push("top=44", "bottom=24");
+        frame.src = "player.html" + (qs.length ? "?" + qs.join("&") : "");
+      }
+      insetsEl.onchange = render;
+      offEl.onchange = render;
+      render();
+    </script>
+  </body>
+</html>

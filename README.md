@@ -57,6 +57,36 @@ By wrapping the Spotify Web Player in a highly optimized Android WebView, SpotiD
   <img src="./screenshots/landscape_mode.png" width="60%" alt="Landscape Mode" />
 </p>
 
+> [!NOTE]
+> The screenshots above show the **previous** injected UI. A new mobile shell
+> (bottom tab bar, mini player, full-screen player, mobile library) is being
+> built in `src/inject/` — see **[docs/UI-REWORK.md](./docs/UI-REWORK.md)** for
+> the full list of interface bugs it fixes.
+
+---
+
+## 🧩 Mobile UI layer (development)
+
+The interface that turns the desktop Spotify web player into the native mobile
+layout lives in this repository and is built into a single injectable file:
+
+```
+src/inject/10-base.css      design tokens, viewport, web-player takeover
+src/inject/20-shell.css     tab bar, mini player, full-screen player, sheets
+src/inject/spotiduck-ui.js  runtime (reads the player, drives playback, gestures)
+dist/spotiduck-ui.js        ← built bundle, this is what the app injects
+demo/                       mock Spotify web player + phone-frame preview
+```
+
+```bash
+npm run build    # rebuild dist/spotiduck-ui.js
+npm run smoke    # 20 behaviour tests against the built bundle
+npm run demo     # http://localhost:5173 — preview in a phone frame
+```
+
+Everything is scoped to `html.sd-mobile`, so the layer can be shipped, disabled
+or A/B-compared (`demo/player.html?off=1`) without touching the app.
+
 ---
 
 ## 📥 Installation & Setup Guide

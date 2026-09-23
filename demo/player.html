@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>SpotiDuck · mock du web player Spotify</title>
+    <link rel="stylesheet" href="mock/spotify.css" />
+    <script>
+      /* Query flags (used by the harness in demo/index.html):
+         ?off=1        → do NOT load the SpotiDuck layer (raw desktop player, A/B)
+         ?top=44&bottom=24 → simulate notch / gesture bar (the injected CSS
+                             reads --sd-safe-*-override so insets can be tested
+                             on a desktop browser where env() is 0) */
+      (function () {
+        var p = new URLSearchParams(location.search);
+        var html = document.documentElement;
+        if (p.has("top")) html.style.setProperty("--sd-safe-t-override", p.get("top") + "px");
+        if (p.has("bottom")) html.style.setProperty("--sd-safe-b-override", p.get("bottom") + "px");
+        if (!p.has("off")) {
+          var s = document.createElement("script");
+          s.src = "../dist/spotiduck-ui.js";
+          document.head.appendChild(s);
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <!-- The mock web player (top bar, sidebar, main view, now playing bar) is
+         built by demo/mock/spotify.js — it reproduces the real DOM contract. -->
+    <script src="mock/spotify.js"></script>
+  </body>
+</html>
