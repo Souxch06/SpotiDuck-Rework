@@ -4,11 +4,12 @@ Ce document décrit la nouvelle **couche d'interface** injectée dans la WebView
 Spotify : ce qu'elle remplace, les bugs qu'elle corrige, comment l'intégrer à
 l'application Android et comment la tester.
 
-> **Depuis la v2.5, l'application propose deux interfaces** (section 10). Par
-> défaut elle ne redessine plus rien : elle se présente à Spotify comme Chrome
-> sur Android, donc c'est **l'application mobile de Spotify elle-même** qui
-> s'affiche. La couche décrite ci-dessous reste disponible telle quelle, à un
-> appui long d'écart (ou dans *Paramètres → Interface*).
+> **Depuis la v2.5, l'application propose deux interfaces** (section 10).
+> Depuis la v2.6.1, celle décrite ici est **celle livrée par défaut** : c'est la
+> seule où la connexion e-mail/mot de passe fonctionne et où l'écran ressemble à
+> l'application mobile. L'autre mode sert la page web mobile de Spotify — ni la
+> disposition de l'application, ni la connexion classique — et reste proposé en
+> bêta à un appui long d'écart (ou dans *Paramètres → Interface*).
 
 > Périmètre : **l'interface, complète et fonctionnelle**. La v2.0 livrait la
 > coque visuelle ; la v2.1 y ajoute les fonctionnalités de l'ancienne couche
@@ -394,13 +395,32 @@ Spotify… là c'est vraiment pas beau* ». Conclusion tirée : imiter Spotify, 
 avec les bonnes métriques, ne donne jamais Spotify. La v2.5 arrête donc de
 redessiner — **elle affiche la page mobile de Spotify**.
 
-| | Interface **native** (défaut) | Interface **SpotiDuck** (couche injectée) |
+| | Interface **SpotiDuck** (couche injectée, défaut) | Interface **« native »** (bêta) |
 | --- | --- | --- |
-| User-agent | Chrome Android (Pixel 7) | desktop |
-| Qui dessine | Spotify (`open.spotify.com` en version mobile) | notre couche + le web player reflowé |
-| Navigation | celle de Spotify, en bas de l'écran | onglets Accueil / Rechercher / Bibliothèque |
-| Écrans maison | aucun (ceux de Spotify) | file d'attente, paramètres, hors ligne, accueil |
-| Réglages | ceux de Spotify | + thème, densité, taille de l'interface |
+| User-agent | desktop | Chrome Android (Pixel 7) |
+| Qui dessine | notre couche + le web player reflowé | Spotify (`open.spotify.com` en version **web mobile**) |
+| Navigation | onglets Accueil / Rechercher / Bibliothèque | celle de Spotify |
+| Écrans maison | file d'attente, paramètres, hors ligne, accueil | aucun |
+| Réglages | + thème, densité, taille de l'interface | ceux de Spotify |
+| Connexion | formulaire e-mail/mot de passe (CTA « Se connecter ») | boutons sociaux de Spotify, qui échouent souvent dans une WebView |
+
+### Pourquoi l'interface injectée est le défaut
+
+Essayer la page web mobile a montré ses limites, toutes mesurables :
+
+* ce n'est **pas** l'application mobile (pas de barre d'onglets, pas de file
+  d'attente) — Spotify sert une page web simplifiée ;
+* Spotify décide de sa mise en page au chargement d'après l'agent utilisateur,
+  et une WebView n'est pas détectée comme Chrome : la page peut rester en
+  disposition « bureau » dans un écran de téléphone ;
+* la connexion y passe par les boutons Google/Apple/Facebook, refusés dans une
+  WebView ; le formulaire e-mail/mot de passe n'est pas proposé par défaut ;
+* les liens « ouvrir dans l'application » (`spotify:…`) n'ont pas d'application
+  vers laquelle aller.
+
+L'interface injectée, elle, pilote le web player **bureau** (connexion
+e-mail/mot de passe, lecture complète) et l'habille aux métriques mobiles. Le
+mode bêta reste accessible pour comparer.
 
 ### Comment on bascule
 
@@ -463,6 +483,12 @@ redessine trop souvent pour le supporter).
 ### Tests et garde-fous
 
 * `tools/smoke.mjs` — **50 tests**, dont les dix du banc « native mode » (voir §9).
+* `tools/audit-links.mjs` (`npm run audit`, exécuté par la CI) — vérifie que
+  chaque méthode du pont appelée par la couche existe dans `Bridge.kt`, que
+  chaque classe `sd-…` posée par le runtime est stylée quelque part, que chaque
+  `R.string.*` et chaque `assets/…` existent, et que les feuilles CSS ont des
+  accolades équilibrées (une accolade orpheline fait disparaître tout ce qui
+  suit, sans le moindre message d'erreur).
 * Icônes de l'application régénérées (canard à lunettes sur disque vert, fond
   noir) : plus de visuel orange d'origine sur l'écran d'accueil.
 * `tools/sync-android.mjs` vérifie désormais que `native-mode.js` contient bien

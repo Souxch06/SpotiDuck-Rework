@@ -61,6 +61,9 @@ jobs:
           npm run build
           node tools/sync-android.mjs
 
+      - name: Check the cross-file links (bridge, classes, resources)
+        run: npm run audit
+
       - name: Run the UI smoke tests
         run: npm run smoke
 

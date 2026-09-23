@@ -65,16 +65,18 @@ By wrapping the Spotify Web Player in a highly optimized Android WebView, SpotiD
 
 ---
 
-## 🧩 The interface (v2.5): Spotify's, or ours
+## 🧩 The interface: ours by default, Spotify's web page as a beta
 
 SpotiDuck ships **two interfaces**, switchable at runtime:
 
-| | **Native** (default) | **SpotiDuck** (injected layer) |
+| | **SpotiDuck** (injected layer, default) | **“Native”** (beta) |
 | --- | --- | --- |
-| What you see | **Spotify's own mobile page** — the app sends Chrome-Android's user-agent, so Spotify serves its real mobile interface (bottom bar, compact lists, full-screen player). Nothing is redrawn: the cookie/consent banners, the “open in the app” prompts, the tooltips and the browser long-press menus are removed. | Our own shell on top of the desktop web player: bottom tab bar, mini player, queue sheet, settings, offline banner, interface-size setting. |
-| Switch to it | default | **long-press anywhere for 3 s** → *Interface SpotiDuck*, or *Settings → Interface* |
-| Notification | drives Spotify's real buttons (play/pause, next, previous, like, seek) and mirrors title/artist/cover | drives the layer's playback API |
+| What you see | Our shell on top of the **desktop** web player: bottom tab bar, mini player, queue sheet, settings, offline banner, interface-size setting. It drives the desktop player, so **e-mail/password sign-in and full playback work**. | The **mobile web page** Spotify serves when the app pretends to be Chrome on Android. It is not the mobile app (no tab bar), its sign-in goes through the social buttons (which WebViews reject), and Spotify may still hand it the desktop layout — hence *beta*. |
+| Switch to it | default | **long-press anywhere for 3 s** → the chooser, or *Settings → Interface* |
+| Notification | drives the layer's playback API | clicks Spotify's real buttons (play/pause, next, previous, like, seek) and mirrors title/artist/cover |
 
+Either way the nuisance windows are removed: cookie/consent banners, “open in the
+app” prompts, promo banners, tooltips, browser long-press menus and scrollbars.
 The choice is stored in `SharedPreferences` and survives restarts.
 
 ## 🧩 The injected layer (development)

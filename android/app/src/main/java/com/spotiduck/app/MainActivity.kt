@@ -57,7 +57,7 @@ class MainActivity : AppCompatActivity() {
 
     private var uiBundle: String = ""
     private var nativeScript: String = ""
-    private var uiMode: String = MODE_NATIVE
+    private var uiMode: String = MODE_DEFAULT
     private var powerManager: PowerManager? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var shutdownRunnable: Runnable? = null
@@ -71,7 +71,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
-        uiMode = prefs().getString(KEY_UI_MODE, MODE_NATIVE) ?: MODE_NATIVE
+        uiMode = storedUiMode()
         powerManager = getSystemService(POWER_SERVICE) as? PowerManager
         adBlocker = AdBlocker(this).also { it.loadAsync() }
         uiBundle = runCatching { assets.open("spotiduck-ui.js").bufferedReader().use { it.readText() } }
@@ -161,15 +161,20 @@ class MainActivity : AppCompatActivity() {
             }
 
             /**
-             * `spotify:`, `intent:`, `market:`, `mailto:`… sortent de
-             * l'application ou affichent une page d'erreur Chrome — les deux
-             * apparaissent à l'utilisateur comme un pop-up. Tout ce qui n'est pas
-             * du web reste donc dans la page (donc : rien ne se passe), et la
-             * navigation http(s) continue normalement.
+             * `spotify:track:ID` se transforme en `https://open.spotify.com/track/ID` :
+             * Spotify s'en sert partout (« ouvrir dans l'application ») et une
+             * WebView ne sait pas l'ouvrir — sans cette conversion, le clic ne
+             * fait rien du tout. Les autres schémas (`intent:`, `market:`,
+             * `mailto:`) sortiraient de l'application ou afficheraient une page
+             * d'erreur : ils sont ignorés.
              */
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                val scheme = request.url?.scheme?.lowercase() ?: return false
-                return scheme != "http" && scheme != "https"
+                val url = request.url ?: return false
+                val scheme = url.scheme?.lowercase() ?: return false
+                if (scheme == "http" || scheme == "https") return false
+                val web = spotifyDeepLinkToWeb(url)
+                if (web != null) view.loadUrl(web)
+                return true
             }
 
             override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
@@ -221,15 +226,12 @@ class MainActivity : AppCompatActivity() {
                 WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
             )
             val scale = resources.displayMetrics.density
-            if (uiMode == MODE_INJECT) {
-                webView.setPadding(0, 0, 0, 0)
-                injectInsets(bars.top / scale, bars.bottom / scale, bars.left / scale, bars.right / scale)
-            } else {
-                /* Mode natif : la page ne connaît pas nos variables, donc on
-                   retire la hauteur des barres système de la zone de rendu —
-                   rien ne passe sous la barre d'état ni sous celle de gestes. */
-                webView.setPadding(bars.left, bars.top, bars.right, bars.bottom)
-            }
+            /* La WebView reste plein écran et c'est la page qui réserve la place
+               des barres système (`--sd-safe-*-override`). Réduire la zone de
+               rendu par du padding rognait le haut de la page sur certaines
+               versions de WebView. */
+            webView.setPadding(0, 0, 0, 0)
+            injectInsets(bars.top / scale, bars.bottom / scale, bars.left / scale, bars.right / scale)
             insets
         }
     }
@@ -267,6 +269,19 @@ class MainActivity : AppCompatActivity() {
     fun currentUiMode(): String = uiMode
 
     /**
+     * Mode enregistré… **s'il a été choisi**. La 2.6.0 écrivait `native` pour
+     * tout le monde au premier lancement : les installations mises à jour
+     * restaient donc bloquées sur la page web mobile de Spotify (qui n'est pas
+     * l'application mobile et où la connexion ne fonctionne pas). Seul un choix
+     * explicite de l'utilisateur est désormais respecté.
+     */
+    private fun storedUiMode(): String {
+        val p = prefs()
+        if (!p.getBoolean(KEY_UI_MODE_CHOSEN, false)) return MODE_DEFAULT
+        return if (p.getString(KEY_UI_MODE, MODE_DEFAULT) == MODE_NATIVE) MODE_NATIVE else MODE_INJECT
+    }
+
+    /**
      * Bascule l'interface : change le user-agent, mémorise le choix et
      * recharge. Spotify décide de sa mise en page au chargement, donc un
      * rechargement est nécessaire — c'est aussi ce qui rend le changement
@@ -274,7 +289,7 @@ class MainActivity : AppCompatActivity() {
      */
     fun switchUiMode(mode: String) {
         val clean = if (mode == MODE_INJECT) MODE_INJECT else MODE_NATIVE
-        prefs().edit().putString(KEY_UI_MODE, clean).apply()
+        prefs().edit().putString(KEY_UI_MODE, clean).putBoolean(KEY_UI_MODE_CHOSEN, true).apply()
         if (clean == uiMode) return
         uiMode = clean
         webView.settings.userAgentString = if (clean == MODE_INJECT) DESKTOP_UA else MOBILE_UA
@@ -288,8 +303,8 @@ class MainActivity : AppCompatActivity() {
 
     /** Sélecteur : appui long de 3 s (n'importe où) ou rangée des paramètres. */
     fun showUiChooser() {
-        val labels = arrayOf(getString(R.string.ui_mode_native), getString(R.string.ui_mode_inject))
-        val modes = arrayOf(MODE_NATIVE, MODE_INJECT)
+        val labels = arrayOf(getString(R.string.ui_mode_inject), getString(R.string.ui_mode_native))
+        val modes = arrayOf(MODE_INJECT, MODE_NATIVE)
         val checked = modes.indexOf(uiMode).coerceAtLeast(0)
         AlertDialog.Builder(this)
             .setTitle(getString(R.string.ui_mode_title))
@@ -299,6 +314,23 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
+    }
+
+    /**
+     * `spotify:track:4uLU6hMCjMI75M1A2tKUQC` → `https://open.spotify.com/track/…`
+     * (`spotify:user:name:playlist:id` est traité à part : c'est le seul cas où
+     * l'identifiant n'est pas le deuxième segment).
+     */
+    private fun spotifyDeepLinkToWeb(uri: android.net.Uri): String? {
+        if (uri.scheme?.lowercase() != "spotify") return null
+        val parts = uri.toString().removePrefix("spotify:").split(":")
+        if (parts.size < 2 || parts[0].isBlank() || parts[1].isBlank()) return null
+        return when {
+            parts[0] == "user" && parts.size >= 4 && parts[2] == "playlist" ->
+                "https://open.spotify.com/user/${parts[1]}/playlist/${parts[3]}"
+            parts[0] in WEB_KINDS -> "https://open.spotify.com/${parts[0]}/${parts[1]}"
+            else -> null
+        }
     }
 
     private fun prefs() = getSharedPreferences(PREFS, MODE_PRIVATE)
@@ -443,8 +475,25 @@ class MainActivity : AppCompatActivity() {
         /** Interfaces proposées à l'utilisateur (voir `switchUiMode`). */
         const val MODE_NATIVE = "native"
         const val MODE_INJECT = "inject"
+
+        /**
+         * Interface livrée par défaut : la couche injectée, celle qui sait
+         * s'afficher comme l'application mobile **et** où la connexion
+         * e-mail/mot de passe fonctionne. Le mode `native` (la page web mobile
+         * de Spotify, servie en annonçant Chrome Android) reste proposé, mais
+         * c'est une page web : ni la disposition de l'application, ni la
+         * connexion classique.
+         */
+        const val MODE_DEFAULT = MODE_INJECT
+
+        /** Types d'URL `spotify:` convertibles en lien web. */
+        private val WEB_KINDS = setOf(
+            "track", "album", "playlist", "artist", "episode", "show", "concert", "prerelease"
+        )
+
         private const val PREFS = "spotiduck"
         private const val KEY_UI_MODE = "ui_mode"
+        private const val KEY_UI_MODE_CHOSEN = "ui_mode_chosen"
 
         /** Chrome on Windows: what open.spotify.com checks to serve the desktop app. */
         private const val DESKTOP_UA =

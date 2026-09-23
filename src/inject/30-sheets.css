@@ -303,6 +303,11 @@ html.sd-mobile .sd-login-cta {
 html.sd-mobile.sd-login.sd-need-password .sd-login-cta {
   display: block;
 }
+/* Le formulaire e-mail/mot de passe est déjà à l'écran : ne jamais proposer en
+   plus le bouton qui mène… à ce même formulaire. */
+html.sd-mobile.sd-login.sd-login-classic .sd-login-cta {
+  display: none;
+}
 html.sd-mobile .sd-login-cta:active {
   transform: scale(0.98);
 }
