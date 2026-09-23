@@ -5,7 +5,7 @@
 <h1 align="center">SpotiDuck Releases 🦆</h1>
 
 <p align="center">
-  <a href="https://github.com/23fpsz/SpotiDuck-Releases/releases/latest">
+  <a href="https://github.com/Souxch06/SpotiDuck-Rework/releases/latest">
     <img src="https://img.shields.io/badge/Download-Latest_APK-3DDC84?style=for-the-badge&logo=android&logoColor=white" alt="Download Latest APK" height="40" />
   </a>
 </p>
@@ -58,7 +58,7 @@ By wrapping the Spotify Web Player in a highly optimized Android WebView, SpotiD
 </p>
 
 > [!NOTE]
-> The screenshots above show the **previous** injected UI. A new mobile shell
+> The screenshots above show the **previous** injected UI. The new mobile shell
 > (bottom tab bar, mini player, full-screen player, mobile library) is being
 > built in `src/inject/` — see **[docs/UI-REWORK.md](./docs/UI-REWORK.md)** for
 > the full list of interface bugs it fixes.
@@ -152,7 +152,7 @@ signed by the original Spotifuck key: uninstall the old app before installing.)
 
 ## 📥 Installation & Setup Guide
 
-1. **Download the APK**: Download the latest `.apk` file from the [Releases](https://github.com/23fpsz/SpotiDuck-Releases/releases/latest) page.
+1. **Download the APK**: Download the latest `.apk` file from the [Releases](https://github.com/Souxch06/SpotiDuck-Rework/releases/latest) page — it is built and signed by [GitHub Actions](./.github/workflows/android.yml), never by hand.
 2. **Enable Unknown Sources**: If prompted by Android, allow installation from unknown sources (*Settings > Apps > Special app access > Install unknown apps*).
 3. **Install & Open**: Open the downloaded `.apk` file and tap **Install**.
 4. **Background Playback Optimization**: To prevent Android's power manager from killing the audio service in the background:
