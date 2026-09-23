@@ -111,13 +111,14 @@ jobs:
           set -euo pipefail
           LOG=android/build.log
           {
-            grep -nE "^\* What went wrong|^e: |^> |error:|FAILURE:|Could not|Unresolved|Execution failed" "$LOG" | tail -25 || true
-            echo "---"
-            tail -25 "$LOG"
-          } | head -40 > /tmp/report.txt
-          while IFS= read -r line; do
-            echo "::error title=Gradle::${line//%/%25}"
-          done < /tmp/report.txt
+            grep -n "What went wrong" -A 12 "$LOG" | head -20 || true
+            grep -nE "^e: |error: |Could not |Unresolved reference|FAILURE: " "$LOG" | head -10 || true
+            echo "=== tail ==="
+            tail -12 "$LOG"
+          } > /tmp/report.txt
+          cat /tmp/report.txt
+          MSG=$(head -c 2200 /tmp/report.txt | tr '\n' '|' | sed 's/%/%25/g; s/\r//g')
+          echo "::error title=Gradle failure::${MSG}"
           exit 1
 
       - name: Locate and rename the APK
