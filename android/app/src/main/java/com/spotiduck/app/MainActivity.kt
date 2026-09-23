@@ -53,7 +53,7 @@ class MainActivity : AppCompatActivity() {
     private var shutdownArmed = true
 
     /** Colour of the app background while the page loads (avoids a white flash). */
-    private val background = Color.parseColor("#000000")
+    private val appBg = Color.parseColor("#000000")
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -73,7 +73,7 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
-            setBackgroundColor(background)
+            setBackgroundColor(appBg)
             settings.apply {
                 javaScriptEnabled = true
                 domStorageEnabled = true
@@ -97,7 +97,7 @@ class MainActivity : AppCompatActivity() {
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
 
         setContentView(webView)
-        webView.setBackgroundColor(background)
+        webView.setBackgroundColor(appBg)
 
         installWebViewClient()
         installWebChromeClient()
