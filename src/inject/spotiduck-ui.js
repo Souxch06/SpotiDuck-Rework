@@ -32,7 +32,7 @@
 
   if (window.SpotiDuckUI && window.SpotiDuckUI.version) return; // idempotent
 
-  var VERSION = "2.4.2";
+  var VERSION = "2.5.0";
   var STYLE_ID = "spotiduck-ui-style";
   var BODY_CLASS = "sd-mobile";
 
@@ -133,6 +133,9 @@
       groupPlay: "Lecture",
       groupUi: "Interface",
       groupAbout: "À propos",
+      groupUiNative: "Interface",
+      nativeUi: "Utiliser l'interface Spotify",
+      nativeUiHint: "Ouvre le choix : interface Spotify native ou couche SpotiDuck",
       display: "Affichage",
       displayHint: "Appuie pour copier les infos d'affichage",
       theme: "Thème",
@@ -1849,8 +1852,20 @@
           self.switchRow("resume", Settings.labels.resume),
         ])
       );
+      /* Bascule vers l'interface mobile de Spotify : le choix est natif (le
+         user-agent change et la page se recharge), donc on délègue au pont
+         Android au lieu d'essayer de le faire ici. */
+      var nativeRow = self.actionRow("uimode", Settings.labels.nativeUi, ICONS.deviceLine);
+      nativeRow.removeAttribute("data-row");
+      nativeRow.setAttribute("title", Settings.labels.nativeUiHint);
+      nativeRow.addEventListener("click", function () {
+        if (!Bridge.call("showUiChooser")) {
+          Toast.show(Settings.labels.nativeUiHint, 3200);
+        }
+      });
       self.el.settingsBody.appendChild(
         self.group(Settings.labels.groupUi, [
+          nativeRow,
           self.switchRow("tabbar", Settings.labels.showTabbar),
           self.switchRow("haptics", Settings.labels.haptics),
         ])

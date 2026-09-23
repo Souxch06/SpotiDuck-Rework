@@ -21,6 +21,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
@@ -30,8 +31,15 @@ import androidx.core.view.WindowInsetsCompat
  * SpotiDuck — WebView shell around the Spotify web player.
  *
  * Responsibilities (and nothing else):
- *  1. spoof a desktop browser so open.spotify.com serves the desktop player,
- *     which is the DOM the injected mobile layer knows how to restyle;
+ *  1. serve one of the two interfaces the user can pick between:
+ *       • `native` (default) — Chrome-Android user agent, so open.spotify.com
+ *         serves **its own mobile interface** (bottom navigation bar, compact
+ *         rows, full-screen player). Nothing is redrawn; the app only hides the
+ *         browser banners and mirrors the metadata to the notification.
+ *       • `inject` — desktop user agent plus `assets/spotiduck-ui.js`, the
+ *         SpotiDuck layer (tab bar, queue, settings, offline handling…).
+ *     The mode is a long-press (3 s anywhere on the page) away, so switching
+ *     costs nothing; it is stored in SharedPreferences and survives restarts;
  *  2. inject `assets/spotiduck-ui.js` after every page load (it is a single
  *     self-contained script, CSS included);
  *  3. expose the `AndBridge` object the layer talks to;
@@ -47,6 +55,8 @@ class MainActivity : AppCompatActivity() {
     private val ui = Handler(Looper.getMainLooper())
 
     private var uiBundle: String = ""
+    private var nativeScript: String = ""
+    private var uiMode: String = MODE_NATIVE
     private var powerManager: PowerManager? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var shutdownRunnable: Runnable? = null
@@ -60,11 +70,18 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
+        uiMode = prefs().getString(KEY_UI_MODE, MODE_NATIVE) ?: MODE_NATIVE
         powerManager = getSystemService(POWER_SERVICE) as? PowerManager
         adBlocker = AdBlocker(this).also { it.loadAsync() }
         uiBundle = runCatching { assets.open("spotiduck-ui.js").bufferedReader().use { it.readText() } }
             .getOrElse {
                 Log.e(TAG, "assets/spotiduck-ui.js missing — run `node tools/build.mjs`", it)
+                ""
+            }
+
+        nativeScript = runCatching { assets.open("native-mode.js").bufferedReader().use { it.readText() } }
+            .getOrElse {
+                Log.e(TAG, "assets/native-mode.js missing", it)
                 ""
             }
 
@@ -79,7 +96,7 @@ class MainActivity : AppCompatActivity() {
                 domStorageEnabled = true
                 databaseEnabled = true
                 mediaPlaybackRequiresUserGesture = false // playback can start on its own
-                userAgentString = DESKTOP_UA
+                userAgentString = if (uiMode == MODE_INJECT) DESKTOP_UA else MOBILE_UA
                 loadWithOverviewMode = false
                 useWideViewPort = true
                 builtInZoomControls = false
@@ -98,6 +115,10 @@ class MainActivity : AppCompatActivity() {
 
         setContentView(webView)
         webView.setBackgroundColor(appBg)
+
+        // Les commandes de la notification (Play/Next/…) sont exécutées dans la
+        // page : le service a besoin d'un moyen d'appeler `window.SpotiDuckUI`.
+        PlaybackService.jsExecutor = { js -> webView.post { webView.evaluateJavascript(js, null) } }
 
         installWebViewClient()
         installWebChromeClient()
@@ -141,9 +162,9 @@ class MainActivity : AppCompatActivity() {
              * already present → it returns immediately).
              */
             override fun onPageFinished(view: WebView, url: String?) {
-                if (uiBundle.isEmpty()) return
                 view.evaluateJavascript("window.__sdBridgeReady=true;", null)
-                view.evaluateJavascript(uiBundle, null)
+                val script = if (uiMode == MODE_INJECT) uiBundle else nativeScript
+                if (script.isNotEmpty()) view.evaluateJavascript(script, null)
             }
 
             override fun onReceivedError(
@@ -209,6 +230,49 @@ class MainActivity : AppCompatActivity() {
         if (!FAKE_DESKTOP_VIEWPORT) return
         webView.evaluateJavascript(VIEWPORT_SPOOF_JS, null)
     }
+
+    /* ------------------------------------------------------------------ *
+     * Choix de l'interface (native Spotify ⇄ couche SpotiDuck)
+     * ------------------------------------------------------------------ */
+
+    fun currentUiMode(): String = uiMode
+
+    /**
+     * Bascule l'interface : change le user-agent, mémorise le choix et
+     * recharge. Spotify décide de sa mise en page au chargement, donc un
+     * rechargement est nécessaire — c'est aussi ce qui rend le changement
+     * instantané pour l'utilisateur.
+     */
+    fun switchUiMode(mode: String) {
+        val clean = if (mode == MODE_INJECT) MODE_INJECT else MODE_NATIVE
+        prefs().edit().putString(KEY_UI_MODE, clean).apply()
+        if (clean == uiMode) return
+        uiMode = clean
+        webView.settings.userAgentString = if (clean == MODE_INJECT) DESKTOP_UA else MOBILE_UA
+        webView.reload()
+        Toast.makeText(
+            this,
+            if (clean == MODE_INJECT) R.string.ui_mode_inject_toast else R.string.ui_mode_native_toast,
+            Toast.LENGTH_SHORT
+        ).show()
+    }
+
+    /** Sélecteur : appui long de 3 s (n'importe où) ou rangée des paramètres. */
+    fun showUiChooser() {
+        val labels = arrayOf(getString(R.string.ui_mode_native), getString(R.string.ui_mode_inject))
+        val modes = arrayOf(MODE_NATIVE, MODE_INJECT)
+        val checked = modes.indexOf(uiMode).coerceAtLeast(0)
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.ui_mode_title))
+            .setSingleChoiceItems(labels, checked) { dialog, which ->
+                switchUiMode(modes[which])
+                dialog.dismiss()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun prefs() = getSharedPreferences(PREFS, MODE_PRIVATE)
 
     /* ------------------------------------------------------------------ *
      * Hardware back → the UI owns the topmost panel
@@ -331,6 +395,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         shutdownRunnable?.let { ui.removeCallbacks(it) }
+        PlaybackService.jsExecutor = null
         releaseWakeLock()
         webView.destroy()
         super.onDestroy()
@@ -346,10 +411,24 @@ class MainActivity : AppCompatActivity() {
         const val TAG = "SpotiDuck"
         const val START_URL = "https://open.spotify.com/"
 
+        /** Interfaces proposées à l'utilisateur (voir `switchUiMode`). */
+        const val MODE_NATIVE = "native"
+        const val MODE_INJECT = "inject"
+        private const val PREFS = "spotiduck"
+        private const val KEY_UI_MODE = "ui_mode"
+
         /** Chrome on Windows: what open.spotify.com checks to serve the desktop app. */
         private const val DESKTOP_UA =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " +
                 "Chrome/124.0.0.0 Safari/537.36"
+
+        /**
+         * Chrome on Android: the same page is served the *mobile* web player,
+         * which is Spotify's own mobile interface (bottom bar, compact lists).
+         */
+        private const val MOBILE_UA =
+            "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) " +
+                "Chrome/124.0.0.0 Mobile Safari/537.36"
 
         private const val FAKE_DESKTOP_VIEWPORT = false
         private const val IDLE_SHUTDOWN_MS = 15L * 60L * 1000L

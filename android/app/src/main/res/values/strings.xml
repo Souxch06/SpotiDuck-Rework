@@ -10,4 +10,11 @@
     <string name="logged_in">Connecté à Spotify</string>
     <string name="msg_unlock">Lecture débloquée</string>
     <string name="msg_reload">Session expirée — rechargement…</string>
+    <string name="ui_mode_title">Interface de l\'application</string>
+    <string name="ui_mode_native">Interface Spotify (recommandé)</string>
+    <string name="ui_mode_native_short">Interface Spotify</string>
+    <string name="ui_mode_inject_short">Interface SpotiDuck</string>
+    <string name="ui_mode_inject">Interface SpotiDuck (couche injectée)</string>
+    <string name="ui_mode_native_toast">Interface Spotify — rechargement…</string>
+    <string name="ui_mode_inject_toast">Interface SpotiDuck — rechargement…</string>
 </resources>

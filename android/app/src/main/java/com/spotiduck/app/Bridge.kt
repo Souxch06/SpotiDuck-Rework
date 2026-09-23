@@ -13,7 +13,8 @@ import java.lang.ref.WeakReference
  *
  *   recMediaStatus(json) · recMediaPosition(ms) · playLoaded() · cssInjected()
  *   manageTShut(bool) · manageTSleep(bool) · wakeUp() · wakeOff() · isWoke()
- *   loginDetected() · deferMessage(string)
+ *   loginDetected() · deferMessage(string) · uiMode() · setUiMode(string)
+ *   showUiChooser()
  *
  * Every method is called on a background thread by the WebView, so anything
  * touching the UI is posted to the main thread.
@@ -132,6 +133,27 @@ class Bridge(activity: MainActivity) {
     fun deferMessage(message: String?) {
         val act = activity.get() ?: return
         act.runOnUiThread { act.onDeferredMessage(message ?: "") }
+    }
+
+    /**
+     * Interface choisie — `native` = l'interface mobile de Spotify elle-même,
+     * `inject` = la couche SpotiDuck. Le user-agent et le script injecté en
+     * dépendent, donc le changement recharge la page.
+     */
+    @JavascriptInterface
+    fun uiMode(): String = activity.get()?.currentUiMode() ?: MainActivity.MODE_NATIVE
+
+    @JavascriptInterface
+    fun setUiMode(mode: String?) {
+        val act = activity.get() ?: return
+        act.runOnUiThread { act.switchUiMode(mode ?: MainActivity.MODE_NATIVE) }
+    }
+
+    /** Ouvre le sélecteur (appui long de 3 s ou rangée des paramètres). */
+    @JavascriptInterface
+    fun showUiChooser() {
+        val act = activity.get() ?: return
+        act.runOnUiThread { act.showUiChooser() }
     }
 
     companion object {
