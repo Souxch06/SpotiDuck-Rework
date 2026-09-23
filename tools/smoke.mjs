@@ -343,6 +343,49 @@ await checkAsync("settings sheet applies + persists a setting", async () => {
   return "theme=dark persisted · reduce-motion toggled";
 });
 
+await checkAsync("interface size setting scales the whole shell", async () => {
+  SD.openSettings();
+  await tick(60);
+  const sheet = q(".sd-sheet-settings");
+  try {
+    const seg = sheet.querySelector('[data-seg="density"]');
+    assert(seg, "density segment missing from the settings sheet");
+    const u = () =>
+      parseFloat(window.getComputedStyle(doc.documentElement).getPropertyValue("--sd-u"));
+    /* jsdom does not evaluate calc() for custom properties, so the check reads
+       the scale factor itself — the tokens multiply by it (verified below). */
+    assert(u() === 1, `normal density should be 1, got ${u()}`);
+    seg.querySelector('button[data-value="compact"]').click();
+    await tick(40);
+    assert(SD.settings.density === "compact", "density setting not applied");
+    assert(doc.documentElement.classList.contains("sd-density-compact"), "density class missing");
+    assert(u() === 0.86, `compact should scale to 0.86, got ${u()}`);
+    assert(
+      JSON.parse(window.localStorage.getItem("sd.ui.settings")).density === "compact",
+      "density not persisted"
+    );
+    seg.querySelector('button[data-value="large"]').click();
+    await tick(40);
+    assert(u() === 1.12, `large should scale to 1.12, got ${u()}`);
+    seg.querySelector('button[data-value="normal"]').click();
+    await tick(40);
+    assert(u() === 1, "back to normal failed");
+    const css = Array.from(doc.querySelectorAll("style"))
+      .map((st) => st.textContent)
+      .join("");
+    assert(
+      /--sd-tap:\s*calc\(48px \* var\(--sd-u\)\)/.test(css),
+      "the tap target is not tied to the scale factor"
+    );
+    return "compact 0.86 · normal 1 · large 1.12 (cibles 48 dp × facteur)";
+  } finally {
+    /* A failing check must never leave the sheet open: the next checks would
+       otherwise collide with it (open() toggles). */
+    SD.close();
+    await tick(40);
+  }
+});
+
 await checkAsync("take control clicks Spotify's transfer prompt", async () => {
   const M = window.MockSpotify;
   const before = M.calls.takeover;

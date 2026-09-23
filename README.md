@@ -84,7 +84,7 @@ android/                    the APK: WebView wrapper around the built layer
 
 ```bash
 npm run build          # rebuild dist/spotiduck-ui.js
-npm run smoke          # 36 behaviour tests against the built bundle
+npm run smoke          # 37 behaviour tests against the built bundle
 npm run demo           # http://localhost:5173 — preview in a phone frame
 npm run android        # build + copy the bundle into android/app/src/main/assets
 ```
@@ -98,6 +98,10 @@ The layer is styled for Android rather than for the desktop web: Roboto,
 48 dp touch targets, 16 dp gutters, Material 3 shapes and surfaces, Material
 motion curves, and an edge-to-edge layout driven by the real window insets
 (the app forwards them to `--sd-safe-*-override`).
+
+Renderers differ from one Android device to the next, so the size of the whole
+interface is a setting: **Paramètres → Taille de l'interface** (Compacte 86 %,
+Normale 100 %, Grande 112 %).
 
 Everything is scoped to `html.sd-mobile`, so the layer can be shipped, disabled
 or A/B-compared (`demo/player.html?off=1`) without touching the app. Settings

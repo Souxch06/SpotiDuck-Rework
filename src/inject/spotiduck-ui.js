@@ -32,7 +32,7 @@
 
   if (window.SpotiDuckUI && window.SpotiDuckUI.version) return; // idempotent
 
-  var VERSION = "2.4.0";
+  var VERSION = "2.4.1";
   var STYLE_ID = "spotiduck-ui-style";
   var BODY_CLASS = "sd-mobile";
 
@@ -101,6 +101,9 @@
     /* Interface */
     tabbar: true, // can be turned off if the ROM draws its own bar
     haptics: true,
+    /* Densité d'affichage : le seul réglage qui change la taille de TOUTE
+       l'interface (voir `applyDensity`) — compact | normal | large. */
+    density: "normal",
     labels: {
       home: "Accueil",
       search: "Rechercher",
@@ -153,6 +156,10 @@
       classicLogin: "Se connecter avec e-mail et mot de passe",
       offline: "Hors connexion — lecture indisponible",
       /* écran d'accueil (session déconnectée) */
+      density: "Taille de l'interface",
+      densityCompact: "Compacte",
+      densityNormal: "Normale",
+      densityLarge: "Grande",
       welcomeTitle: "SpotiDuck",
       welcomeText: "Connecte-toi à ton compte Spotify pour retrouver ta musique.",
       welcomeCta: "Se connecter",
@@ -170,6 +177,7 @@
       var o = JSON.parse(raw);
       if (o && typeof o === "object") {
         if (o.theme) Settings.theme = o.theme;
+        if (o.density) Settings.density = o.density;
         ["haptics", "accentFromArt", "tabbar", "takeControl", "resume", "reduceMotion"].forEach(function (k) {
           if (typeof o[k] === "boolean") Settings[k] = o[k];
         });
@@ -190,6 +198,7 @@
           takeControl: Settings.takeControl,
           resume: Settings.resume,
           reduceMotion: Settings.reduceMotion,
+          density: Settings.density,
         })
       );
     } catch (e) {
@@ -1697,7 +1706,18 @@
     resume: false,
     tabbar: true,
     haptics: true,
+    /* Densité d'affichage : les télémétries Android et la WebView ne rendent
+       pas la même chose sur tous les appareils — c'est le seul réglage qui
+       touche à la taille de toute l'interface. */
+    density: "normal",
   };
+
+  /** Applique la densité choisie (classe sur <html>, tout le reste est en CSS). */
+  function applyDensity(value) {
+    var html = document.documentElement;
+    html.classList.remove("sd-density-compact", "sd-density-normal", "sd-density-large");
+    html.classList.add("sd-density-" + (value === "compact" || value === "large" ? value : "normal"));
+  }
 
   /** Single entry point for every setting change (UI + public API). */
   function applySetting(key, value) {
@@ -1705,6 +1725,7 @@
     Settings[key] = value;
     saveSettings();
     if (key === "theme") Theme.apply();
+    if (key === "density") applyDensity(value);
     if (key === "reduceMotion") document.documentElement.classList.toggle("sd-reduce-motion", !!value);
     if (key === "tabbar") UI.paintChrome(State);
     UI.paint(State, "settings");
@@ -1783,6 +1804,11 @@
             ["light", Settings.labels.themeLight],
           ]),
           self.switchRow("accentFromArt", Settings.labels.accent),
+          self.segRow("density", Settings.labels.density, [
+            ["compact", Settings.labels.densityCompact],
+            ["normal", Settings.labels.densityNormal],
+            ["large", Settings.labels.densityLarge],
+          ]),
           self.switchRow("reduceMotion", Settings.labels.reduceMotion),
         ])
       );
@@ -3016,6 +3042,7 @@
   };
 
   loadSettings();
+  applyDensity(Settings.density);
   if (document.body) boot();
   else document.addEventListener("DOMContentLoaded", boot, { once: true });
 })();

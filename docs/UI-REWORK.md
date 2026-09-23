@@ -27,12 +27,12 @@ l'application Android et comment la tester.
 | `demo/` | Banc d'essai : un faux web player Spotify (mêmes `data-testid`), cadre téléphone et **scénarios** (transfert, connexion, hors ligne). |
 | `src/inject/50-android.css` | Passe **Android / Material 3** : Roboto, échelle typographique, cibles 48 dp, formes et surfaces Material, courbes de mouvement, barres système, écran d'accueil (voir §9). |
 | `src/inject/40-audit.css` | Durcissement de l'interface : cibles tactiles ≥ 44 px, débordements, en-têtes collants, modales natives, clavier, contraste, focus, mouvement réduit (section 8). |
-| `tools/smoke.mjs` | 36 tests de comportement (jsdom) sur le bundle réel. |
+| `tools/smoke.mjs` | 37 tests de comportement (jsdom) sur le bundle réel. |
 | `tools/screenshots.mjs` | Capture d'écran des écrans clés (nécessite Chrome/Chromium). |
 
 ```bash
 npm run build            # génère dist/spotiduck-ui.js
-npm run smoke            # lance les 36 tests
+npm run smoke            # lance les 37 tests
 npm run demo             # http://localhost:5173 → aperçu dans un cadre téléphone
 ```
 
@@ -290,6 +290,7 @@ prioritaire) plus deux changements de comportement.
 | WebView | barres de défilement, rebond | barres masquées, `overscroll-behavior: none`, appui long neutralisé sur la coque |
 | Interrupteurs / segments | dessin maison | interrupteur 52×32 (M3), segments à contour 1 px et sélection teintée |
 | Contrôles natifs | chevrons 16 px | boîte 48 px sur tous les boutons-icônes de Spotify |
+| Taille globale | fixe | réglage **Taille de l'interface** : `--sd-u` = 0,86 / 1 / 1,12 multiplie l'échelle typographique, les cibles tactiles, la hauteur des barres et les gouttières |
 
 Deux comportements changent en plus :
 
@@ -299,7 +300,12 @@ Deux comportements changent en plus :
    Le démarrage est maintenant scindé en `startShell()` (toujours : onglets,
    barres, feuilles, écran d'accueil) et `startPlayer()` (dès que la lecture est
    possible — la barre est guettée par un `MutationObserver`).
-2. **Écran d'accueil maison** (`.sd-welcome`) : quand la session est déconnectée,
+2. **Taille réglable** : la WebView d'Android ne rend pas la même chose sur tous
+   les appareils (densité d'écran, zoom texte). Plutôt que de deviner, l'échelle
+   de toute l'interface est un réglage — `--sd-u` (0,86 / 1 / 1,12) multiplie la
+   typographie, les cibles, les barres et les marges, et le choix est conservé
+   dans `localStorage`.
+3. **Écran d'accueil maison** (`.sd-welcome`) : quand la session est déconnectée,
    la page marketing est remplacée par un écran SpotiDuck (logo, une phrase,
    bouton « Se connecter ») qui pointe vers la connexion e-mail/mot de passe.
 
