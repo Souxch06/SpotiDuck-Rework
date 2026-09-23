@@ -92,15 +92,37 @@ jobs:
           echo "SD_KEYSTORE_TYPE=PKCS12" >> "$GITHUB_ENV"
 
       - name: Assemble the release APK
+        id: assemble
         working-directory: android
+        continue-on-error: true
         run: |
-          gradle --no-daemon --stacktrace \
+          set -o pipefail
+          gradle --no-daemon --stacktrace --console=plain \
             -PsdVersionCode="${GITHUB_RUN_NUMBER}" \
             -PsdVersionName="$(node -p "require('../package.json').version")" \
-            assembleRelease
+            assembleRelease 2>&1 | tee build.log
+
+      # A failed Gradle run must be diagnosable from the API alone: the log is
+      # echoed as annotations (the artifact host is not always reachable from
+      # CI-less tooling).
+      - name: Report Gradle errors
+        if: steps.assemble.outcome == 'failure'
+        run: |
+          set -euo pipefail
+          LOG=android/build.log
+          {
+            grep -nE "^\* What went wrong|^e: |^> |error:|FAILURE:|Could not|Unresolved|Execution failed" "$LOG" | tail -25 || true
+            echo "---"
+            tail -25 "$LOG"
+          } | head -40 > /tmp/report.txt
+          while IFS= read -r line; do
+            echo "::error title=Gradle::${line//%/%25}"
+          done < /tmp/report.txt
+          exit 1
 
       - name: Locate and rename the APK
         id: apk
+        if: steps.assemble.outcome == 'success'
         run: |
           set -euo pipefail
           SRC=$(find android/app/build/outputs/apk/release -name '*.apk' | head -1)
@@ -112,11 +134,13 @@ jobs:
           ls -lh "$NAME"
 
       - name: Show the signature
+        if: steps.assemble.outcome == 'success'
         run: |
           APK="${{ steps.apk.outputs.path }}"
           "$ANDROID_HOME"/build-tools/*/apksigner verify --print-certs "$APK" || true
 
       - name: Upload the APK artifact
+        if: steps.assemble.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.apk.outputs.name }}
@@ -124,7 +148,7 @@ jobs:
           if-no-files-found: error
 
       - name: Attach the APK to the release
-        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'release'
+        if: steps.assemble.outcome == 'success' && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'release')
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name || github.ref_name }}
@@ -137,6 +161,7 @@ jobs:
           gh release view "$TAG" --json assets --jq '.assets[].name'
 
       - name: Summary
+        if: always()
         run: |
           {
             echo "### SpotiDuck APK"
