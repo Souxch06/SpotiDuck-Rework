@@ -362,6 +362,11 @@
                 w.SpotiDuckUI.closePlayer();
                 w.SpotiDuckUI.set("theme", "auto");
               }
+              /* Un scénario peut retirer des nœuds du faux player : le plus
+                 simple pour repartir d'un état propre est de recharger. */
+              try {
+                w.location.reload();
+              } catch (e) {}
             });
           },
         },
@@ -378,6 +383,25 @@
           run: function () {
             inFrame(function (w) {
               w.SpotiDuckUI && w.SpotiDuckUI.openSettings();
+            });
+          },
+        },
+        {
+          /* Premier lancement : pas de session, donc pas de web player — la
+             page marketing de Spotify est remplacée par notre écran d'accueil. */
+          label: "Déconnecté (écran d'accueil)",
+          run: function () {
+            inFrame(function (w) {
+              var d = w.document;
+              ['#main-view', '[data-testid="now-playing-bar"]', '#global-nav-bar'].forEach(function (sel) {
+                var el = d.querySelector(sel);
+                if (el) el.remove();
+              });
+              var nav = d.createElement("div");
+              nav.id = "global-nav-bar";
+              nav.innerHTML = '<a href="/login">Log in</a>';
+              d.body.appendChild(nav);
+              if (w.SpotiDuckUI) w.SpotiDuckUI._internals.Login.apply();
             });
           },
         },

@@ -32,7 +32,7 @@
 
   if (window.SpotiDuckUI && window.SpotiDuckUI.version) return; // idempotent
 
-  var VERSION = "2.3.0";
+  var VERSION = "2.4.0";
   var STYLE_ID = "spotiduck-ui-style";
   var BODY_CLASS = "sd-mobile";
 
@@ -152,6 +152,11 @@
       copied: "Lien copié",
       classicLogin: "Se connecter avec e-mail et mot de passe",
       offline: "Hors connexion — lecture indisponible",
+      /* écran d'accueil (session déconnectée) */
+      welcomeTitle: "SpotiDuck",
+      welcomeText: "Connecte-toi à ton compte Spotify pour retrouver ta musique.",
+      welcomeCta: "Se connecter",
+      welcomeNote: "Connexion par e-mail et mot de passe disponible",
       /* haptic patterns, in milliseconds */
       buzzTap: 8,
       buzzAction: 10,
@@ -666,9 +671,26 @@
 
   var Mirror = {
     observer: null,
+    probe: null,
     start: function () {
       var bar = pick(SEL.npBar);
-      if (!bar) return false;
+      if (!bar) {
+        /* La barre « lecture en cours » n'existe qu'une fois le web player
+           prêt (et la session ouverte). On la guette au lieu d'abandonner :
+           la coque, elle, est déjà affichée. */
+        if (!this.probe && window.MutationObserver) {
+          var self = this;
+          this.probe = new MutationObserver(function () {
+            if (!pick(SEL.npBar)) return;
+            self.probe.disconnect();
+            self.probe = null;
+            self.start();
+            startPlayer();
+          });
+          this.probe.observe(document.body, { childList: true, subtree: true });
+        }
+        return false;
+      }
       if (this.observer) this.observer.disconnect();
       this.observer = new MutationObserver(function () {
         syncFromDom("dom");
@@ -750,6 +772,9 @@
       '<path d="M12 20.7 4.9 13.9A4.9 4.9 0 0 1 12 7.2a4.9 4.9 0 0 1 7.1 6.7L12 20.7z"/>',
     checkCircle:
       '<path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm4.7 7.7-5.4 5.4a1 1 0 0 1-1.4 0l-2.6-2.6 1.4-1.4 1.9 1.9 4.7-4.7 1.4 1.4z"/>',
+    /* Tête de canard du logo — écran d'accueil et icône de notification. */
+    duck:
+      '<path d="M13.5 2.3a6.3 6.3 0 0 0-6.1 7.9L2.7 12a1 1 0 0 0 0 1.9l4.7 1.8A6.3 6.3 0 1 0 13.5 2.3zm1.6 4.4a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3z"/>',
     queueLine:
       '<g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h12M4 12h12M4 18h7"/><path d="M17.5 14.5 21.5 17l-4 2.5z" fill="currentColor" stroke="none"/></g>',
     deviceLine:
@@ -962,6 +987,29 @@
         "</div>" +
         "</div>";
 
+      /* ---- écran d'accueil (session déconnectée) ---- */
+      var welcome = document.createElement("section");
+      welcome.className = "sd-welcome";
+      welcome.setAttribute("aria-hidden", "true");
+      welcome.innerHTML =
+        '<div class="sd-welcome-card">' +
+        '<span class="sd-welcome-logo">' +
+        svg(ICONS.duck) +
+        "</span>" +
+        '<h1 class="sd-welcome-title">' +
+        Settings.labels.welcomeTitle +
+        "</h1>" +
+        '<p class="sd-welcome-text">' +
+        Settings.labels.welcomeText +
+        "</p>" +
+        '<a class="sd-btn sd-welcome-cta" href="/login?allow_password=1">' +
+        Settings.labels.welcomeCta +
+        "</a>" +
+        '<p class="sd-welcome-note">' +
+        Settings.labels.welcomeNote +
+        "</p>" +
+        "</div>";
+
       /* ---- queue sheet scrim + grabber ---- */
       var scrim = document.createElement("div");
       scrim.className = "sd-scrim";
@@ -988,6 +1036,7 @@
       L.appendChild(player);
       L.appendChild(loginCta);
       L.appendChild(offlineBar);
+      L.appendChild(welcome);
       document.body.appendChild(L);
 
       this.layer = L;
@@ -1042,6 +1091,8 @@
         grabber: grabber,
         loginCta: loginCta,
         offlineBar: offlineBar,
+        welcome: welcome,
+        welcomeCta: $(".sd-welcome-cta", welcome),
       };
       this.built = true;
       this.bind();
@@ -2134,6 +2185,9 @@
       var html = document.documentElement;
       var onLogin = !!pick(SEL.loginPage) || /\/login/.test(location.pathname);
       html.classList.toggle("sd-login", onLogin);
+      /* Écran d'accueil : décidé à chaque passage, y compris quand on n'est
+         ni sur la page de connexion ni dans l'application (page marketing). */
+      Welcome.apply();
       if (!onLogin) {
         html.classList.remove("sd-login-classic", "sd-need-password");
         return;
@@ -2153,6 +2207,28 @@
           wpl.click();
         } catch (e) {}
       }
+    },
+  };
+
+  /* ------------------------------------------------------------------ *
+   * 11e-bis. Welcome — écran d'accueil maison.
+   *
+   * Quand la session est déconnectée, open.spotify.com sert sa page
+   * marketing desktop : sur un téléphone c'est illisible et ça ne ressemble
+   * pas à une application. On affiche à la place un écran SpotiDuck sobre
+   * (logo, texte, bouton) par-dessus, avec l'accès à la connexion classique
+   * par e-mail/mot de passe.
+   * ------------------------------------------------------------------ */
+  var Welcome = {
+    apply: function () {
+      var html = document.documentElement;
+      var login = html.classList.contains("sd-login");
+      var app = !!(pick(SEL.mainView) || pick(SEL.npBar));
+      var marketing = !!$('a[href^="/login"], a[href*="/login"]');
+      var show = !app && (login || marketing);
+      html.classList.toggle("sd-welcome-on", show);
+      if (UI.el.welcome) UI.el.welcome.setAttribute("aria-hidden", show ? "false" : "true");
+      return show;
     },
   };
 
@@ -2720,34 +2796,39 @@
     injectStyles();
     markBody();
 
-    if (!Spotify.ready()) {
-      // The web player is still booting (login screen, splash…). Retry with
-      // an exponential-ish backoff, capped, instead of a hot 500 ms loop.
-      if (bootTries++ < 40) {
-        setTimeout(boot, Math.min(1500, 250 + bootTries * 150));
-      }
+    /* La coque d'abord, toujours : barre d'onglets, mini-lecteur, feuilles,
+       écran d'accueil. C'est ce qui fait qu'un premier lancement ressemble à
+       une application Android et non à la page web desktop de Spotify — la
+       version précédente attendait le lecteur pour construire quoi que ce
+       soit, donc l'écran de connexion restait une page web. */
+    startShell();
+
+    if (Spotify.ready()) {
+      startPlayer();
       return;
     }
-    start();
+    // Le web player démarre encore (splash, connexion…). On réessaie avec un
+    // délai progressif, plafonné, au lieu d'une boucle toutes les 500 ms.
+    if (bootTries++ < 60) {
+      setTimeout(boot, Math.min(1500, 250 + bootTries * 150));
+    }
   }
 
-  var started = false;
-  function start() {
-    if (started) return;
-    started = true;
+  /* Coque : tout ce qui ne dépend pas de la lecture. */
+  var shellReady = false;
+  function startShell() {
+    if (shellReady) return;
+    shellReady = true;
 
     UI.build();
-    Mirror.start();
-    Ticker.start();
     History.install();
     Api.watch();
     Polish.start();
-    Auto.start();
     Login.apply();
     Offline.check();
     Sheets.paint();
     Router.sync();
-    syncFromDom("boot");
+    UI.paintChrome(State);
 
     /* Spotify is a single-page app: watch the main view for page changes and
        re-sync the route + chrome. One observer, no polling. */
@@ -2762,22 +2843,47 @@
       pageObs.observe(main, { childList: true, subtree: false });
     }
 
+    /* L'écran marketing / la page de connexion n'ont pas de #main-view : on
+       surveille le body pour l'écran d'accueil maison. */
+    if (window.MutationObserver) {
+      var welcomeObs = new MutationObserver(
+        debounce(function () {
+          Welcome.apply();
+        }, 300)
+      );
+      welcomeObs.observe(document.body, { childList: true, subtree: false });
+    }
+
     /* Re-apply the theme + repaint after a rotation or a keyboard resize.
        (Everything else adapts through CSS: the shell is sized in `vh`/`%` so
-       no JS measurement is needed — remember `window.innerWidth` is faked by
-       the wrapper, see the header comment.) */
+       no JS measurement is needed.) */
     window.addEventListener(
       "resize",
       debounce(function () {
         Theme.apply();
         UI.paintProgress();
+        Welcome.apply();
       }, 200)
     );
 
-    Bridge.playLoaded();
     Bridge.uiReady();
-    Bridge.mediaStatus(State);
     Actions.syncLocks();
+  }
+
+  /* Lecteur : ce qui n'a de sens qu'une fois la barre de lecture présente. */
+  var playerReady = false;
+  function startPlayer() {
+    if (playerReady) return;
+    playerReady = true;
+
+    Mirror.start();
+    Ticker.start();
+    Auto.start();
+    syncFromDom("boot");
+    UI.paintChrome(State);
+
+    Bridge.playLoaded();
+    Bridge.mediaStatus(State);
   }
 
   function debounce(fn, ms) {

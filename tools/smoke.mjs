@@ -517,6 +517,40 @@ check("tiny native controls get a real hit box and a label", () => {
   return "data-sd-hit + title tooltip ✓";
 });
 
+/* ------------------------------------------------------------------ *
+ * Deuxième banc : la WebView au tout premier lancement. Pas de web player,
+ * pas de session — juste la page de connexion de Spotify. C'est l'état dans
+ * lequel un nouvel utilisateur ouvre l'application, et il doit déjà
+ * ressembler à une application Android.
+ * ------------------------------------------------------------------ */
+const early = new JSDOM(
+  '<!doctype html><html><head></head><body>' +
+    '<div id="global-nav-bar"><a href="/login">Log in</a><a href="/download">Download</a></div>' +
+    "</body></html>",
+  { url: "https://open.spotify.com/", pretendToBeVisual: true, runScripts: "dangerously" }
+);
+early.window.eval(await read("dist/spotiduck-ui.js"));
+await tick(150);
+const earlyDoc = early.window.document;
+const earlySD = early.window.SpotiDuckUI;
+
+check("shell is built even when the web player is not ready yet", () => {
+  assert(earlySD, "namespace missing");
+  assert(earlyDoc.querySelector(".sd-layer"), "layer not built");
+  assert(earlyDoc.documentElement.classList.contains("sd-mobile"), "sd-mobile missing");
+  assert(earlyDoc.querySelectorAll(".sd-tab").length === 3, "tab bar incomplete");
+  return "layer + 3 onglets + feuilles, sans web player";
+});
+
+check("logged-out landing page shows the native welcome screen", () => {
+  assert(earlyDoc.documentElement.classList.contains("sd-welcome-on"), "sd-welcome-on missing");
+  const cta = earlyDoc.querySelector(".sd-welcome-cta");
+  assert(cta, "welcome CTA missing");
+  assert(/\/login\?allow_password=1$/.test(cta.getAttribute("href")), "CTA points at " + cta.getAttribute("href"));
+  assert(earlyDoc.querySelector(".sd-welcome-title").textContent === "SpotiDuck", "wrong title");
+  return "logo + titre + bouton « Se connecter »";
+});
+
 await checkAsync("no polling loops left behind", async () => {
   // The mock itself uses one interval for playback; the layer must not add any
   // 2s/5s DOM scraping loop (that was the main source of jank).

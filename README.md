@@ -75,6 +75,7 @@ src/inject/10-base.css      design tokens, viewport, web-player takeover
 src/inject/20-shell.css     tab bar, mini player, full-screen player, queue sheet
 src/inject/30-sheets.css    options & settings sheets, login page, offline banner
 src/inject/40-audit.css     interface hardening (touch targets, overflow, modals…)
+src/inject/50-android.css   Android/Material 3 pass (Roboto, 48 dp, shapes, motion)
 src/inject/spotiduck-ui.js  runtime (reads the player, drives playback, gestures)
 dist/spotiduck-ui.js        ← built bundle, this is what the app injects
 demo/                       mock Spotify web player + phone-frame preview
@@ -83,14 +84,20 @@ android/                    the APK: WebView wrapper around the built layer
 
 ```bash
 npm run build          # rebuild dist/spotiduck-ui.js
-npm run smoke          # 34 behaviour tests against the built bundle
+npm run smoke          # 36 behaviour tests against the built bundle
 npm run demo           # http://localhost:5173 — preview in a phone frame
 npm run android        # build + copy the bundle into android/app/src/main/assets
 ```
 
 The preview ships a mock web player (same `data-testid`s as the real one) plus
-scenario buttons: **transfer from another device**, **login page**, **offline**,
-open the player / the settings, and an A/B switch that disables the whole layer.
+scenario buttons: **transfer from another device**, **logged out (welcome
+screen)**, **login page**, **offline**, open the player / the settings, and an
+A/B switch that disables the whole layer.
+
+The layer is styled for Android rather than for the desktop web: Roboto,
+48 dp touch targets, 16 dp gutters, Material 3 shapes and surfaces, Material
+motion curves, and an edge-to-edge layout driven by the real window insets
+(the app forwards them to `--sd-safe-*-override`).
 
 Everything is scoped to `html.sd-mobile`, so the layer can be shipped, disabled
 or A/B-compared (`demo/player.html?off=1`) without touching the app. Settings

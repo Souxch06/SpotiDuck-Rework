@@ -1,4 +1,4 @@
-# Refonte de l'interface mobile — SpotiDuck UI v2.3
+# Refonte de l'interface mobile — SpotiDuck UI v2.4
 
 Ce document décrit la nouvelle **couche d'interface** injectée dans la WebView
 Spotify : ce qu'elle remplace, les bugs qu'elle corrige, comment l'intégrer à
@@ -25,13 +25,14 @@ l'application Android et comment la tester.
 | `src/inject/spotiduck-ui.js` | Le runtime : construit le chrome, lit l'état du web player, pilote la lecture, gère les gestes, les panneaux, la connexion, et parle à `AndBridge`. |
 | `tools/build.mjs` | Concatène CSS + runtime → **`dist/spotiduck-ui.js`**, un seul fichier à injecter. |
 | `demo/` | Banc d'essai : un faux web player Spotify (mêmes `data-testid`), cadre téléphone et **scénarios** (transfert, connexion, hors ligne). |
+| `src/inject/50-android.css` | Passe **Android / Material 3** : Roboto, échelle typographique, cibles 48 dp, formes et surfaces Material, courbes de mouvement, barres système, écran d'accueil (voir §9). |
 | `src/inject/40-audit.css` | Durcissement de l'interface : cibles tactiles ≥ 44 px, débordements, en-têtes collants, modales natives, clavier, contraste, focus, mouvement réduit (section 8). |
-| `tools/smoke.mjs` | 34 tests de comportement (jsdom) sur le bundle réel. |
+| `tools/smoke.mjs` | 36 tests de comportement (jsdom) sur le bundle réel. |
 | `tools/screenshots.mjs` | Capture d'écran des écrans clés (nécessite Chrome/Chromium). |
 
 ```bash
 npm run build            # génère dist/spotiduck-ui.js
-npm run smoke            # lance les 34 tests
+npm run smoke            # lance les 36 tests
 npm run demo             # http://localhost:5173 → aperçu dans un cadre téléphone
 ```
 
@@ -269,7 +270,42 @@ classe posée par le runtime sur `<body>`, donc jamais sur notre propre couche.
 
 ---
 
-## 8. Tests
+## 8. Adaptation Android (v2.4)
+
+Le premier jet était une page web restylée : la version 2.4 en fait une
+application Android, dans `src/inject/50-android.css` (chargée en dernier, donc
+prioritaire) plus deux changements de comportement.
+
+| Sujet | Avant | Maintenant |
+| --- | --- | --- |
+| Police | police web de Spotify, mélangée à la nôtre | **Roboto** partout (coque + DOM Spotify), `text-size-adjust` neutralisé pour bloquer le *font boosting* |
+| Échelle | tailles desktop (10–14 px) | échelle Material 11 / 12 / 14 / 16 / 22 / 28 px, interlettrage des grands titres |
+| Cibles | 44 px | **48 px** (minimum Android), icônes 24 px |
+| Barres | 56 px | barre de navigation 64 px, mini-lecteur 64 px, app bar 56 px, gouttière 16 px |
+| Formes | 8 px partout | cartes 8, pochettes 6, grandes surfaces 16, **feuilles 28** (M3), boutons en pastille |
+| Surfaces | noir plat | `#121212` / `#1e1e1e` / `#282828`, contour 14 %, ombres portées, thème clair complet |
+| Mouvement | durées ad hoc | courbes Material `cubic-bezier(0.2,0,0,1)`, durées 120 / 220 / 400 ms, fondu entre onglets |
+| Retour au doigt | rien | *state layer* Material sur chaque appui, pas de `:hover` en tactile, contrôles révélés au survol rendus visibles |
+| Barres système | `env(safe-area-inset-*)` seuls | insets réels transmis par l'application via `--sd-safe-*-override`, contenu sous la barre d'état, 8 px minimum sous la zone gestuelle |
+| WebView | barres de défilement, rebond | barres masquées, `overscroll-behavior: none`, appui long neutralisé sur la coque |
+| Interrupteurs / segments | dessin maison | interrupteur 52×32 (M3), segments à contour 1 px et sélection teintée |
+| Contrôles natifs | chevrons 16 px | boîte 48 px sur tous les boutons-icônes de Spotify |
+
+Deux comportements changent en plus :
+
+1. **La coque ne dépend plus du lecteur.** Avant, rien n'était construit tant que
+   la barre « lecture en cours » n'existait pas : sur un premier lancement (ou
+   une session expirée) l'utilisateur voyait la page web desktop de Spotify.
+   Le démarrage est maintenant scindé en `startShell()` (toujours : onglets,
+   barres, feuilles, écran d'accueil) et `startPlayer()` (dès que la lecture est
+   possible — la barre est guettée par un `MutationObserver`).
+2. **Écran d'accueil maison** (`.sd-welcome`) : quand la session est déconnectée,
+   la page marketing est remplacée par un écran SpotiDuck (logo, une phrase,
+   bouton « Se connecter ») qui pointe vers la connexion e-mail/mot de passe.
+
+---
+
+## 9. Tests
 
 ```
 npm run smoke
@@ -283,6 +319,11 @@ glissement, la file d'attente, le suivi `manageTShut`/`manageTSleep` quand la
 lecture démarre ou s'arrête, l'extinction possible de la barre d'onglets,
 l'absence de `setInterval`, et le **payload `AndBridge` figé**
 (clés `artist,cover,duration,fav,playing,position,repeat,track`).
+
+Depuis la v2.4, deux bancs supplémentaires vérifient le premier lancement :
+**sans web player** (session déconnectée) la coque est quand même construite
+(calque, trois onglets, feuilles), et la page marketing de Spotify est
+remplacée par l'**écran d'accueil** SpotiDuck avec son bouton de connexion.
 
 Depuis la v2.3, il couvre aussi le durcissement : une **modale native** fait
 reculer notre chrome (`html.sd-native-modal`), le **clavier logiciel** masque
