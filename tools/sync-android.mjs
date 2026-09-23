@@ -49,3 +49,16 @@ if (bundle.includes("</script>")) {
 } else {
   console.log(`bundle checked (${bundle.length} chars, ${ok}/${jobs.length} assets synced)`);
 }
+
+/* Same idea for the native-mode script: it *is* the interface in the default
+   mode, so an empty or truncated file would leave the app without any bridge
+   between the notification and Spotify's own page. */
+const native = readFileSync(join(assets, "native-mode.js"), "utf8");
+const must = ["window.SpotiDuckUI", "control-button-playpause", "showUiChooser", "recMediaStatus"];
+const missing = must.filter((m) => !native.includes(m));
+if (native.length < 3_000 || missing.length) {
+  console.error("native-mode.js looks invalid — refusing to keep it (" + (missing.join(", ") || native.length + " chars") + ")");
+  process.exitCode = 1;
+} else {
+  console.log(`native-mode.js checked (${native.length} chars)`);
+}

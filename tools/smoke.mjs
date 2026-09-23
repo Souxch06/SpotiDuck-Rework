@@ -633,6 +633,156 @@ check("no runtime errors", () => {
   return "0 errors";
 });
 
+/* ------------------------------------------------------------------ *
+ * Troisième banc : le mode « interface Spotify » (native-mode.js).
+ * Le user-agent est celui de Chrome Android, donc la page affichée est
+ * celle de Spotify ; ce script doit seulement la laisser tranquille et
+ * continuer à faire fonctionner les boutons de la notification Android —
+ * c'est le mode par défaut depuis la 2.5.0.
+ * ------------------------------------------------------------------ */
+const natHtml =
+  '<!doctype html><html><head></head><body>' +
+  '<div data-testid="banner">Ouvrir dans l\'application</div>' +
+  '<a href="/download">Telecharger l\'application</a>' +
+  '<div data-testid="now-playing-widget">' +
+  '<a data-testid="context-item-link" href="/track/1">Titre test</a>' +
+  '<div data-testid="context-item-info-artist">Artiste test</div>' +
+  '<img data-testid="cover-art-image" src="https://i.scdn.co/image/test.jpg">' +
+  '<button data-testid="control-button-playpause" aria-label="Lecture"></button>' +
+  '<button data-testid="control-button-skip-forward" aria-label="Suivant"></button>' +
+  '<button data-testid="control-button-skip-back" aria-label="Precedent"></button>' +
+  '<button aria-checked="false" aria-label="Jaime"></button>' +
+  '<div data-testid="playback-progressbar"><input type="range" min="0" max="200" value="10"></div>' +
+  "</div></body></html>";
+
+const nat = new JSDOM(natHtml, {
+  url: "https://open.spotify.com/",
+  pretendToBeVisual: true,
+  runScripts: "dangerously",
+});
+const nw = nat.window;
+const nd = nw.document;
+const natCalls = [];
+const natClicks = [];
+const natErrors = [];
+nw.__bridgeCalls = natCalls;
+nw.addEventListener("error", (e) => natErrors.push(String(e.message)));
+nw.eval(
+  "window.AndBridge = new Proxy({}, { get: (t, p) => (...a) => {" +
+    "window.__bridgeCalls.push([String(p), a]);" +
+    "if (String(p) === 'isWoke') return false; } });"
+);
+for (const b of nd.querySelectorAll("button")) {
+  b.addEventListener("click", () => natClicks.push(b.getAttribute("data-testid") || b.getAttribute("aria-label")));
+}
+const natScript = await read("android/app/src/main/assets/native-mode.js");
+nw.eval(natScript);
+nw.eval(natScript); // Android peut réinjecter la page : le script doit être idempotent
+const nSD = nw.SpotiDuckUI;
+const natCall = (name) => natCalls.filter((c) => c[0] === name);
+
+check("native mode: a shim replaces the injected layer", () => {
+  assert(nSD && nSD.mode === "native", "window.SpotiDuckUI.mode is not native");
+  assert(!nd.querySelector(".sd-layer") && !nd.querySelector(".sd-tab"), "the SpotiDuck layer must not be injected");
+  assert(nd.querySelectorAll("style[data-sd='native-mode']").length === 1, "the banner stylesheet was injected twice");
+  const missing = ["play", "pause", "playPause", "next", "previous", "like", "seek", "sync", "back"].filter(
+    (m) => typeof nSD[m] !== "function"
+  );
+  assert(missing.length === 0, "methods the PlaybackService calls are missing: " + missing.join(", "));
+  return "9 méthodes · aucune couche injectée · idempotent ✓";
+});
+
+check("native mode: browser banners are hidden, not removed", () => {
+  const css = nd.querySelector("style[data-sd='native-mode']").textContent;
+  assert(css.includes("[data-testid='banner']"), "the mobile banner selector is missing");
+  assert(/display:none\s*!important/.test(css), "the banner selectors must be display:none");
+  assert(css.includes("play.google.com") && css.includes("apps.apple.com"), "the store links should be hidden too");
+  assert(nd.querySelector("[data-testid='banner']"), "the banner should stay in the DOM, only hidden");
+  return "bandeaux masqués en CSS ✓";
+});
+
+check("native mode: the notification controls press Spotify's buttons", () => {
+  natClicks.length = 0;
+  nSD.playPause();
+  nSD.next();
+  nSD.previous();
+  nSD.like();
+  assert(
+    natClicks.join("|") === "control-button-playpause|control-button-skip-forward|control-button-skip-back|Jaime",
+    "clicked: " + natClicks.join(", ")
+  );
+  return "play/pause · suivant · précédent · j'aime";
+});
+
+check("native mode: French labels are understood on play/pause", () => {
+  const pp = nd.querySelector("button[data-testid='control-button-playpause']");
+  pp.setAttribute("aria-label", "Lecture"); // en pause : appuyer lance la lecture
+  natClicks.length = 0;
+  assert(nSD.play() === true && natClicks.length === 1, "play() must click while paused (label « Lecture »)");
+  natClicks.length = 0;
+  assert(nSD.pause() === true && natClicks.length === 0, "pause() must be a no-op while already paused");
+  pp.setAttribute("aria-label", "Pause"); // en lecture
+  natClicks.length = 0;
+  assert(nSD.pause() === true && natClicks.length === 1, "pause() must click while playing");
+  natClicks.length = 0;
+  assert(nSD.play() === true && natClicks.length === 0, "play() must be a no-op while already playing");
+  return "« Lecture » / « Pause » ✓";
+});
+
+check("native mode: seek and metadata use the right units", () => {
+  const input = nd.querySelector("input[type='range']");
+  assert(nSD.seek(42000) === true, "seek returned false");
+  assert(Math.abs(parseFloat(input.value) - 42) < 0.01, "Spotify's bar counts seconds, got " + input.value);
+  const last = natCall("recMediaStatus").slice(-1)[0];
+  assert(last, "no recMediaStatus sent to the bridge");
+  const payload = JSON.parse(last[1][0]);
+  assert(payload.track === "Titre test" && payload.artist === "Artiste test", "wrong metadata: " + last[1][0]);
+  assert(payload.duration === 200000, "duration should be milliseconds, got " + payload.duration);
+  assert(payload.cover.indexOf("i.scdn.co") > -1, "cover art not forwarded");
+  return "42 s dans la barre · 200 000 ms au pont";
+});
+
+await checkAsync("native mode: the position keeps flowing to the notification", async () => {
+  const input = nd.querySelector("input[type='range']");
+  input.value = "30"; // 30 s
+  await tick(1300); // premier tick : le passage en lecture est publié
+  natCalls.length = 0;
+  input.value = "35"; // 5 s plus loin : au-delà du seuil, la notification doit suivre
+  await tick(1300);
+  const pos = natCall("recMediaPosition");
+  assert(pos.length > 0, "no recMediaPosition after the position drifted");
+  const ms = pos[pos.length - 1][1][0];
+  assert(Math.abs(ms - 35000) <= 1000, "the position should be in milliseconds, got " + ms);
+  natCalls.length = 0;
+  input.value = "36"; // 1 s plus loin : sous le seuil, pas de spam
+  await tick(1300);
+  assert(natCall("recMediaPosition").length === 0, "a 1 s drift must not wake the bridge");
+  return "dérive > 4 s → recMediaPosition(" + ms + ") · 1 s = silence ✓";
+});
+
+await checkAsync("native mode: a 3 s press reopens the interface chooser", async () => {
+  const chooser = () => natCall("showUiChooser").length;
+  const press = async (ms) => {
+    nd.dispatchEvent(new nw.Event("touchstart", { bubbles: true }));
+    await tick(ms);
+    nd.dispatchEvent(new nw.Event("touchend", { bubbles: true }));
+    await tick(80);
+  };
+  await press(400);
+  assert(chooser() === 0, "a short press must not open the chooser");
+  await press(3250);
+  assert(chooser() === 1, "a 3 s press must call showUiChooser (" + chooser() + ")");
+  natClicks.length = 0;
+  nd.querySelector("button[aria-label='Jaime']").click();
+  assert(natClicks.length === 0, "the click released after the long press must be swallowed: " + natClicks.join(", "));
+  return "3 s → choix de l'interface · clic final avalé ✓";
+});
+
+check("native mode: no runtime errors", () => {
+  assert(natErrors.length === 0, natErrors.join(" | "));
+  return "0 erreurs";
+});
+
 /* ------------------------------------------------------------------ report */
 const pad = Math.max(...results.map((r) => r.name.length));
 let failed = 0;

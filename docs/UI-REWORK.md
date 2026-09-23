@@ -1,8 +1,14 @@
-# Refonte de l'interface mobile — SpotiDuck UI v2.4
+# Refonte de l'interface mobile — SpotiDuck UI v2.5
 
 Ce document décrit la nouvelle **couche d'interface** injectée dans la WebView
 Spotify : ce qu'elle remplace, les bugs qu'elle corrige, comment l'intégrer à
 l'application Android et comment la tester.
+
+> **Depuis la v2.5, l'application propose deux interfaces** (section 10). Par
+> défaut elle ne redessine plus rien : elle se présente à Spotify comme Chrome
+> sur Android, donc c'est **l'application mobile de Spotify elle-même** qui
+> s'affiche. La couche décrite ci-dessous reste disponible telle quelle, à un
+> appui long d'écart (ou dans *Paramètres → Interface*).
 
 > Périmètre : **l'interface, complète et fonctionnelle**. La v2.0 livrait la
 > coque visuelle ; la v2.1 y ajoute les fonctionnalités de l'ancienne couche
@@ -28,7 +34,8 @@ l'application Android et comment la tester.
 | `src/inject/50-android.css` | Passe **Android / Material 3** : Roboto, échelle typographique, cibles 48 dp, formes et surfaces Material, courbes de mouvement, barres système, écran d'accueil (voir §9). |
 | `src/inject/60-metrics.css` | **Métriques de l'application mobile** : le web player est remis à l'échelle mobile (2 tuiles par ligne, 56 dp de ligne, titres 20 px, hero 200 dp, marges 16 dp) au lieu de garder ses dimensions desktop. |
 | `src/inject/40-audit.css` | Durcissement de l'interface : cibles tactiles ≥ 44 px, débordements, en-têtes collants, modales natives, clavier, contraste, focus, mouvement réduit (section 8). |
-| `tools/smoke.mjs` | 39 tests de comportement (jsdom) sur le bundle réel. |
+| `android/app/src/main/assets/native-mode.js` | Le **mode natif** (v2.5, par défaut) : masque les bandeaux navigateur de Spotify et branche les boutons de la notification Android sur les vrais contrôles de la page Spotify (section 10). |
+| `tools/smoke.mjs` | 47 tests de comportement (jsdom) sur le bundle réel et sur le script du mode natif. |
 | `tools/screenshots.mjs` | Capture d'écran des écrans clés (nécessite Chrome/Chromium). |
 
 ```bash
@@ -337,6 +344,20 @@ lecture démarre ou s'arrête, l'extinction possible de la barre d'onglets,
 l'absence de `setInterval`, et le **payload `AndBridge` figé**
 (clés `artist,cover,duration,fav,playing,position,repeat,track`).
 
+Depuis la v2.5, un **troisième banc** monte une fausse page mobile de Spotify
+(bandeau « Ouvrir dans l'application », widget lecture en cours, contrôles,
+barre de progression) et y charge `native-mode.js` : le calque SpotiDuck ne doit
+**pas** être injecté, les bandeaux doivent être masqués en CSS (et non retirés du
+DOM), les commandes de la notification doivent cliquer les vraies commandes
+Spotify (play/pause, suivant, précédent, j'aime), `play()` / `pause()` doivent
+comprendre les libellés français (« Lecture » = en pause, donc il faut cliquer),
+le seek doit écrire des **secondes** dans la barre et envoyer des
+**millisecondes** au pont, la position ne doit être publiée qu'au-delà de 4 s de
+dérive, l'appui long de 3 s doit appeler `showUiChooser`, et le clic relâché
+juste après cet appui long doit être avalé (sinon l'appui long lance le morceau
+touché). Le script est chargé deux fois de suite pour vérifier son idempotence
+(Android peut réinjecter la page).
+
 Depuis la v2.4, deux bancs supplémentaires vérifient le premier lancement :
 **sans web player** (session déconnectée) la coque est quand même construite
 (calque, trois onglets, feuilles), et la page marketing de Spotify est
@@ -363,3 +384,68 @@ playlist, encoches simulées, paysage, petit écran. Il nécessite Chrome ou
 Chromium (`npm i -D puppeteer-core @sparticuz/chromium`) : cet environnement
 d'exécution ne permet pas de lancer un navigateur, les captures restent donc à
 générer sur une machine avec Chrome.
+
+---
+
+## 10. Deux interfaces (v2.5)
+
+Retour utilisateur après la v2.4.2 : « *fais un copier-coller de l'interface de
+Spotify… là c'est vraiment pas beau* ». Conclusion tirée : imiter Spotify, même
+avec les bonnes métriques, ne donne jamais Spotify. La v2.5 arrête donc de
+redessiner — **elle affiche la page mobile de Spotify**.
+
+| | Interface **native** (défaut) | Interface **SpotiDuck** (couche injectée) |
+| --- | --- | --- |
+| User-agent | Chrome Android (Pixel 7) | desktop |
+| Qui dessine | Spotify (`open.spotify.com` en version mobile) | notre couche + le web player reflowé |
+| Navigation | celle de Spotify, en bas de l'écran | onglets Accueil / Rechercher / Bibliothèque |
+| Écrans maison | aucun (ceux de Spotify) | file d'attente, paramètres, hors ligne, accueil |
+| Réglages | ceux de Spotify | + thème, densité, taille de l'interface |
+
+### Comment on bascule
+
+* **Appui long de 3 secondes** n'importe où dans la page → `showUiChooser()`,
+  une fenêtre `AlertDialog` propose les deux interfaces. C'est le seul chemin
+  possible depuis le mode natif, puisque notre feuille de paramètres n'est plus
+  là où se trouve le bouton.
+* **Paramètres → Interface → « Utiliser l'interface Spotify »** depuis la couche
+  SpotiDuck (première ligne du groupe *Interface*).
+* Le choix est enregistré dans `SharedPreferences` (`spotiduck` / `ui_mode`) et
+  appliqué par un rechargement avec le bon user-agent (`switchUiMode()`), donc
+  il survit au redémarrage de l'application.
+
+### Ce que fait `native-mode.js` (et rien de plus)
+
+1. **Masque les bandeaux navigateur** que Spotify réserve aux visiteurs mobiles
+   (`div[data-testid='banner']`, liens `/download`, `play.google.com`,
+   `apps.apple.com`, `open-in-app-button`, `install-app-banner`, infobulles).
+   Ils restent dans le DOM — le CSS suffit et n'entre pas en conflit avec React.
+2. **Expose un `window.SpotiDuckUI` minimal**, avec les mêmes noms que la couche
+   (`play`, `pause`, `playPause`, `next`, `previous`, `like`, `seek`, `sync`,
+   `back`), pour que `PlaybackService` n'ait rien à savoir du mode choisi : ces
+   méthodes **cliquent les vrais boutons de Spotify** (ou écrivent dans sa barre
+   de progression via le setter natif du `<input type=range>`).
+3. **Alimente la notification** : titre, artiste, pochette, durée et position
+   sont publiés au pont `AndBridge` (`recMediaStatus`, puis `recMediaPosition`
+   seulement au-delà de 4 secondes de dérive) — sinon l'écran de verrouillage
+   reste vide.
+4. **Installe l'appui long** de 3 secondes décrit ci-dessus, et **avale le clic**
+   relâché juste après, pour ne pas lancer le morceau touché.
+
+### Limites assumées
+
+* Le mode natif dépend du DOM de Spotify (`data-testid`, libellés d'accessibilité
+  français **et** anglais). Si Spotify renomme ses contrôles, seule la
+  notification cesse de fonctionner : l'interface, elle, reste intacte.
+* Les écrans maison de SpotiDuck (file d'attente, paramètres, densité, hors
+  ligne) n'existent pas dans ce mode — c'est le prix de l'interface de Spotify.
+  Le premier lancement, lui, passe par la même connexion Spotify.
+* Les deux modes partagent la même clé de signature et la même clé de
+  préférences : passer de l'un à l'autre ne coûte qu'un rechargement.
+
+### Tests et garde-fous
+
+* `tools/smoke.mjs` — **47 tests**, dont les sept du banc « native mode » (voir §9).
+* `tools/sync-android.mjs` vérifie désormais que `native-mode.js` contient bien
+  `window.SpotiDuckUI`, les `data-testid` des contrôles, `showUiChooser` et
+  `recMediaStatus` : un fichier tronqué ne peut plus partir dans l'APK.

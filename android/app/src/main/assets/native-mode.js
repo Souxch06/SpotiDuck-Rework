@@ -118,7 +118,10 @@
     mode: NATIVE,
     play: function () {
       var b = playPauseBtn();
-      if (b && /pause|lecture/i.test(b.getAttribute("aria-label") || "")) return true; // déjà en lecture
+      /* Attention à la langue : le bouton annonce l'action à venir. « Pause »
+         veut dire « déjà en lecture », mais « Lecture » (FR) / « Play » (EN)
+         veut dire « en pause, appuie pour reprendre » — il faut donc cliquer. */
+      if (b && /pause/i.test(b.getAttribute("aria-label") || "")) return true;
       return clickBtn(b);
     },
     pause: function () {
@@ -151,7 +154,7 @@
       var input = q("[data-testid='playback-progressbar'] input[type='range']") || q("input[type='range']");
       if (!input) return false;
       var max = parseFloat(input.max || input.getAttribute("max") || "0");
-      var value = /^\s*\d{4,}$/.test(String(max)) ? ms / 1000 : ms / 1000; // spotify parle en secondes
+      var value = ms / 1000; // Spotify exprime sa barre de progression en secondes
       return setNativeInput(input, Math.max(0, Math.min(max, value)));
     },
     sync: function () {
@@ -244,10 +247,12 @@
    * 4. Appui long (3 s, n'importe où) → choix de l'interface
    * ------------------------------------------------------------------ */
   var hold = 0;
+  var swallowUntil = 0;
   function startHold() {
     window.clearTimeout(hold);
     hold = window.setTimeout(function () {
       hold = 0;
+      swallowUntil = Date.now() + 700;
       try {
         if (navigator.vibrate) navigator.vibrate(20);
       } catch (e) {}
@@ -264,4 +269,17 @@
   ["touchend", "touchcancel", "touchmove", "mouseup", "scroll"].forEach(function (ev) {
     document.addEventListener(ev, cancelHold, { passive: true, capture: true });
   });
+  /* Le clic qui suit le relâchement appartient au choix de l'interface, pas à
+     Spotify : sans ça, un appui long sur une liste lance le morceau touché. */
+  document.addEventListener(
+    "click",
+    function (e) {
+      if (swallowUntil && Date.now() < swallowUntil) {
+        swallowUntil = 0;
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    },
+    { capture: true }
+  );
 })();

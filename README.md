@@ -65,10 +65,23 @@ By wrapping the Spotify Web Player in a highly optimized Android WebView, SpotiD
 
 ---
 
-## 🧩 Mobile UI layer (development)
+## 🧩 The interface (v2.5): Spotify's, or ours
 
-The interface that turns the desktop Spotify web player into the native mobile
-layout lives in this repository and is built into a single injectable file:
+SpotiDuck ships **two interfaces**, switchable at runtime:
+
+| | **Native** (default) | **SpotiDuck** (injected layer) |
+| --- | --- | --- |
+| What you see | **Spotify's own mobile page** — the app sends Chrome-Android's user-agent, so Spotify serves its real mobile interface (bottom bar, compact lists, full-screen player). Nothing is redrawn, only the "open in the app" banners are hidden. | Our own shell on top of the desktop web player: bottom tab bar, mini player, queue sheet, settings, offline banner, interface-size setting. |
+| Switch to it | default | **long-press anywhere for 3 s** → *Interface SpotiDuck*, or *Settings → Interface* |
+| Notification | drives Spotify's real buttons (play/pause, next, previous, like, seek) and mirrors title/artist/cover | drives the layer's playback API |
+
+The choice is stored in `SharedPreferences` and survives restarts.
+
+## 🧩 The injected layer (development)
+
+The layer above (mode *SpotiDuck*) that turns the desktop Spotify web player into
+the native mobile layout lives in this repository and is built into a single
+injectable file:
 
 ```
 src/inject/10-base.css      design tokens, viewport, web-player takeover
@@ -77,14 +90,17 @@ src/inject/30-sheets.css    options & settings sheets, login page, offline banne
 src/inject/40-audit.css     interface hardening (touch targets, overflow, modals…)
 src/inject/50-android.css   Android/Material 3 pass (Roboto, 48 dp, shapes, motion)
 src/inject/spotiduck-ui.js  runtime (reads the player, drives playback, gestures)
-dist/spotiduck-ui.js        ← built bundle, this is what the app injects
+dist/spotiduck-ui.js        ← built bundle, this is what the app injects in this mode
 demo/                       mock Spotify web player + phone-frame preview
 android/                    the APK: WebView wrapper around the built layer
+android/app/src/main/assets/native-mode.js
+                            ← the native mode: hides the browser banners and wires
+                              the Android notification to Spotify's real controls
 ```
 
 ```bash
 npm run build          # rebuild dist/spotiduck-ui.js
-npm run smoke          # 39 behaviour tests against the built bundle
+npm run smoke          # 47 behaviour tests (bundle + native mode)
 npm run demo           # http://localhost:5173 — preview in a phone frame
 npm run android        # build + copy the bundle into android/app/src/main/assets
 ```
@@ -134,8 +150,14 @@ android/app/src/main/java/com/spotiduck/app/
     AdBlocker.kt           host-list blocking (assets/adblock_hosts.txt)
 android/app/src/main/assets/
     spotiduck-ui.js        ← copy of dist/spotiduck-ui.js (npm run sync:android)
+    native-mode.js         ← the native mode (script injected when ui_mode=native)
     adblock_hosts.txt      ← copy of the repository list
 ```
+
+`MainActivity` picks the user-agent and the script from the stored mode
+(`native` by default · `inject`): Chrome-Android + `native-mode.js`, or desktop +
+the injected bundle. `Bridge` exposes `uiMode()`, `setUiMode(mode)` and
+`showUiChooser()`; the runtime calls the latter when it receives a long press.
 
 **Build it**
 
