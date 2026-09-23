@@ -6,10 +6,11 @@
  * open.spotify.com sert sa **propre interface mobile** (barre de navigation
  * basse, listes compactes, lecteur plein écran) — rien n'est redessiné ici.
  *
- * Ce script ne fait que trois choses, et rien d'autre :
+ * Ce script ne fait que quatre choses, et rien d'autre :
  *
- *   1. masquer les bandeaux « Ouvrir dans l'application » / « Télécharger »
- *      que Spotify affiche aux navigateurs mobiles ;
+ *   1. supprimer les pop-ups que Spotify réserve aux navigateurs mobiles
+ *      (bandeaux « Ouvrir dans l'application », consentement aux cookies,
+ *      infobulles, promotions plein écran) et les empêcher de revenir ;
  *   2. exposer un `window.SpotiDuckUI` minimal (lecture, pause, suivant,
  *      précédent, j'aime, avance) pour que les boutons de la notification
  *      Android et de l'écran de verrouillage fonctionnent : ils cliquent les
@@ -27,23 +28,163 @@
   var NATIVE = "native";
 
   /* ------------------------------------------------------------------ *
-   * 1. Bandeaux navigateur mobile
+   * 1. Pop-ups et bandeaux : masqués, puis retirés du DOM
    * ------------------------------------------------------------------ */
-  var css = document.createElement("style");
-  css.setAttribute("data-sd", "native-mode");
-  css.textContent = [
+  var POPUPS = [
+    // « Installer / ouvrir l'application »
     "div[data-testid='banner']",
+    "[data-encore-id='banner']",
+    "[data-testid='install-app-banner']",
+    "[data-testid='mobile-app-banner']",
+    "[data-testid='app-install-prompt']",
+    "[data-testid='open-in-app-button']",
     "a[href^='/download']",
     "a[href*='play.google.com']",
     "a[href*='apps.apple.com']",
     "button[data-testid='web-player-link']",
-    "[data-testid='open-in-app-button']",
-    "[data-testid='install-app-banner']",
     ".encore-internal-announcements",
+    // Consentement aux cookies (OneTrust est ce que Spotify utilise sur le web)
+    "#onetrust-consent-sdk",
+    "#onetrust-banner-sdk",
+    "#onetrust-pc-sdk",
+    "#onetrust-pc-dark-filter",
+    ".onetrust-pc-dark-filter",
+    ".optanon-alert-box-wrapper",
+    "[id^='onetrust']",
+    "[class*='onetrust']",
+    "iframe[title*='cookie' i]",
+    "iframe[src*='consent' i]",
+    "[data-testid='cookie-banner']",
+    "[data-testid='cookie-policy-banner']",
+    "[data-testid='consent-banner']",
+    "[data-testid='gdpr-banner']",
+    // Infobulles, bulles d'aide, menus contextuels
     "[data-testid='hover-or-focus-tooltip']",
     "[data-tippy-root]",
-  ].join(",") + "{display:none !important}";
+    "[role='tooltip']",
+    // Promotions qui recouvrent la page
+    "[data-testid='promo-banner']",
+    "[data-testid='premium-upsell']",
+    "[data-testid='upgrade-banner']",
+    "[data-testid='upsell-banner']",
+    "[data-testid='announcement-banner']",
+  ];
+
+  /* Même chose pour l'apparence : rien de ce qui fait « page web » ne doit
+     rester (barres de défilement, surbrillance bleue au toucher, barre de
+     sélection, menu d'appui long, rebond de défilement). */
+  var css = document.createElement("style");
+  css.setAttribute("data-sd", "native-mode");
+  /* Une règle par sélecteur : si l'un d'eux devenait invalide (un attribut
+     exotique ajouté plus tard), les autres continueraient de s'appliquer. */
+  var hideCss = POPUPS.map(function (sel) {
+    return sel + "{display:none !important}";
+  }).join("\n");
+  css.textContent =
+    hideCss +
+    "\n" +
+    "html{-webkit-text-size-adjust:100% !important;-webkit-tap-highlight-color:transparent !important;overscroll-behavior:none !important}\n" +
+    "body{overscroll-behavior:none !important;-webkit-tap-highlight-color:transparent !important}\n" +
+    "*,*::before,*::after{-webkit-touch-callout:none !important;-webkit-user-drag:none}\n" +
+    "html,body,div,span,li,p,h1,h2,h3,h4,h5,h6,a,button,label{-webkit-user-select:none;user-select:none}\n" +
+    "input,textarea,[contenteditable='true'],[contenteditable='']{-webkit-user-select:text !important;user-select:text !important}\n" +
+    "::-webkit-scrollbar{width:0 !important;height:0 !important;background:transparent !important}\n" +
+    "::-webkit-scrollbar-thumb,::-webkit-scrollbar-track,::-webkit-scrollbar-corner{background:transparent !important}\n";
   (document.head || document.documentElement).appendChild(css);
+
+  function visible(el) {
+    return !!(el && el.getClientRects && el.getClientRects().length);
+  }
+
+  /**
+   * Les bannières de consentement posent `overflow:hidden` sur `<body>` pour
+   * bloquer le défilement derrière elles. Comme on les masque au lieu de
+   * cliquer « Accepter », le verrou resterait en place : on le relâche, mais
+   * seulement si aucun vrai dialogue n'est ouvert.
+   */
+  function unlockScroll() {
+    if (visible(document.querySelector("[role='dialog']"))) return;
+    var b = document.body;
+    var h = document.documentElement;
+    if (!b) return;
+    if (b.style && b.style.overflow === "hidden") b.style.overflow = "";
+    if (h.style && h.style.overflow === "hidden") h.style.overflow = "";
+    if (b.style && (b.style.position === "fixed" || b.style.position === "absolute")) b.style.position = "";
+  }
+
+  /**
+   * Masque (CSS) et, pour les bannières de consentement — qui ne sont pas
+   * gérées par React —, retire carrément du DOM : elles ne peuvent donc plus
+   * intercepter le moindre appui.
+   */
+  function purge() {
+    var found = 0;
+    for (var i = 0; i < POPUPS.length; i++) {
+      var nodes;
+      try {
+        nodes = document.querySelectorAll(POPUPS[i]);
+      } catch (e) {
+        continue;
+      }
+      for (var j = 0; j < nodes.length; j++) {
+        var n = nodes[j];
+        found++;
+        if (n.getAttribute("data-sd-purged") === "1") continue;
+        n.setAttribute("data-sd-purged", "1");
+        var sig = (n.id || "") + " " + (typeof n.className === "string" ? n.className : "");
+        if (/onetrust|cookie|consent|optanon|gdpr/i.test(sig) && n.parentNode) {
+          try {
+            n.parentNode.removeChild(n);
+          } catch (e) {}
+        }
+      }
+    }
+    if (found) unlockScroll();
+    return found;
+  }
+
+  /* Le balayage complet est trop lourd pour être relancé à chaque rendu de
+     Spotify (l'application redessine en permanence) : on ne relance `purge`
+     que si le nœud ajouté ressemble de près ou de loin à un pop-up. */
+  var LOOKS_LIKE_POPUP = /onetrust|cookie|consent|optanon|banner|announcement|upsell|promo|upgrade|install-app|open-in-app|tooltip|tippy|modal-overlay/i;
+  function suspect(node) {
+    if (!node || node.nodeType !== 1) return false;
+    var sig = "";
+    try {
+      sig =
+        (node.id || "") +
+        " " +
+        (typeof node.className === "string" ? node.className : "") +
+        " " +
+        (node.getAttribute("data-testid") || "") +
+        " " +
+        (node.getAttribute("aria-label") || "");
+    } catch (e) {
+      return false;
+    }
+    return LOOKS_LIKE_POPUP.test(sig);
+  }
+
+  purge();
+  window.setTimeout(purge, 300);
+  window.setTimeout(purge, 1200);
+  window.setTimeout(purge, 3500);
+  try {
+    new MutationObserver(function (records) {
+      var hit = false;
+      for (var i = 0; i < records.length && !hit; i++) {
+        var added = records[i].addedNodes;
+        for (var j = 0; j < added.length; j++) {
+          if (suspect(added[j])) {
+            hit = true;
+            break;
+          }
+        }
+      }
+      if (!hit) return;
+      if (purge()) window.setTimeout(unlockScroll, 900);
+    }).observe(document.documentElement, { childList: true, subtree: true });
+  } catch (e) {}
 
   /* ------------------------------------------------------------------ *
    * 2. Pont minimal pour la notification Android
@@ -247,26 +388,56 @@
    * 4. Appui long (3 s, n'importe où) → choix de l'interface
    * ------------------------------------------------------------------ */
   var hold = 0;
+  var from = null;
   var swallowUntil = 0;
-  function startHold() {
+
+  function pressPoint(e) {
+    var t = (e.touches && e.touches[0]) || (e.changedTouches && e.changedTouches[0]) || e;
+    return { x: t.clientX || 0, y: t.clientY || 0 };
+  }
+
+  function startHold(e) {
     window.clearTimeout(hold);
+    from = pressPoint(e);
     hold = window.setTimeout(function () {
       hold = 0;
+      from = null;
       swallowUntil = Date.now() + 700;
       try {
         if (navigator.vibrate) navigator.vibrate(20);
-      } catch (e) {}
+      } catch (err) {}
       bridge("showUiChooser");
     }, 3000);
   }
+
   function cancelHold() {
     window.clearTimeout(hold);
     hold = 0;
+    from = null;
   }
+
+  /* Un doigt qui fait défiler la page n'est pas un appui long : au-delà de
+     12 px, on abandonne. C'est ce qui évite le « pop-up » qui s'ouvrait en
+     gardant le doigt posé pendant un défilement. */
+  function movedFar(e) {
+    if (!from) return false;
+    var p = pressPoint(e);
+    return Math.abs(p.x - from.x) > 12 || Math.abs(p.y - from.y) > 12;
+  }
+
   ["touchstart", "mousedown"].forEach(function (ev) {
     document.addEventListener(ev, startHold, { passive: true, capture: true });
   });
-  ["touchend", "touchcancel", "touchmove", "mouseup", "scroll"].forEach(function (ev) {
+  ["touchmove", "mousemove"].forEach(function (ev) {
+    document.addEventListener(
+      ev,
+      function (e) {
+        if (movedFar(e)) cancelHold();
+      },
+      { passive: true, capture: true }
+    );
+  });
+  ["touchend", "touchcancel", "mouseup", "scroll"].forEach(function (ev) {
     document.addEventListener(ev, cancelHold, { passive: true, capture: true });
   });
   /* Le clic qui suit le relâchement appartient au choix de l'interface, pas à

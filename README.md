@@ -71,7 +71,7 @@ SpotiDuck ships **two interfaces**, switchable at runtime:
 
 | | **Native** (default) | **SpotiDuck** (injected layer) |
 | --- | --- | --- |
-| What you see | **Spotify's own mobile page** — the app sends Chrome-Android's user-agent, so Spotify serves its real mobile interface (bottom bar, compact lists, full-screen player). Nothing is redrawn, only the "open in the app" banners are hidden. | Our own shell on top of the desktop web player: bottom tab bar, mini player, queue sheet, settings, offline banner, interface-size setting. |
+| What you see | **Spotify's own mobile page** — the app sends Chrome-Android's user-agent, so Spotify serves its real mobile interface (bottom bar, compact lists, full-screen player). Nothing is redrawn: the cookie/consent banners, the “open in the app” prompts, the tooltips and the browser long-press menus are removed. | Our own shell on top of the desktop web player: bottom tab bar, mini player, queue sheet, settings, offline banner, interface-size setting. |
 | Switch to it | default | **long-press anywhere for 3 s** → *Interface SpotiDuck*, or *Settings → Interface* |
 | Notification | drives Spotify's real buttons (play/pause, next, previous, like, seek) and mirrors title/artist/cover | drives the layer's playback API |
 
@@ -172,19 +172,29 @@ The APK is also built by CI: pushing a tag (or publishing a release) runs
 assembles the release build and attaches it to the matching GitHub release —
 that is where the downloadable `.apk` comes from.
 
-**Signing.** Android only installs an update over an existing app when both
-builds carry the same signature, so:
+**Package name.** `com.spotiduck.rework` — deliberately *not*
+`com.spotiduck.app`: if another SpotiDuck (a different distributor, a different
+signing key) is already installed under that name, Android refuses the install
+with *“package conflicts with an existing package”*. A distinct id means the
+APK always installs, and the app can live next to the old one until you delete
+it.
 
-* **default** — the workflow derives a fixed key from a public seed
-  (`android/tools/derive-key.py`), so every release is signed identically and
-  updates install straight over the previous version;
+**Signing.** Android installs an update over an existing app only when the two
+builds carry the **same signer certificate** — not merely the same key. So:
+
+* **default** — the CI uses the project's public key: its certificate lives in
+  [`android/keystore/spotiduck.crt`](./android/keystore/README.md) with a fixed
+  serial number and fixed validity dates. Both files are public on purpose (the
+  key material is already in this repository), and being *frozen* is what makes
+  updates install over the previous release. Re-generating a certificate per
+  build — what the CI used to do — changes the signature and triggers the
+  “conflicts with an existing package” error;
 * **your own key** — generate one with `android/tools/make-keystore.py`, store
   it as the repository secrets `SD_KEYSTORE_BASE64`, `SD_KEYSTORE_PASSWORD`,
   `SD_KEY_ALIAS`, `SD_KEY_PASSWORD`, and the workflow uses it instead.
 
-Switching keys later means users must uninstall once, so choose before the
-first public APK. (Regardless of the key, the official SpotiDuck build is not
-signed by the original Spotifuck key: uninstall the old app before installing.)
+Changing the certificate later means users must uninstall once, so pick one
+before the first public APK.
 
 ---
 
@@ -192,7 +202,7 @@ signed by the original Spotifuck key: uninstall the old app before installing.)
 
 1. **Download the APK**: Download the latest `.apk` file from the [Releases](https://github.com/Souxch06/SpotiDuck-Rework/releases/latest) page — it is built and signed by [GitHub Actions](./.github/workflows/android.yml), never by hand.
 2. **Enable Unknown Sources**: If prompted by Android, allow installation from unknown sources (*Settings > Apps > Special app access > Install unknown apps*).
-3. **Install & Open**: Open the downloaded `.apk` file and tap **Install**.
+3. **Install & Open**: Open the downloaded `.apk` file and tap **Install**. SpotiDuck installs as its own app (`com.spotiduck.rework`), so an older SpotiDuck copy that refuses to update can simply be deleted afterwards.
 4. **Background Playback Optimization**: To prevent Android's power manager from killing the audio service in the background:
    - Navigate to **Settings > Apps > SpotiDuck > Battery / App battery usage**.
    - Select **Unrestricted** (or disable battery optimization).

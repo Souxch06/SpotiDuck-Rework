@@ -617,6 +617,20 @@ check("logged-out landing page shows the native welcome screen", () => {
   return "logo + titre + bouton « Se connecter »";
 });
 
+check("native consent banner is removed and the scroll lock released", () => {
+  // Le web player affiche la bannière OneTrust par-dessus notre mini-player et
+  // bloque le défilement tant qu'on n'a pas cliqué « Accepter ».
+  const banner = doc.createElement("div");
+  banner.id = "onetrust-consent-sdk";
+  banner.appendChild(doc.createElement("div"));
+  doc.body.appendChild(banner);
+  doc.body.style.overflow = "hidden";
+  SD._internals.Polish.purgePopups();
+  assert(!doc.getElementById("onetrust-consent-sdk"), "the consent banner survived");
+  assert(doc.body.style.overflow !== "hidden", "the body scroll stayed locked");
+  return "bannière retirée + défilement libéré ✓";
+});
+
 await checkAsync("no polling loops left behind", async () => {
   // The mock itself uses one interval for playback; the layer must not add any
   // 2s/5s DOM scraping loop (that was the main source of jank).
@@ -776,6 +790,29 @@ await checkAsync("native mode: a 3 s press reopens the interface chooser", async
   nd.querySelector("button[aria-label='Jaime']").click();
   assert(natClicks.length === 0, "the click released after the long press must be swallowed: " + natClicks.join(", "));
   return "3 s → choix de l'interface · clic final avalé ✓";
+});
+
+await checkAsync("native mode: scrolling with a finger down opens nothing", async () => {
+  const before = natCall("showUiChooser").length;
+  nd.dispatchEvent(new nw.MouseEvent("mousedown", { bubbles: true, clientX: 100, clientY: 100 }));
+  await tick(200);
+  nd.dispatchEvent(new nw.MouseEvent("mousemove", { bubbles: true, clientX: 100, clientY: 320 }));
+  await tick(3100);
+  nd.dispatchEvent(new nw.MouseEvent("mouseup", { bubbles: true, clientX: 100, clientY: 320 }));
+  assert(natCall("showUiChooser").length === before, "a scrolling finger must not open the chooser");
+  return "12 px de mouvement → annulé ✓";
+});
+
+await checkAsync("native mode: consent banners are removed and scrolling released", async () => {
+  const banner = nd.createElement("div");
+  banner.id = "onetrust-consent-sdk";
+  banner.innerHTML = "<div id='onetrust-banner-sdk'>Ce site utilise des cookies</div>";
+  nd.body.appendChild(banner);
+  nd.body.style.overflow = "hidden"; // le script de consentement verrouille la page
+  await tick(400); // le MutationObserver doit réagir de lui-même
+  assert(!nd.getElementById("onetrust-consent-sdk"), "the consent banner is still in the DOM");
+  assert(nd.body.style.overflow !== "hidden", "the scroll lock was not released");
+  return "bannière retirée + défilement libéré ✓";
 });
 
 check("native mode: no runtime errors", () => {

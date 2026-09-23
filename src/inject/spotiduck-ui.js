@@ -32,7 +32,7 @@
 
   if (window.SpotiDuckUI && window.SpotiDuckUI.version) return; // idempotent
 
-  var VERSION = "2.5.1";
+  var VERSION = "2.6.0";
   var STYLE_ID = "spotiduck-ui-style";
   var BODY_CLASS = "sd-mobile";
 
@@ -2760,13 +2760,60 @@
       this.started = true;
       this.watchOverlays();
       this.watchKeyboard();
+      this.purgePopups();
       this.labelPass();
       /* The SPA swaps whole views: re-scan once the dust settles. */
       onState(
         debounce(function () {
+          Polish.purgePopups();
           Polish.labelPass();
         }, 500)
       );
+    },
+
+    /**
+     * Bannières de consentement (OneTrust, ce que Spotify utilise sur le web) :
+     * elles s'affichent par-dessus notre mini-player et posent
+     * `overflow:hidden` sur `<body>`, ce qui bloque le défilement de la page
+     * tant qu'on n'a pas cliqué « Accepter ». Et comme le web player est en
+     * mode « bureau », la bannière est énorme. On la retire du DOM plutôt que
+     * de cliquer à la place de l'utilisateur.
+     */
+    PURGE: [
+      "#onetrust-consent-sdk",
+      "#onetrust-banner-sdk",
+      "#onetrust-pc-sdk",
+      "[id^=\"onetrust\"]",
+      "[class*=\"onetrust\"]",
+      ".optanon-alert-box-wrapper",
+      '[data-testid="cookie-banner"]',
+      '[data-testid="consent-banner"]',
+    ],
+
+    purgePopups: function () {
+      var removed = 0;
+      for (var i = 0; i < this.PURGE.length; i++) {
+        var nodes = document.querySelectorAll(this.PURGE[i]);
+        for (var j = 0; j < nodes.length; j++) {
+          var node = nodes[j];
+          if (node.parentNode) {
+            node.parentNode.removeChild(node);
+            removed++;
+          }
+        }
+      }
+      /* Un vrai dialogue est *visible* : ne pas toucher au verrou de défilement.
+         (`querySelector` seul tombait sur les dialogues présents dans le DOM
+         mais fermés, et le verrou restait alors en place.) */
+      var dialogs = document.querySelectorAll('[role="dialog"],[aria-modal="true"]');
+      for (var k = 0; k < dialogs.length; k++) {
+        if (dialogs[k].getClientRects && dialogs[k].getClientRects().length) return removed;
+      }
+      var body = document.body;
+      if (body && body.style && body.style.overflow === "hidden") body.style.overflow = "";
+      var html = document.documentElement;
+      if (html && html.style && html.style.overflow === "hidden") html.style.overflow = "";
+      return removed;
     },
 
     /** 1) Native dialog/menu open → `html.sd-native-modal` (our bars fade and
@@ -2775,6 +2822,7 @@
       var self = this;
       if (!window.MutationObserver || !document.body) return;
       var check = debounce(function () {
+        self.purgePopups();
         self.syncOverlay();
       }, 120);
       new MutationObserver(check).observe(document.body, { childList: true, subtree: true });

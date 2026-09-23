@@ -443,9 +443,28 @@ redessiner — **elle affiche la page mobile de Spotify**.
 * Les deux modes partagent la même clé de signature et la même clé de
   préférences : passer de l'un à l'autre ne coûte qu'un rechargement.
 
+### Zéro pop-up
+
+Trois familles de fenêtres parasites encombraient l'application, elles sont
+toutes traitées (`native-mode.js`, plus `Polish.purgePopups()` côté couche
+injectée) :
+
+| Pop-up | Traitement |
+| --- | --- |
+| Bandeaux « Ouvrir dans l'application », « Télécharger l'application », promos plein écran | masqués en CSS (`display:none !important`) ; ils reviennent à chaque rendu, donc la règle reste appliquée |
+| Bannière de consentement aux cookies (OneTrust) | **retirée du DOM** (elle n'est pas gérée par React) et le `overflow:hidden` qu'elle pose sur `<body>` est relâché — sinon la page ne défile plus du tout |
+| Menus du navigateur : appui long → « Copier », « Enregistrer l'image », sélection de texte, bulles d'aide, barres de défilement | appui long avalé par la WebView (`setOnLongClickListener { true }`), `-webkit-touch-callout` / `user-select` neutralisés hors champs de saisie, infobulles masquées, barres de défilement supprimées |
+| Fenêtres « Ouvrir avec… » du système (liens `spotify:`, `intent:`, `market:`) | la WebView ne laisse passer que `http(s)` : plus de page d'erreur Chrome ni de sélecteur d'application |
+
+Le script réagit aussi aux apparitions tardives : un `MutationObserver` ne
+relance le balayage que si le nœud ajouté ressemble à un pop-up (sinon Spotify
+redessine trop souvent pour le supporter).
+
 ### Tests et garde-fous
 
-* `tools/smoke.mjs` — **47 tests**, dont les sept du banc « native mode » (voir §9).
+* `tools/smoke.mjs` — **50 tests**, dont les dix du banc « native mode » (voir §9).
+* Icônes de l'application régénérées (canard à lunettes sur disque vert, fond
+  noir) : plus de visuel orange d'origine sur l'écran d'accueil.
 * `tools/sync-android.mjs` vérifie désormais que `native-mode.js` contient bien
   `window.SpotiDuckUI`, les `data-testid` des contrôles, `showUiChooser` et
   `recMediaStatus` : un fichier tronqué ne peut plus partir dans l'APK.

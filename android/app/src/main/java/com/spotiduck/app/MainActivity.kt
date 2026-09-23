@@ -11,6 +11,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
+import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
@@ -107,7 +108,15 @@ class MainActivity : AppCompatActivity() {
                 javaScriptCanOpenWindowsAutomatically = true
                 setSupportMultipleWindows(false) // target="_blank" stays in-app
                 mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                saveFormData = false // pas de « Enregistrer ce mot de passe ? »
+                savePassword = false
             }
+            /* Un appui long sur du texte ou une pochette ouvre le menu du
+               navigateur (sélection, « Enregistrer l'image », « Copier ») : dans
+               une application, c'est un pop-up de trop. Le geste est avalé ici,
+               le script de la page continue de recevoir ses évènements. */
+            setOnLongClickListener { true }
+            overScrollMode = View.OVER_SCROLL_NEVER // pas de halo bleu en bout de liste
         }
         webView.addJavascriptInterface(bridge, "AndBridge")
         CookieManager.getInstance().setAcceptCookie(true)
@@ -149,6 +158,18 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     null
                 }
+            }
+
+            /**
+             * `spotify:`, `intent:`, `market:`, `mailto:`… sortent de
+             * l'application ou affichent une page d'erreur Chrome — les deux
+             * apparaissent à l'utilisateur comme un pop-up. Tout ce qui n'est pas
+             * du web reste donc dans la page (donc : rien ne se passe), et la
+             * navigation http(s) continue normalement.
+             */
+            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                val scheme = request.url?.scheme?.lowercase() ?: return false
+                return scheme != "http" && scheme != "https"
             }
 
             override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
@@ -200,7 +221,15 @@ class MainActivity : AppCompatActivity() {
                 WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
             )
             val scale = resources.displayMetrics.density
-            injectInsets(bars.top / scale, bars.bottom / scale, bars.left / scale, bars.right / scale)
+            if (uiMode == MODE_INJECT) {
+                webView.setPadding(0, 0, 0, 0)
+                injectInsets(bars.top / scale, bars.bottom / scale, bars.left / scale, bars.right / scale)
+            } else {
+                /* Mode natif : la page ne connaît pas nos variables, donc on
+                   retire la hauteur des barres système de la zone de rendu —
+                   rien ne passe sous la barre d'état ni sous celle de gestes. */
+                webView.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            }
             insets
         }
     }

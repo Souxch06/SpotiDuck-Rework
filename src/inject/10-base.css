@@ -194,6 +194,19 @@ html.sd-mobile button[data-testid="web-player-link"],
 html.sd-mobile #Desktop_PanelContainer_Id > div > div:first-child, /* panel header dup */
 html.sd-mobile [data-testid="hover-or-focus-tooltip"],
 html.sd-mobile .encore-internal-announcements,
+/* Consentement aux cookies : le web player affiche la bannière OneTrust
+   par-dessus notre mini-player. Masquée ici, retirée du DOM par le script. */
+html.sd-mobile #onetrust-consent-sdk,
+html.sd-mobile #onetrust-banner-sdk,
+html.sd-mobile #onetrust-pc-sdk,
+html.sd-mobile [id^="onetrust"],
+html.sd-mobile [class*="onetrust"],
+html.sd-mobile .optanon-alert-box-wrapper,
+html.sd-mobile [data-testid="cookie-banner"],
+html.sd-mobile [data-testid="consent-banner"],
+html.sd-mobile [data-testid="promo-banner"],
+html.sd-mobile [data-testid="upgrade-banner"],
+html.sd-mobile [data-testid="upsell-banner"],
 html.sd-mobile kbd,
 html.sd-mobile [data-context-menu-internal], /* right-click menus */
 html.sd-mobile [role="tooltip"] {

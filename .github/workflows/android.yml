@@ -8,9 +8,16 @@ name: Android APK
 #   • manual run             → build + upload the artifact only
 #
 # Signing key: set `SD_KEYSTORE_BASE64` + `SD_KEYSTORE_PASSWORD`
-# (+ optional `SD_KEY_ALIAS` / `SD_KEY_PASSWORD`) as repository secrets to get a
-# stable signature. Without them the APK is signed with the CI debug key: it
-# installs fine, but Android then refuses to upgrade an already installed copy.
+# (+ optional `SD_KEY_ALIAS` / `SD_KEY_PASSWORD`) as repository secrets to sign
+# with your own key. Without them the build uses the project's public key
+# (`android/keystore/`, certificate committed): it is identical on every run, so
+# Android accepts the update over an already installed copy.
+#
+# The certificate must be the *same* for every build: Android compares the
+# signer certificate, not just the key pair. Generating a fresh self-signed
+# certificate per run (random serial + build date) made every release
+# un-installable over the previous one — that was the "package conflicts with an
+# existing package" error.
 
 on:
   workflow_dispatch:
@@ -70,24 +77,28 @@ jobs:
             echo "SD_KEY_PASSWORD=${{ secrets.SD_KEY_PASSWORD }}" >> "$GITHUB_ENV"
             echo "signed=private" >> "$GITHUB_OUTPUT"
           else
-            # Public, reproducible key: identical on every run, so sideloaded
-            # updates install over the previous version instead of demanding an
-            # uninstall first. The blob below is the PKCS#8 DER of that key,
-            # printed by `python3 android/tools/derive-key.py --emit-der-base64`.
+            # Public, frozen key of the project: the private material is in this
+            # repository (it is not a secret — anyone can read it), and the
+            # *certificate* is committed in `android/keystore/spotiduck.crt`
+            # with a fixed serial number and fixed validity dates. Both are
+            # required for the signature to stay identical from one release to
+            # the next.
             printf '%s' \
               'MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgYMYLwgR3UF2BJ8ccubVxPp4rdoKfrCobj70tVAGCaE2hRANCAASBMuT1rH77L+PzW3ww0RypDVAcbtMx2/iTVu24Ar5tXFQCI7rWZ2URckr86rorZUFN0NkDo1uvN9MooBbJoNjo' \
               | base64 -d > "$RUNNER_TEMP/derived.der"
             openssl pkcs8 -inform DER -in "$RUNNER_TEMP/derived.der" -nocrypt -out "$RUNNER_TEMP/derived.pem"
-            openssl req -new -x509 -key "$RUNNER_TEMP/derived.pem" -sha256 -days 10950 \
-              -subj "/CN=SpotiDuck/O=SpotiDuck" -out "$RUNNER_TEMP/derived.crt"
-            openssl pkcs12 -export -inkey "$RUNNER_TEMP/derived.pem" -in "$RUNNER_TEMP/derived.crt" \
+            openssl pkcs12 -export -inkey "$RUNNER_TEMP/derived.pem" -in android/keystore/spotiduck.crt \
               -name spotiduck -passout pass:spotiduck -out "$RUNNER_TEMP/release.p12"
             echo "SD_KEYSTORE_PASSWORD=spotiduck" >> "$GITHUB_ENV"
             echo "SD_KEY_ALIAS=spotiduck" >> "$GITHUB_ENV"
             echo "SD_KEY_PASSWORD=spotiduck" >> "$GITHUB_ENV"
-            echo "signed=derived" >> "$GITHUB_OUTPUT"
-            echo "::warning title=Keystore secret missing::Signing with the public derived key. Add SD_KEYSTORE_BASE64 to sign with your own key."
+            echo "signed=project (public key)" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Keystore secret missing::Signing with the project's public key. Add SD_KEYSTORE_BASE64 to sign with your own key."
           fi
+          # The signer certificate is what Android compares when updating an
+          # installed app: print it so a change is visible in the log.
+          openssl pkcs12 -in "$RUNNER_TEMP/release.p12" -nokeys -passin pass:"${{ secrets.SD_KEYSTORE_PASSWORD || 'spotiduck' }}" 2>/dev/null \
+            | openssl x509 -noout -fingerprint -sha256 || true
           echo "SD_KEYSTORE=$RUNNER_TEMP/release.p12" >> "$GITHUB_ENV"
           echo "SD_KEYSTORE_TYPE=PKCS12" >> "$GITHUB_ENV"
 

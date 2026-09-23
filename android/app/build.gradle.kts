@@ -8,13 +8,22 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.spotiduck.app"
+        /**
+         * Identifiant **propre à ce projet**, et non `com.spotiduck.app` : sur un
+         * téléphone où cette application est déjà installée par un autre
+         * distributeur (autre clé de signature), Android refuse l'installation
+         * avec « le paquet est en conflit avec un paquet existant ». Avec un
+         * identifiant distinct, l'APK s'installe toujours, sans désinstaller
+         * quoi que ce soit — et les mises à jour suivantes fonctionnent puisque
+         * la clé et le certificat sont désormais figés (voir keystore/README.md).
+         */
+        applicationId = "com.spotiduck.rework"
         minSdk = 24
         targetSdk = 34
         // Overridable from the command line (CI passes the run number and the
         // version from package.json).
         versionCode = (findProperty("sdVersionCode") as String?)?.toIntOrNull() ?: 6
-        versionName = (findProperty("sdVersionName") as String?)?.takeIf { it.isNotBlank() } ?: "2.5.1"
+        versionName = (findProperty("sdVersionName") as String?)?.takeIf { it.isNotBlank() } ?: "2.6.0"
     }
 
     /**
