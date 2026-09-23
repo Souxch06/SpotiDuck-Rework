@@ -1,13 +1,15 @@
-# Refonte de l'interface mobile — SpotiDuck UI v2
+# Refonte de l'interface mobile — SpotiDuck UI v2.1
 
 Ce document décrit la nouvelle **couche d'interface** injectée dans la WebView
 Spotify : ce qu'elle remplace, les bugs qu'elle corrige, comment l'intégrer à
 l'application Android et comment la tester.
 
-> Périmètre de cette étape : **uniquement l'interface**. L'autoplay, la
-> détection de login, le crawl de la bibliothèque et le patch de `window.fetch`
-> (voir « Ce qui reste à réintégrer » en fin de document) ne font pas partie de
-> cette livraison.
+> Périmètre : **l'interface, complète et fonctionnelle**. La v2.0 livrait la
+> coque visuelle ; la v2.1 y ajoute les fonctionnalités de l'ancienne couche
+> (prise de contrôle de la lecture, connexion, déblocage, veille) et les écrans
+> qui manquaient (menu d'options, paramètres, retour matériel). Voir
+> « Ce qui reste à réintégrer » pour les deux seuls blocs volontairement hors
+> périmètre.
 
 ---
 
@@ -17,15 +19,16 @@ l'application Android et comment la tester.
 | --- | --- |
 | `src/inject/10-base.css` | Variables de design, réglages de viewport, **reprise en main du web player desktop** (top bar, sidebar, main view, pages, tracklists). |
 | `src/inject/20-shell.css` | Le chrome SpotiDuck : barre d'onglets, mini-player, lecteur plein écran, feuille de file d'attente, paysage, accessibilité. |
-| `src/inject/spotiduck-ui.js` | Le runtime : construit le chrome, lit l'état du web player, pilote la lecture, gère les gestes, parle à `AndBridge`. |
+| `src/inject/30-sheets.css` | Feuilles basses (options + paramètres), page de connexion, bandeau hors ligne, retours tactiles, animations réduites. |
+| `src/inject/spotiduck-ui.js` | Le runtime : construit le chrome, lit l'état du web player, pilote la lecture, gère les gestes, les panneaux, la connexion, et parle à `AndBridge`. |
 | `tools/build.mjs` | Concatène CSS + runtime → **`dist/spotiduck-ui.js`**, un seul fichier à injecter. |
-| `demo/` | Banc d'essai : un faux web player Spotify (mêmes `data-testid`) + cadre téléphone. |
-| `tools/smoke.mjs` | 22 tests de comportement (jsdom) sur le bundle réel. |
+| `demo/` | Banc d'essai : un faux web player Spotify (mêmes `data-testid`), cadre téléphone et **scénarios** (transfert, connexion, hors ligne). |
+| `tools/smoke.mjs` | 30 tests de comportement (jsdom) sur le bundle réel. |
 | `tools/screenshots.mjs` | Capture d'écran des écrans clés (nécessite Chrome/Chromium). |
 
 ```bash
 npm run build            # génère dist/spotiduck-ui.js
-npm run smoke            # lance les 20 tests
+npm run smoke            # lance les 30 tests
 npm run demo             # http://localhost:5173 → aperçu dans un cadre téléphone
 ```
 
@@ -43,9 +46,31 @@ npm run demo             # http://localhost:5173 → aperçu dans un cadre tél�
 └──────────────────────────────┘
 
 Lecteur plein écran : feuille .sd-player (glisser vers le bas pour fermer)
+Menu « … »          : feuille .sd-sheet-menu (file d'attente, paroles, appareils,
+                      artiste, album, partager, paramètres)
+Paramètres          : feuille .sd-sheet-settings (thème, animations, prise de
+                      contrôle, reprise, barre d'onglets, haptique, rechargement)
 Bibliothèque        : la sidebar de Spotify passée en plein écran (classe d'état)
 File d'attente      : le panneau « Now playing view » de Spotify en feuille basse
+Connexion           : page de login mobile + bouton e-mail / mot de passe
 ```
+
+### Fonctionnalités
+
+| Fonction | Comment |
+| --- | --- |
+| Navigation | Onglets Accueil / Rechercher / Bibliothèque, sous-pages avec en-tête (retour, titre, engrenage), retour matériel |
+| Lecture | Play/pause, précédent/suivant, aléatoire, répétition (off → contexte → titre, badge « 1 »), seek au doigt, like |
+| Prise de contrôle | Le bouton « Écouter sur cet appareil » est détecté par observateur (sans polling) et cliqué **uniquement quand l'utilisateur demande la lecture** depuis l'UI → clic + sélection de l'appareil, puis démarrage. Sans demande, la couche ne touche pas à la lecture d'un autre appareil |
+| Déblocage | Si la lecture demandée ne démarre pas en 10 s : `deferMessage('unlock')`, saut de piste, notification à l'écran (comme l'ancienne couche, en deux tentatives maxi) |
+| Reprise automatique | Option « Relancer la lecture automatiquement » (désactivée par défaut) — l'« autoplay permanent » de l'ancienne couche |
+| Connexion | Page de connexion mise au format mobile, bouton `?allow_password=1`, appel `loginDetected()` quand Spotify propose « ouvrir le lecteur web » |
+| Veille | `wakeUp()` / `wakeOff()` pour la lecture vidéo en arrière-plan, `manageTShut` / `manageTSleep` suivant l'état de lecture |
+| File d'attente | Panneau Spotify en feuille basse (au-dessus du lecteur quand il est ouvert) |
+| Paroles / Appareils / Partager | Boutons de Spotify (masqués si indisponibles), partage du **vrai lien de piste** + copie dans le presse-papiers |
+| Paramètres | Thème Auto/Sombre/Clair, couleur tirée de la pochette, réduire les animations, prise de contrôle, reprise auto, barre d'onglets, retour haptique, rechargement du lecteur, réinitialisation — persistés dans `localStorage` |
+| Hors ligne | Bandeau rouge animé + toast dès que le WebView perd la connexion |
+| Réparation | `Api` observe le trafic Spotify (id de l'appareil, jetons) et transforme une session morte (404 `connect-state`) en **un seul** rechargement, avec garde anti-boucle |
 
 ---
 
@@ -79,6 +104,12 @@ couche (`_player_full_all_on.js` de Spotifuck, conservé comme référence).
 | 20 | **Paysage** : la barre de lecture recouvre les icônes système | Aucune media query, largeurs en `vw` fixes | Media query paysage : chrome compact, lecteur en deux colonnes |
 | 21 | Variables globales implicites (`playing`, `track`, `artist`, `pfint`…) | Affectations sans déclaration (mode non strict) | Portée module + un seul global `window.SpotiDuckUI` |
 | 22 | Nœuds injectés **dans l'arbre React** de Spotify (supprimés au re-render) | `insertBefore` / `appendChild` dans des conteneurs gérés par React | Tout vit dans un seul `.sd-layer` ajouté à `document.body` |
+| 23 | Le bouton **retour** quittait l'application alors qu'un panneau était ouvert | Aucune gestion de l'historique | Chaque panneau pousse **une** entrée d'historique ; `SpotiDuckUI.back()` ferme d'abord la feuille, puis le lecteur, puis rend la main à l'app |
+| 24 | Lecture qui **ne démarre jamais** (« écouter sur cet appareil » ignoré) | Boucle de 5 s qui cliquait un bouton vert sans vérifier ce que c'était | Observateur ciblé + bouton identifié par `data-testid` ou par libellé, puis clic de la ligne d'appareil ; déclenché aussi après un appui sur play |
+| 25 | Page de connexion **inutilisable** dans la WebView (OAuth) | Lien « classic login » inséré dans l'arbre React | Bouton « e-mail + mot de passe » **dans notre couche** (`?allow_password=1`) + formulaire mis au format mobile (champs 48 px, police 16 px) |
+| 26 | Rechargement en **boucle** quand la session connect meurt | `location.reload()` sur chaque 404 | `Api` compte les rechargements (3 maxi, 5 min d'écart) et n'agit que si l'utilisateur a demandé la lecture |
+| 27 | Aucun retour visuel quand le WebView est **hors ligne** | Rien | Bandeau + toast, `html.sd-offline` |
+| 28 | Partage du **mauvais lien** (`open.spotify.com` au lieu du titre) | URL codée en dur | Lien réel du titre lu dans le DOM, partage natif, sinon copie dans le presse-papiers |
 
 ---
 
@@ -131,8 +162,9 @@ Méthodes `@JavascriptInterface` appelées (toutes optionnelles) :
 | `playLoaded()` | quand le premier état de lecture est connu | équivalent à l'ancien appel |
 | `cssInjected()` | une fois l'UI montée | l'app s'en sert comme signal « prêt » |
 | `manageTShut(bool)` / `manageTSleep(bool)` | lecture / pause | veille et arrêt automatique |
-| `wakeUp()` / `wakeOff()` / `isWoke()` | disponible pour la lecture en arrière-plan | non appelé par défaut |
-| `deferMessage(str)` | disponible | utilisé par l'ancienne couche pour `reload` / `unlock` |
+| `wakeUp()` / `wakeOff()` / `isWoke()` | lecture vidéo (podcast) en arrière-plan | appelé uniquement si `isWoke` existe |
+| `loginDetected()` | quand Spotify propose « ouvrir le lecteur web » | signale à l'app que la session est valide |
+| `deferMessage(str)` | `unlock` (lecture bloquée), `reload` | mêmes messages que l'ancienne couche, donc mêmes chaînes localisées côté natif |
 
 Tout le reste (notification, media session, widgets, Android Auto) reste côté
 natif : **rien à modifier côté Kotlin/Java** pour cette refonte.
@@ -142,32 +174,50 @@ Réglages exposés à chaud (persistés dans `localStorage['sd.ui.settings']`) :
 ```js
 window.SpotiDuckUI.set("theme", "auto" | "dark" | "light");
 window.SpotiDuckUI.set("accentFromArt", true | false);
-window.SpotiDuckUI.set("haptics", true | false);
+window.SpotiDuckUI.set("reduceMotion", true | false);
+window.SpotiDuckUI.set("takeControl", true | false);
+window.SpotiDuckUI.set("resume", true | false);
 window.SpotiDuckUI.set("tabbar", true | false);
+window.SpotiDuckUI.set("haptics", true | false);
 SpotiDuckUI.openPlayer(); SpotiDuckUI.closePlayer(); SpotiDuckUI.openQueue();
+SpotiDuckUI.openMenu();   SpotiDuckUI.openSettings(); SpotiDuckUI.close();
 SpotiDuckUI.state;        // { title, artist, playing, position, duration, … }
 ```
 
+**Retour matériel** — à appeler depuis `onBackPressed` :
+
+```kotlin
+webView.evaluateJavascript("window.SpotiDuckUI && SpotiDuckUI.back()") { value ->
+    if (value != "true") super.onBackPressed()  // l'UI n'a rien fermé → comportement normal
+}
+```
+
+`back()` ferme dans l'ordre : feuille d'options/paramètres → file d'attente →
+lecteur plein écran → sous-page → retour à l'onglet Accueil, et renvoie `false`
+quand l'application doit reprendre la main.
+
 ---
 
-## 5. Ce qui reste à réintégrer (hors périmètre « interface »)
+## 5. Ce qui reste à réintégrer
 
-Ces blocs existaient dans l'ancien script injecté et ne sont **pas** dans cette
-livraison :
+La v2.1 a absorbé l'autoplay / prise de contrôle, la détection de connexion, le
+flux « unlock », la veille vidéo, la gestion du 404 de session et la
+surveillance du trafic (`Api`). Il reste deux blocs, volontairement laissés de
+côté :
 
-1. **Autoplay / « Take Control »** — la boucle qui clique sur « Take Control »
-   puis relance la lecture après une pause subie.
-2. **Détection de login** — le lien `?allow_password=1` et l'appel
-   `loginDetected()`.
-3. **Patch de `window.fetch`** — capture de `spotDevId`, `spotCliToken`,
-   `spotAuthToken`, `playFromUri()` (lecture d'un URI depuis Android) et la
-   gestion du 404 `connect-state` (déverrouillage par `reload`).
-4. **Crawl de la bibliothèque** (`fetchAllLibrary` / `parseLibrary` /
-   `mediaLib`) — utile si l'app veut une liste de bibliothèque native un jour.
-5. **Flux « unlock »** (pause maintenue → skip + `deferMessage('unlock')`).
+1. **`playFromUri()` côté Android** — `Api` capture déjà l'identifiant de
+   l'appareil (`devId`) et les jetons (`Client-Token`, `Authorization`)
+   nécessaires ; il manque l'appel `POST /connect-state/v1/player/command/
+   from/<dev>/to/<dev>` pour lancer un URI demandé par le natif (widget,
+   Android Auto, assistant). À faire quand l'app en aura besoin : c'est un
+   appel réseau, pas de l'interface.
+2. **Crawl de la bibliothèque** (`fetchAllLibrary` / `parseLibrary` /
+   `mediaLib`) — l'onglet Bibliothèque affiche aujourd'hui la page réelle de
+   Spotify, paginée et synchronisée. Le crawl ne servirait qu'à une liste
+   « hors ligne » côté natif.
 
-Ils doivent être remis dans un module séparé (`src/inject/…`), sans repasser
-par des variables globales ni par `document.body` directement.
+Règle à conserver : ces ajouts vont dans un module du runtime (comme `Api`),
+jamais en variables globales et jamais dans `document.body` directement.
 
 ---
 
@@ -201,6 +251,16 @@ glissement, la file d'attente, le suivi `manageTShut`/`manageTSleep` quand la
 lecture démarre ou s'arrête, l'extinction possible de la barre d'onglets,
 l'absence de `setInterval`, et le **payload `AndBridge` figé**
 (clés `artist,cover,duration,fav,playing,position,repeat,track`).
+
+Depuis la v2.1, il couvre aussi : le menu d'options (file d'attente, paroles,
+appareils, artiste, album, partager, paramètres), les paramètres (segmented
+control du thème, interrupteurs, persistance dans `localStorage`, classe
+`sd-reduce-motion`), la **prise de contrôle** (le mock insère le bouton
+« Écouter sur cet appareil » : la couche doit cliquer le bouton *puis* la ligne
+d'appareil), le **retour matériel** (feuille → lecteur → app), l'entrée
+d'historique unique par panneau (navigation arrière réelle), la **page de
+connexion** (`?allow_password=1` + `loginDetected()`), le bandeau **hors ligne**
+et le **partage du vrai lien de piste**.
 
 `tools/screenshots.mjs` produit en plus 13 captures (`shots/`) : accueil avant /
 après, mini-player, lecteur, file d'attente, bibliothèque, recherche, page de

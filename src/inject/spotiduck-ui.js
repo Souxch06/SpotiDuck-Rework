@@ -91,10 +91,16 @@
    * 1. Settings (persisted in the WebView, restored on next launch)
    * ------------------------------------------------------------------ */
   var Settings = {
+    /* Appearance */
     theme: "auto", // auto | dark | light
-    haptics: true,
     accentFromArt: true, // colour the player with the cover art
+    reduceMotion: false, // kill our animations (battery / low-end devices)
+    /* Playback */
+    takeControl: true, // click Spotify's "Écouter sur cet appareil" prompt
+    resume: false, // resume playback when something else pauses it
+    /* Interface */
     tabbar: true, // can be turned off if the ROM draws its own bar
+    haptics: true,
     labels: {
       home: "Accueil",
       search: "Rechercher",
@@ -117,6 +123,38 @@
       volume: "Volume",
       close: "Fermer",
       queueEmpty: "La file d'attente est vide",
+      /* sheets */
+      options: "Options",
+      settings: "Paramètres",
+      groupLook: "Apparence",
+      groupPlay: "Lecture",
+      groupUi: "Interface",
+      groupAbout: "À propos",
+      theme: "Thème",
+      themeAuto: "Auto",
+      themeDark: "Sombre",
+      themeLight: "Clair",
+      accent: "Couleur de la pochette",
+      reduceMotion: "Réduire les animations",
+      takeControl: "Prendre la main sur la lecture",
+      resume: "Relancer la lecture automatiquement",
+      showTabbar: "Barre de navigation",
+      haptics: "Retour haptique",
+      viewArtist: "Voir l'artiste",
+      viewAlbum: "Voir l'album",
+      reload: "Recharger le lecteur",
+      reset: "Réinitialiser les réglages",
+      version: "Version de l'interface",
+      takeover: "Lecture transférée sur cet appareil",
+      unlock: "Déblocage du lecteur…",
+      reloadPlayer: "Session expirée — rechargement du lecteur…",
+      resetDone: "Réglages réinitialisés",
+      copied: "Lien copié",
+      classicLogin: "Se connecter avec e-mail et mot de passe",
+      offline: "Hors connexion — lecture indisponible",
+      /* haptic patterns, in milliseconds */
+      buzzTap: 8,
+      buzzAction: 10,
     },
   };
 
@@ -127,9 +165,9 @@
       var o = JSON.parse(raw);
       if (o && typeof o === "object") {
         if (o.theme) Settings.theme = o.theme;
-        if (typeof o.haptics === "boolean") Settings.haptics = o.haptics;
-        if (typeof o.accentFromArt === "boolean") Settings.accentFromArt = o.accentFromArt;
-        if (typeof o.tabbar === "boolean") Settings.tabbar = o.tabbar;
+        ["haptics", "accentFromArt", "tabbar", "takeControl", "resume", "reduceMotion"].forEach(function (k) {
+          if (typeof o[k] === "boolean") Settings[k] = o[k];
+        });
       }
     } catch (e) {
       /* private mode / quota — defaults are fine */
@@ -144,6 +182,9 @@
           haptics: Settings.haptics,
           accentFromArt: Settings.accentFromArt,
           tabbar: Settings.tabbar,
+          takeControl: Settings.takeControl,
+          resume: Settings.resume,
+          reduceMotion: Settings.reduceMotion,
         })
       );
     } catch (e) {
@@ -198,6 +239,25 @@
       'aside input[type="range"][max]',
     ],
     lyrics: ['button[data-testid="lyrics-button"]'],
+    /* --- session extras (take control, links, login) --- */
+    trackLink: ['a[data-testid="context-item-link"]', '[data-testid="context-item-link"]'],
+    albumLink: [
+      'div[data-testid="now-playing-widget"] a[href*="/album/"]',
+      'aside[data-testid="now-playing-bar"] a[href*="/album/"]',
+      'div[data-testid="now-playing-widget"] img[data-testid="cover-art-image"]',
+    ],
+    /* Spotify's "this device is not playing" call-to-action. The native app
+       auto-clicks it (the old layer did it from a 5 s interval); we look for
+       it with an explicit selector first and a label regex as a fallback. */
+    takeover: [
+      'button[data-testid="takeover-button"]',
+      'div[data-testid="now-playing-bar"] div.encore-bright-accent-set button',
+      'aside[data-testid="now-playing-bar"] div.encore-bright-accent-set button',
+      'aside[data-testid="now-playing-bar"] button[aria-label]',
+    ],
+    takeoverRows: ['aside[data-testid="now-playing-bar"] ul[role="list"] li[role="listitem"] div[role="button"]'],
+    loginPage: ['div[data-testid="login-page"]', 'form[data-testid="login-form"]', '#login-username'],
+    webPlayerLink: ['button[data-testid="web-player-link"]', 'a[data-testid="web-player-link"]'],
     pageH1: ['main h1', '#main-view h1'],
     pageSection: ["main section[data-testid]", "#main-view section[data-testid]"],
   };
@@ -422,6 +482,23 @@
     },
     lyricsButton: function () {
       return pick(SEL.lyrics);
+    },
+    /** Absolute URL of the track that is playing (used by "Partager"). */
+    trackHref: function () {
+      var a = pick(SEL.trackLink);
+      var href = a && a.getAttribute("href");
+      if (href && href !== "#") {
+        return href.indexOf("http") === 0 ? href : "https://open.spotify.com" + href;
+      }
+      return "https://open.spotify.com/";
+    },
+    /** Clickable album/artist cover of the now-playing widget. */
+    albumLink: function () {
+      var el = pick(SEL.albumLink);
+      if (!el) return null;
+      if (el.tagName === "A" && el.getAttribute("href")) return el;
+      var a = el.closest && el.closest("a[href]");
+      return a || null;
     },
     /** Scan the (hidden) desktop bar for a button by aria-label. */
     findBarButton: function (re) {
@@ -691,6 +768,21 @@
       '<path d="M6 12a1.75 1.75 0 1 1-3.5 0 1.75 1.75 0 0 1 3.5 0zm7.75 0a1.75 1.75 0 1 1-3.5 0 1.75 1.75 0 0 1 3.5 0zm7.75 0a1.75 1.75 0 1 1-3.5 0 1.75 1.75 0 0 1 3.5 0z"/>',
     musicNote:
       '<path d="M20 3.2v12.3a3.5 3.5 0 1 1-2-3.2V6.6l-8 1.7v9.2a3.5 3.5 0 1 1-2-3.2V5.6l12-2.4z"/>',
+    gearLine:
+      '<g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2.8l1.2 1.9 2.2-.5.6 2.2 2 .9-.9 2 1.2 1.9-1.2 1.9.9 2-2 .9-.6 2.2-2.2-.5L12 21.2l-1.2-1.9-2.2.5-.6-2.2-2-.9.9-2L5.7 12l1.2-1.9-.9-2 2-.9.6-2.2 2.2.5z"/></g>',
+    discLine:
+      '<g fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.6"/></g>',
+    personLine:
+      '<g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><circle cx="12" cy="8" r="3.6"/><path d="M4.8 20.4c0-3.3 3.2-5.6 7.2-5.6s7.2 2.3 7.2 5.6"/></g>',
+    refreshLine:
+      '<g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 3.6V8h-4.4"/></g>',
+    cloudOffLine:
+      '<g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 18h8a4 4 0 0 0 .8-7.9 5.5 5.5 0 0 0-8-2.6M6.6 18a3.8 3.8 0 0 1-.4-7.6"/><path d="M3.5 3.5l17 17"/></g>',
+    checkLine: '<path d="M9.6 16.3 5.3 12l-1.4 1.4 5.7 5.7L20.4 7.4 19 6z"/>',
+    arrowUndo:
+      '<g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></g>',
+    plusCircle:
+      '<g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></g>',
   };
 
   function svg(paths, cls) {
@@ -727,6 +819,11 @@
         svg(ICONS.chevronLeft) +
         "</button>" +
         '<div class="sd-topbar-title"></div>' +
+        '<button class="sd-iconbtn sd-topbar-gear" type="button" aria-label="' +
+        Settings.labels.settings +
+        '">' +
+        svg(ICONS.gearLine) +
+        "</button>" +
         '<button class="sd-iconbtn sd-topbar-close" type="button" aria-label="' +
         Settings.labels.close +
         '">' +
@@ -871,19 +968,38 @@
       var grabber = document.createElement("div");
       grabber.className = "sd-sheet-grabber";
 
+      /* ---- login helper + offline banner ---- */
+      var loginCta = document.createElement("a");
+      loginCta.className = "sd-login-cta";
+      loginCta.href = "/login?allow_password=1";
+      loginCta.textContent = Settings.labels.classicLogin;
+      var offlineBar = document.createElement("div");
+      offlineBar.className = "sd-offline-bar";
+      offlineBar.setAttribute("role", "status");
+      offlineBar.innerHTML =
+        '<span class="sd-offline-icon">' + svg(ICONS.cloudOffLine) + "</span>" +
+        "<span>" + Settings.labels.offline + "</span>";
+
       L.appendChild(topbar);
       L.appendChild(mini);
       L.appendChild(tabbar);
       L.appendChild(scrim);
       L.appendChild(grabber);
       L.appendChild(player);
+      L.appendChild(loginCta);
+      L.appendChild(offlineBar);
       document.body.appendChild(L);
 
       this.layer = L;
+      /* The sheets live in the same layer, so they are built once the layer
+         handle exists. */
+      Sheets.build();
+
       this.el = {
         topbar: topbar,
         topbarBack: $(".sd-back", topbar),
         topbarTitle: $(".sd-topbar-title", topbar),
+        topbarGear: $(".sd-topbar-gear", topbar),
         topbarClose: $(".sd-topbar-close", topbar),
         mini: mini,
         miniImg: $(".sd-mini-art img", mini),
@@ -923,6 +1039,9 @@
         empty: $(".sd-player-empty", player),
         right: $(".sd-player-right", player),
         scrim: scrim,
+        grabber: grabber,
+        loginCta: loginCta,
+        offlineBar: offlineBar,
       };
       this.built = true;
       this.bind();
@@ -1105,8 +1224,13 @@
       e.queue.addEventListener("click", function () {
         Queue.toggle();
       });
+      /* "…" opens our options sheet (queue, lyrics, devices, links, share,
+         settings) instead of jumping straight to the queue. */
       e.playerMenu.addEventListener("click", function () {
-        Queue.toggle();
+        Sheets.open("menu");
+      });
+      e.topbarGear.addEventListener("click", function () {
+        Sheets.open("settings");
       });
       e.device.addEventListener("click", function () {
         var b = Spotify.devicesButton();
@@ -1129,13 +1253,15 @@
         Router.tab("home");
       });
       e.scrim.addEventListener("click", function () {
-        Queue.close();
+        if (Sheets.active) Sheets.close();
+        else Queue.close();
       });
 
       /* keyboard */
       document.addEventListener("keydown", function (ev) {
         if (ev.key === "Escape") {
-          if (Queue.open) Queue.close();
+          if (Sheets.active) Sheets.close();
+          else if (Queue.open) Queue.close();
           else if (Player.open) Player.closeSheet();
           return;
         }
@@ -1297,9 +1423,25 @@
     },
     playPause: function () {
       var want = !State.playing;
+      Auto.wantPlay = want;
+      Auto.selfPaused = !want;
+      if (want) {
+        Auto.stuckTries = 0;
+        Auto.resumeCount = 0;
+      }
       emit({ playing: want }, "optimistic");
-      buzz(8);
-      if (!Spotify.playPause()) emit({ playing: !want }, "rollback");
+      buzz(Settings.labels.buzzTap);
+      if (!Spotify.playPause()) {
+        emit({ playing: !want }, "rollback");
+      } else if (want) {
+        /* Starting playback may require the "Écouter sur cet appareil"
+           hand-off first, and Spotify sometimes swallows the first request
+           entirely — both cases are handled by the Auto module. */
+        setTimeout(function () {
+          Auto.maybeTakeover();
+        }, 400);
+        Auto.armStuck();
+      }
       Bridge.mediaStatus(State);
       Bridge.mediaPosition(livePosition());
       this.syncLocks();
@@ -1322,7 +1464,12 @@
     },
     next: function () {
       buzzer();
+      Auto.wantPlay = true;
+      Auto.selfPaused = false;
       if (!Spotify.next()) return;
+      setTimeout(function () {
+        Auto.maybeTakeover();
+      }, 400);
       emit({ anchorPos: 0, position: 0, anchorAt: performance.now() }, "optimistic");
       Actions.settle(900);
     },
@@ -1371,25 +1518,41 @@
       }, 400);
     },
     share: function () {
-      var url = "https://open.spotify.com/";
-      if (navigator.share) {
+      /* Share the *real* track URL (the old layer shared the open.spotify.com
+         home page, which made the feature useless). */
+      var url = Spotify.trackHref();
+      var copy = function () {
         try {
-          navigator.share({ title: State.title, text: State.artist, url: url });
-          return;
+          navigator.clipboard.writeText(url);
+          Toast.show(Settings.labels.copied);
         } catch (e) {
-          /* user cancelled / not allowed */
+          Toast.show(url, 2600);
         }
+      };
+      if (navigator.share) {
+        var p = null;
+        try {
+          p = navigator.share({ title: State.title, text: State.artist, url: url });
+        } catch (e) {
+          p = null; // not allowed (not a user gesture) → clipboard
+        }
+        if (p && typeof p.then === "function") {
+          p.then(null, function () {
+            /* cancelled — no need to shout about it */
+          });
+          return;
+        }
+        if (p) return;
       }
-      try {
-        navigator.clipboard.writeText(url);
-        Toast.show("Lien copié");
-      } catch (e) {
-        /* clipboard unavailable */
-      }
+      copy();
     },
     openArtist: function () {
       var a = pick(SEL.artist);
-      if (a && a.tagName === "A" && a.href) location.assign(a.getAttribute("href"));
+      if (a && a.tagName === "A" && a.getAttribute("href")) location.assign(a.getAttribute("href"));
+    },
+    openAlbum: function () {
+      var a = Spotify.albumLink();
+      if (a && a.getAttribute("href")) location.assign(a.getAttribute("href"));
     },
   };
   function buzzer() {
@@ -1420,6 +1583,701 @@
   };
 
   /* ------------------------------------------------------------------ *
+   * 11b. Bottom sheets — the player's "…" menu and the settings screen
+   *      Both are ours (the queue reuses Spotify's own panel), so they share
+   *      one animation, one drag-to-dismiss and one back-button contract with
+   *      the full player sheet.
+   * ------------------------------------------------------------------ */
+  var MENU = {
+    queue: { icon: ICONS.queueLine, label: Settings.labels.queue, run: function () { Queue.openSheet(); } },
+    lyrics: {
+      icon: ICONS.lyricsLine,
+      label: Settings.labels.lyrics,
+      need: function () {
+        return !!Spotify.lyricsButton();
+      },
+      run: function () {
+        var b = Spotify.lyricsButton();
+        if (b) b.click();
+        else Toast.show(Settings.labels.lyricsUnavailable || Settings.labels.lyrics);
+      },
+    },
+    devices: {
+      icon: ICONS.deviceLine,
+      label: Settings.labels.devices,
+      need: function () {
+        return !!Spotify.devicesButton();
+      },
+      run: function () {
+        var b = Spotify.devicesButton();
+        if (b) b.click();
+      },
+    },
+    artist: {
+      icon: ICONS.personLine,
+      label: Settings.labels.viewArtist,
+      need: function () {
+        return !!pick(SEL.artist);
+      },
+      run: function () {
+        Actions.openArtist();
+      },
+    },
+    album: {
+      icon: ICONS.discLine,
+      label: Settings.labels.viewAlbum,
+      need: function () {
+        return !!Spotify.albumLink();
+      },
+      run: function () {
+        Actions.openAlbum();
+      },
+    },
+    share: { icon: ICONS.shareLine, label: Settings.labels.share, run: function () { Actions.share(); } },
+    settings: { icon: ICONS.gearLine, label: Settings.labels.settings, run: function () { Sheets.open("settings"); } },
+  };
+
+  /* Factory defaults, used by the "reset" row. */
+  var DEFAULTS = {
+    theme: "auto",
+    accentFromArt: true,
+    reduceMotion: false,
+    takeControl: true,
+    resume: false,
+    tabbar: true,
+    haptics: true,
+  };
+
+  /** Single entry point for every setting change (UI + public API). */
+  function applySetting(key, value) {
+    if (!(key in Settings) || typeof Settings[key] === "function") return false;
+    Settings[key] = value;
+    saveSettings();
+    if (key === "theme") Theme.apply();
+    if (key === "reduceMotion") document.documentElement.classList.toggle("sd-reduce-motion", !!value);
+    if (key === "tabbar") UI.paintChrome(State);
+    UI.paint(State, "settings");
+    Sheets.paint();
+    return true;
+  }
+
+  var Sheets = {
+    active: null, // "menu" | "settings"
+    el: {},
+    built: false,
+
+    build: function () {
+      if (this.built) return;
+      var self = this;
+      var frag = document.createDocumentFragment();
+
+      ["menu", "settings"].forEach(function (name) {
+        var s = self.mk("section", "sd-sheet sd-sheet-" + name);
+        s.setAttribute("role", "dialog");
+        s.setAttribute("aria-modal", "true");
+        s.setAttribute("aria-hidden", "true");
+        s.appendChild(
+          self.mk(
+            "div",
+            "sd-sheet-head",
+            '<span class="sd-sheet-title"></span>' +
+              '<button class="sd-iconbtn sd-sheet-close" type="button" aria-label="' +
+              Settings.labels.close +
+              '">' +
+              svg(ICONS.chevronDown) +
+              "</button>"
+          )
+        );
+        s.appendChild(self.mk("div", "sd-sheet-body"));
+        $(".sd-sheet-title", s).textContent = name === "menu" ? Settings.labels.options : Settings.labels.settings;
+        $(".sd-sheet-close", s).addEventListener("click", function () {
+          self.close();
+        });
+        s.addEventListener("click", function (ev) {
+          var sw = ev.target.closest("[data-switch]");
+          if (sw) {
+            var k = sw.getAttribute("data-switch");
+            applySetting(k, !Settings[k]);
+            buzz(8);
+            return;
+          }
+          var segBtn = ev.target.closest(".sd-seg button");
+          if (segBtn) {
+            var seg = ev.target.closest("[data-seg]");
+            applySetting(seg.getAttribute("data-seg"), segBtn.getAttribute("data-value"));
+            buzz(8);
+            return;
+          }
+          var row = ev.target.closest("[data-row]");
+          if (!row || row.hasAttribute("disabled") || row.hidden) return;
+          self.activate(row.getAttribute("data-row"));
+        });
+        self.drag(s);
+        frag.appendChild(s);
+        self.el[name] = s;
+        self.el[name + "Body"] = $(".sd-sheet-body", s);
+      });
+
+      /* --- player "…" menu --- */
+      Object.keys(MENU).forEach(function (id) {
+        self.el.menuBody.appendChild(self.row(id, MENU[id].icon, MENU[id].label));
+      });
+
+      /* --- settings --- */
+      self.el.settingsBody.appendChild(
+        self.group(Settings.labels.groupLook, [
+          self.segRow("theme", Settings.labels.theme, [
+            ["auto", Settings.labels.themeAuto],
+            ["dark", Settings.labels.themeDark],
+            ["light", Settings.labels.themeLight],
+          ]),
+          self.switchRow("accentFromArt", Settings.labels.accent),
+          self.switchRow("reduceMotion", Settings.labels.reduceMotion),
+        ])
+      );
+      self.el.settingsBody.appendChild(
+        self.group(Settings.labels.groupPlay, [
+          self.switchRow("takeControl", Settings.labels.takeControl),
+          self.switchRow("resume", Settings.labels.resume),
+        ])
+      );
+      self.el.settingsBody.appendChild(
+        self.group(Settings.labels.groupUi, [
+          self.switchRow("tabbar", Settings.labels.showTabbar),
+          self.switchRow("haptics", Settings.labels.haptics),
+        ])
+      );
+      self.el.settingsBody.appendChild(
+        self.group(Settings.labels.groupAbout, [
+          self.infoRow(Settings.labels.version, VERSION),
+          self.actionRow("reload", Settings.labels.reload, ICONS.refreshLine),
+          self.actionRow("reset", Settings.labels.reset, ICONS.arrowUndo),
+        ])
+      );
+
+      UI.layer.appendChild(frag);
+      this.built = true;
+      Back.sync();
+    },
+
+    /* ---------------- tiny DOM builders ---------------- */
+    mk: function (tag, cls, html) {
+      var n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (html != null) n.innerHTML = html;
+      return n;
+    },
+    row: function (id, icon, label) {
+      var b = this.mk(
+        "button",
+        "sd-row",
+        '<span class="sd-row-icon">' +
+          svg(icon || ICONS.chevronDown) +
+          '</span><span class="sd-row-label">' +
+          label +
+          "</span>"
+      );
+      b.type = "button";
+      b.setAttribute("data-row", id);
+      return b;
+    },
+    actionRow: function (id, label, icon) {
+      var b = this.row(id, icon, label);
+      b.classList.add("sd-row-lead");
+      return b;
+    },
+    infoRow: function (label, value) {
+      var d = this.mk(
+        "div",
+        "sd-row sd-row-info",
+        '<span class="sd-row-label">' + label + '</span><span class="sd-row-value">' + value + "</span>"
+      );
+      return d;
+    },
+    switchRow: function (key, label) {
+      var b = this.mk(
+        "button",
+        "sd-row sd-row-switch",
+        '<span class="sd-row-label">' +
+          label +
+          '</span><span class="sd-switch" aria-hidden="true"><i></i></span>'
+      );
+      b.type = "button";
+      b.setAttribute("data-switch", key);
+      b.setAttribute("role", "switch");
+      b.setAttribute("aria-checked", "false");
+      return b;
+    },
+    segRow: function (key, label, options) {
+      var w = this.mk("div", "sd-row sd-row-seg", '<span class="sd-row-label">' + label + "</span>");
+      w.setAttribute("data-seg", key);
+      var seg = this.mk("div", "sd-seg");
+      seg.setAttribute("role", "radiogroup");
+      seg.setAttribute("aria-label", label);
+      options.forEach(function (o) {
+        var b = document.createElement("button");
+        b.type = "button";
+        b.setAttribute("role", "radio");
+        b.setAttribute("data-value", o[0]);
+        b.textContent = o[1];
+        seg.appendChild(b);
+      });
+      w.appendChild(seg);
+      return w;
+    },
+    group: function (title, rows) {
+      var s = this.mk("section", "sd-group");
+      var h = document.createElement("h2");
+      h.textContent = title;
+      s.appendChild(h);
+      rows.forEach(function (r) {
+        s.appendChild(r);
+      });
+      return s;
+    },
+
+    /* ---------------- behaviour ---------------- */
+    open: function (name) {
+      if (!this.built) return;
+      if (this.active === name) {
+        this.close();
+        return;
+      }
+      this.close(false);
+      this.active = name;
+      var s = this.el[name];
+      s.classList.add("is-open");
+      s.setAttribute("aria-hidden", "false");
+      document.documentElement.classList.add("sd-sheet-open");
+      document.body.classList.add("sd-sheet-open");
+      this.paint();
+      Back.sync();
+      buzz(8);
+    },
+    close: function (silent) {
+      var name = this.active;
+      if (name) {
+        var s = this.el[name];
+        s.classList.remove("is-open", "is-dragging");
+        s.setAttribute("aria-hidden", "true");
+        s.style.removeProperty("--sd-sheet-drag");
+      }
+      this.active = null;
+      document.documentElement.classList.remove("sd-sheet-open");
+      document.body.classList.remove("sd-sheet-open");
+      if (name && silent !== false) Back.release();
+    },
+    activate: function (id) {
+      if (id === "reload") {
+        Toast.show(Settings.labels.reloadPlayer);
+        Api.repair(true);
+        return;
+      }
+      if (id === "reset") {
+        Object.keys(DEFAULTS).forEach(function (k) {
+          applySetting(k, DEFAULTS[k]);
+        });
+        Toast.show(Settings.labels.resetDone);
+        return;
+      }
+      var row = MENU[id];
+      if (!row) return;
+      /* Close first so the menu never sits on top of what it opened. */
+      this.close();
+      buzz(10);
+      setTimeout(row.run, 180);
+    },
+    /** Re-evaluate row availability + control states. */
+    paint: function () {
+      if (!this.built) return;
+      var menu = this.el.menuBody;
+      $$("[data-row]", menu).forEach(function (row) {
+        var def = MENU[row.getAttribute("data-row")];
+        row.hidden = !!(def && def.need && !def.need());
+      });
+      $$("[data-switch]", this.el.settingsBody).forEach(function (sw) {
+        var on = !!Settings[sw.getAttribute("data-switch")];
+        sw.setAttribute("aria-checked", on ? "true" : "false");
+        sw.classList.toggle("is-on", on);
+      });
+      $$("[data-seg]", this.el.settingsBody).forEach(function (w) {
+        var value = Settings[w.getAttribute("data-seg")];
+        $$("button", w).forEach(function (b) {
+          var on = b.getAttribute("data-value") === value;
+          b.setAttribute("aria-checked", on ? "true" : "false");
+          b.classList.toggle("is-on", on);
+        });
+      });
+    },
+    /** Swipe the header down to dismiss (same thresholds as the player). */
+    drag: function (s) {
+      var head = $(".sd-sheet-head", s);
+      if (!head || !window.PointerEvent) return;
+      var start = null;
+      head.addEventListener("pointerdown", function (ev) {
+        start = { y: ev.clientY, t: Date.now() };
+        s.classList.add("is-dragging");
+        try {
+          head.setPointerCapture(ev.pointerId);
+        } catch (e) {}
+      });
+      head.addEventListener("pointermove", function (ev) {
+        if (!start) return;
+        s.style.setProperty("--sd-sheet-drag", Math.max(0, ev.clientY - start.y) + "px");
+      });
+      var end = function (ev) {
+        if (!start) return;
+        var dy = Math.max(0, (ev.clientY || 0) - start.y);
+        var speed = dy / Math.max(1, Date.now() - start.t);
+        var h = s.getBoundingClientRect().height || 1;
+        start = null;
+        s.classList.remove("is-dragging");
+        if (dy > h * 0.22 || speed > 0.8) {
+          s.style.setProperty("--sd-sheet-drag", "100%");
+          setTimeout(function () {
+            s.style.removeProperty("--sd-sheet-drag");
+          }, 300);
+          Sheets.close();
+        } else {
+          s.style.removeProperty("--sd-sheet-drag");
+        }
+      };
+      head.addEventListener("pointerup", end);
+      head.addEventListener("pointercancel", end);
+    },
+  };
+
+  /* ------------------------------------------------------------------ *
+   * 11c. Back — the Android back button closes our panels first.
+   *      Opening a panel pushes ONE history entry, so the WebView never
+   *      leaves the app by accident (the old layer had no handling at all).
+   * ------------------------------------------------------------------ */
+  var Back = {
+    pushed: false,
+    top: function () {
+      if (Sheets.active) return "sheet";
+      if (Queue.open) return "queue";
+      if (Player.open) return "player";
+      return null;
+    },
+    sync: function () {
+      if (this.top() && !this.pushed) {
+        this.pushed = true;
+        try {
+          history.pushState({ sd: "panel" }, "");
+        } catch (e) {}
+      }
+    },
+    release: function () {
+      if (!this.pushed) return;
+      this.pushed = false;
+      try {
+        history.back();
+      } catch (e) {}
+    },
+    /** Returns true when the press was consumed by us. */
+    handle: function () {
+      var t = this.top();
+      if (!t) return false;
+      this.pushed = false; // set first: close() must not pop twice
+      if (t === "sheet") Sheets.close(false);
+      else if (t === "queue") Queue.close();
+      else Player.closeSheet();
+      if (this.top()) this.sync(); // a sheet closed over the player → one more
+      return true;
+    },
+  };
+  window.addEventListener("popstate", function () {
+    if (Back.pushed) Back.handle();
+  });
+
+  /* ------------------------------------------------------------------ *
+   * 11d. Auto — playback hand-off, stuck-player recovery, screen wake
+   *      (everything the native app did from a 5 s interval, event driven)
+   * ------------------------------------------------------------------ */
+  var Auto = {
+    /* The user asked for playback through our UI (play/pause, next, a library
+       tap…). Everything that "pushes" Spotify around is gated on this. */
+    wantPlay: false,
+    takeoverBusy: false,
+    stuckTries: 0,
+    selfPaused: false,
+    resumeCount: 0,
+    TAKEOVER_RE: /(couter sur cet appareil|listen on this device|prendre le contr|take control|transf[ée]rer|continuer la lecture)/i,
+
+    start: function () {
+      this.watch();
+      this.wake();
+      document.addEventListener("visibilitychange", function () {
+        Auto.wake();
+        if (document.visibilityState === "visible") {
+          syncFromDom("visible");
+          Login.apply();
+        }
+      });
+      window.addEventListener("online", Offline.check);
+      window.addEventListener("offline", Offline.check);
+    },
+
+    /* ---- "Écouter sur cet appareil" ---------------------------------- */
+    /** Spotify only offers the transfer button when another device is
+     *  playing; we watch the bar instead of polling it every 5 seconds. */
+    watch: function () {
+      if (!window.MutationObserver) return;
+      var bar = pick(SEL.npBar);
+      if (!bar) return;
+      /* NB: never pass a method straight to `debounce` — it calls back with a
+         null `this`, which is exactly how a bound-less module method breaks. */
+      var obs = new MutationObserver(
+        debounce(function () {
+          Auto.maybeTakeover();
+        }, 300)
+      );
+      obs.observe(bar, { childList: true, subtree: true });
+      var panel = pick(SEL.panel);
+      if (panel) obs.observe(panel, { childList: true, subtree: true });
+    },
+    takeoverButton: function () {
+      for (var i = 0; i < SEL.takeover.length; i++) {
+        var nodes = $$(SEL.takeover[i]);
+        for (var j = 0; j < nodes.length; j++) {
+          var el = nodes[j];
+          if (el.closest && el.closest(".sd-layer")) continue; // never ours
+          var label = (el.getAttribute("aria-label") || el.textContent || "").trim();
+          if (this.TAKEOVER_RE.test(label)) return el;
+        }
+      }
+      /* Last resort: when the bar has no track loaded at all, the only bright
+         accent button of the bar is the transfer call-to-action. */
+      if (!State.hasTrack) {
+        var green = pick(['aside[data-testid="now-playing-bar"] div.encore-bright-accent-set button']);
+        if (green) return green;
+      }
+      return null;
+    },
+    maybeTakeover: function () {
+      if (!Settings.takeControl || this.takeoverBusy) return;
+      /* Only ever take playback over when the user *asked* for playback from
+         this UI (or enabled the auto-resume option). Clicking the prompt just
+         because it appeared would steal playback from a speaker that is
+         happily playing — the old layer's behaviour bug in reverse. */
+      if (!this.wantPlay) return;
+      var btn = this.takeoverButton();
+      if (!btn) return;
+      this.takeoverBusy = true;
+      var self = this;
+      try {
+        btn.click();
+      } catch (e) {
+        /* the button may vanish between the observer callback and the click */
+      }
+      Toast.show(Settings.labels.takeover);
+      buzz(12);
+      /* Spotify then asks *which* device to hand playback to: click the first
+         row of that list, exactly like the native app does. */
+      setTimeout(function () {
+        var row = pick(SEL.takeoverRows);
+        if (row) {
+          try {
+            row.click();
+          } catch (e) {}
+        }
+        self.takeoverBusy = false;
+      }, 600);
+      if (this.wantPlay) this.armStuck();
+    },
+
+    /* ---- stuck-player recovery --------------------------------------- */
+    /** Spotify occasionally swallows the first play request. The old layer
+     *  waited 10 s, told Android (`deferMessage('unlock')`) and skipped to the
+     *  next track — same recovery, but never more than twice per request. */
+    armStuck: function () {
+      clearTimeout(this._stuck);
+      this._stuck = setTimeout(function () {
+        if (State.playing || !Auto.wantPlay || Auto.stuckTries >= 2) return;
+        Auto.stuckTries++;
+        Bridge.defer("unlock");
+        Toast.show(Settings.labels.unlock);
+        if (!Spotify.next()) Spotify.playPause();
+      }, 10000);
+    },
+
+    /* ---- optional auto-resume ---------------------------------------- */
+    maybeResume: function () {
+      if (!Settings.resume || this.selfPaused || !State.hasTrack) return;
+      if (document.visibilityState === "hidden" || this.resumeCount >= 3) return;
+      this.resumeCount++;
+      setTimeout(function () {
+        if (!State.playing && Settings.resume && !Auto.selfPaused) Spotify.playPause();
+      }, 600);
+    },
+
+    /* ---- screen wake lock for video/canvas playback ------------------ */
+    wake: function () {
+      if (!Bridge.has("wakeUp")) return;
+      var video = $(".VideoPlayer__container video");
+      try {
+        if (State.playing && video && document.visibilityState === "hidden") Bridge.wakeUp();
+        else if (document.visibilityState === "visible" && !video && Bridge.isWoke()) Bridge.wakeOff();
+      } catch (e) {
+        /* bridge hiccup — never break the UI over it */
+      }
+    },
+  };
+
+  /* ------------------------------------------------------------------ *
+   * 11e. Login — mobile login page + "logged in" hand-off to Android
+   * ------------------------------------------------------------------ */
+  var Login = {
+    done: false,
+    apply: function () {
+      var html = document.documentElement;
+      var onLogin = !!pick(SEL.loginPage) || /\/login/.test(location.pathname);
+      html.classList.toggle("sd-login", onLogin);
+      if (!onLogin) {
+        html.classList.remove("sd-login-classic", "sd-need-password");
+        return;
+      }
+      /* The WebView's OAuth pop-ups are unreliable; offer the classic form
+         (`?allow_password=1`) the way the native app does — but as a button
+         inside OUR layer, never as a node inside Spotify's React tree. */
+      var classic = !!$('form[data-testid="login-form"], #login-username');
+      html.classList.toggle("sd-login-classic", classic);
+      html.classList.toggle("sd-need-password", !classic && !/allow_password=1/.test(location.search));
+      var wpl = pick(SEL.webPlayerLink);
+      if (wpl && !this.done) {
+        this.done = true;
+        Bridge.call("loginDetected");
+        html.classList.add("sd-login-done");
+        try {
+          wpl.click();
+        } catch (e) {}
+      }
+    },
+  };
+
+  /* ------------------------------------------------------------------ *
+   * 11f. Offline — banner + toast so silence never looks like a bug
+   * ------------------------------------------------------------------ */
+  var Offline = {
+    check: function () {
+      var off = navigator.onLine === false;
+      document.documentElement.classList.toggle("sd-offline", off);
+      if (off) Toast.show(Settings.labels.offline, 2600);
+    },
+  };
+
+  /* ------------------------------------------------------------------ *
+   * 11g. Api — observe (never rewrite) Spotify's own traffic.
+   *      Gives us this device's id + tokens for the transfer hand-off, and
+   *      turns a dead connect session into ONE reload instead of the loop
+   *      the old layer created by reloading on every 404.
+   * ------------------------------------------------------------------ */
+  var Api = {
+    devId: "",
+    uri: "",
+    clientToken: "",
+    authToken: "",
+    reloads: 0,
+    lastReload: 0,
+    patched: false,
+    RE_DEVICES: /\/track-playback\/v1\/devices/,
+    RE_CONNECT: /\/connect-state\/v1\/player\/(?:command|transfer)\/from\/([^/]+)\/to\/([^/?]+)/,
+
+    watch: function () {
+      if (this.patched || !window.fetch) return;
+      this.patched = true;
+      var orig = window.fetch;
+      window.fetch = function (input, init) {
+        var url = typeof input === "string" ? input : (input && input.url) || "";
+        try {
+          Api.capture(url, init);
+        } catch (e) {}
+        var p = orig.apply(this, arguments);
+        try {
+          if (Api.RE_DEVICES.test(url) || Api.RE_CONNECT.test(url)) {
+            p.then(
+              function (res) {
+                if (res && res.status === 404) Api.onGone();
+                if (!res || !res.clone) return;
+                res.clone().json().then(
+                  function (data) {
+                    Api.consume(url, data);
+                  },
+                  function () {}
+                );
+              },
+              function () {}
+            );
+          }
+        } catch (e) {}
+        return p;
+      };
+    },
+    header: function (h, name) {
+      if (!h) return "";
+      try {
+        if (typeof h.get === "function") return h.get(name) || "";
+        if (Object.prototype.toString.call(h) === "[object Array]") {
+          for (var i = 0; i < h.length; i++) {
+            if (String(h[i][0]).toLowerCase() === name.toLowerCase()) return h[i][1] || "";
+          }
+          return "";
+        }
+        for (var k in h) {
+          if (k.toLowerCase() === name.toLowerCase()) return h[k] || "";
+        }
+      } catch (e) {}
+      return "";
+    },
+    capture: function (url, init) {
+      var h = init && init.headers;
+      var ct = this.header(h, "Client-Token");
+      if (ct && ct !== this.clientToken) this.clientToken = ct;
+      var at = this.header(h, "Authorization");
+      if (at && at !== this.authToken) this.authToken = at;
+      var m = this.RE_CONNECT.exec(url);
+      if (m && m[2]) {
+        this.devId = m[2];
+        this.uri = m[1];
+      }
+    },
+    consume: function (url, data) {
+      if (!data || typeof data !== "object") return;
+      if (this.RE_DEVICES.test(url)) {
+        var id = data.device_id || data.deviceId || "";
+        if (id) this.devId = id;
+      }
+      if (data.player_state && data.player_state.device && data.player_state.device.id) {
+        this.devId = data.player_state.device.id;
+      }
+    },
+    onGone: function () {
+      if (!Auto.wantPlay) return;
+      var now = Date.now();
+      if (this.reloads >= 3 || now - this.lastReload < 300000) {
+        Toast.show(Settings.labels.sessionLost, 3000);
+        return;
+      }
+      this.reloads++;
+      this.lastReload = now;
+      Toast.show(Settings.labels.reloadPlayer);
+      setTimeout(function () {
+        Api.repair(false);
+      }, 1400);
+    },
+    repair: function (manual) {
+      var now = Date.now();
+      if (manual && now - this.lastReload < 60000) return;
+      this.lastReload = now;
+      this.reloads++;
+      try {
+        location.reload();
+      } catch (e) {}
+    },
+  };
+
+  /* ------------------------------------------------------------------ *
    * 12. Player sheet
    * ------------------------------------------------------------------ */
   var Player = {
@@ -1430,6 +2288,7 @@
       document.documentElement.classList.add("sd-player-open");
       UI.el.player.setAttribute("aria-hidden", "false");
       UI.paintChrome(State);
+      Back.sync();
       buzz(8);
       var img = UI.el.artImg;
       if (img) {
@@ -1448,7 +2307,10 @@
       UI.el.player.setAttribute("aria-hidden", "true");
       UI.el.player.style.removeProperty("--sd-drag");
       UI.el.player.classList.remove("is-settling");
+      Sheets.close(false); // the options sheet never outlives the player
       UI.paintChrome(State);
+      Back.release();
+      buzz(4);
     },
   };
 
@@ -1470,11 +2332,14 @@
       }
       this.open = true;
       UI.paintChrome(State);
+      Back.sync();
+      buzz(6);
     },
     close: function () {
       if (!this.open) return;
       this.open = false;
       UI.paintChrome(State);
+      Back.release();
     },
   };
 
@@ -1516,10 +2381,15 @@
   var History = {
     depth: 0,
     install: function () {
+      if (this.installed) return;
+      this.installed = true;
       ["pushState", "replaceState"].forEach(function (m) {
         var orig = history[m];
-        history[m] = function () {
-          if (m === "pushState") History.depth++;
+        history[m] = function (state) {
+          /* Our own panel entries (`{sd:'panel'}`, pushed by Back) must not
+             count as internal navigation, or `goBack()` would just re-open
+             the sheet it is supposed to close. */
+          if (m === "pushState" && !(state && state.sd)) History.depth++;
           return orig.apply(this, arguments);
         };
       });
@@ -1729,6 +2599,7 @@
     var html = document.documentElement;
     html.classList.add(BODY_CLASS);
     html.classList.add("sd-tab-home");
+    html.classList.toggle("sd-reduce-motion", !!Settings.reduceMotion);
     Theme.apply();
   }
 
@@ -1760,6 +2631,12 @@
     UI.build();
     Mirror.start();
     Ticker.start();
+    History.install();
+    Api.watch();
+    Auto.start();
+    Login.apply();
+    Offline.check();
+    Sheets.paint();
     Router.sync();
     syncFromDom("boot");
 
@@ -1771,6 +2648,7 @@
         Router.sync();
         syncFromDom("page");
         UI.paintChrome(State);
+        Login.apply(); // the login page is rendered by the same container
       }, 250));
       pageObs.observe(main, { childList: true, subtree: false });
     }
@@ -1812,22 +2690,25 @@
     /* Playback can also change from outside the UI (notification, widget,
      * Android Auto): keep the native wake/sleep state in sync with it. */
     if (s.playing !== lastPlaying) {
+      var wasPlaying = lastPlaying;
       lastPlaying = s.playing;
       Actions.syncLocks();
+      /* Optional (settings → "Relancer la lecture automatiquement"): the old
+         layer's "permanent autoplay". Only for pauses we did not ask for. */
+      if (!s.playing && wasPlaying && reason !== "optimistic") Auto.maybeResume();
     }
     UI.paint(s, reason);
+    if (reason === "route" || reason === "route-sync") Login.apply();
   });
 
   window.SpotiDuckUI = {
     version: VERSION,
     state: State,
     settings: Settings,
+    /** Change one setting (`theme`, `haptics`, `accentFromArt`, `tabbar`,
+     *  `takeControl`, `resume`, `reduceMotion`) and persist it. */
     set: function (key, value) {
-      if (!(key in Settings)) return;
-      Settings[key] = value;
-      saveSettings();
-      if (key === "theme") Theme.apply();
-      UI.paint(State, "settings");
+      return applySetting(key, value);
     },
     openPlayer: function () {
       Player.openSheet();
@@ -1838,11 +2719,60 @@
     openQueue: function () {
       Queue.openSheet();
     },
+    openMenu: function () {
+      Sheets.open("menu");
+    },
+    openSettings: function () {
+      Sheets.open("settings");
+    },
+    close: function () {
+      Sheets.close();
+    },
+    /**
+     * Hardware back button. Call this from `onBackPressed` (via
+     * `evaluateJavascript`) — returns `true` when the UI consumed the press
+     * (a panel was closed), `false` when the app should handle it itself.
+     */
+    back: function () {
+      if (Back.top()) {
+        Back.handle();
+        return true;
+      }
+      if (State.route === "page") {
+        Spotify.goBack();
+        return true;
+      }
+      if (State.tab !== "home") {
+        Router.tab("home");
+        return true;
+      }
+      return false;
+    },
+    /** "Impossible de lancer la lecture ?" escape hatch (settings → reload). */
+    reload: function () {
+      Api.repair(true);
+    },
     sync: function () {
       syncFromDom("manual");
     },
     /* exposed for tests / the demo harness */
-    _internals: { Spotify: Spotify, Bridge: Bridge, Actions: Actions, UI: UI, Router: Router },
+    _internals: {
+      Spotify: Spotify,
+      Bridge: Bridge,
+      Actions: Actions,
+      UI: UI,
+      Router: Router,
+      Sheets: Sheets,
+      Player: Player,
+      Queue: Queue,
+      Auto: Auto,
+      Api: Api,
+      Login: Login,
+      Offline: Offline,
+      Bridge: Bridge,
+      Back: Back,
+      Icons: ICONS,
+    },
   };
 
   loadSettings();

@@ -430,7 +430,7 @@
         /* ---------------- now playing bar ---------------- */
         '<aside data-testid="now-playing-bar">' +
         '<div data-testid="now-playing-widget">' +
-        '<div><img data-testid="cover-art-image" src="" alt=""></div>' +
+        '<div><a href="#"><img data-testid="cover-art-image" src="" alt=""></a></div>' +
         '<div class="np-links">' +
         '<a data-testid="context-item-link" href="#">—</a>' +
         '<a data-testid="context-item-info-artist" href="#">—</a>' +
@@ -588,13 +588,29 @@
     renderPlayer();
   }
 
+  function slug(s) {
+    return String(s)
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/(^-|-$)/g, "");
+  }
+
   function renderPlayer() {
     var t = currentTrack();
     var img = widget.querySelector('img[data-testid="cover-art-image"]');
     var src = coverFor(t);
     if (img.getAttribute("src") !== src) img.setAttribute("src", src);
-    widget.querySelector('a[data-testid="context-item-link"]').textContent = t.title;
-    widget.querySelector('a[data-testid="context-item-info-artist"]').textContent = t.artist;
+    /* Real links: the mobile layer shares / opens them verbatim. */
+    var link = widget.querySelector('a[data-testid="context-item-link"]');
+    link.textContent = t.title;
+    link.setAttribute("href", "/track/" + slug(t.title));
+    var artistLink = widget.querySelector('a[data-testid="context-item-info-artist"]');
+    artistLink.textContent = t.artist;
+    artistLink.setAttribute("href", "/artist/" + slug(t.artist));
+    var artLink = img.closest("a");
+    if (artLink) artLink.setAttribute("href", "/album/" + slug(t.album));
 
     var likeBtn = widget.querySelector("div:last-child > button");
     var liked = !!state.liked[state.trackIndex];
@@ -635,11 +651,93 @@
     renderTimes();
   }, 250);
 
+  /* ------------------------------------------------------------ fixtures */
+  /* Counters the smoke test asserts on: the layer must drive the *player*,
+     never fake its own state. */
+  var calls = { takeover: 0, deviceRow: 0, loginDetected: 0 };
+
+  /* "Playing on another device" prompt: the desktop player *inserts* a green
+     call-to-action in the bar, then a device list once it is clicked. It is
+     built on demand here (and removed again) so the mutation observer of the
+     mobile layer has a real DOM change to react to. */
+  var takeoverNode = null;
+  function takeoverBox() {
+    if (takeoverNode) return takeoverNode;
+    takeoverNode = el(
+      '<div class="np-takeover">' +
+        '<div class="encore-bright-accent-set">' +
+        '<button data-testid="takeover-button" aria-label="Écouter sur cet appareil">Écouter sur cet appareil</button>' +
+        "</div>" +
+        '<ul role="list"><li role="listitem"><div role="button">SpotiDuck (cet appareil)</div></li></ul>' +
+        "</div>"
+    );
+    q('button[data-testid="takeover-button"]', takeoverNode).addEventListener("click", function () {
+      calls.takeover++;
+      state.deviceActive = true;
+      state.playing = true;
+      renderPlayer();
+    });
+    q('ul[role="list"] li[role="listitem"] div[role="button"]', takeoverNode).addEventListener("click", function () {
+      calls.deviceRow++;
+      if (takeoverNode.parentNode) takeoverNode.parentNode.removeChild(takeoverNode);
+    });
+    return takeoverNode;
+  }
+
+  var simulate = {
+    /** Put the player in the "playing on another device" state. */
+    takeover: function (on) {
+      var bar = q('aside[data-testid="now-playing-bar"]');
+      if (!bar) return false;
+      var box = takeoverBox();
+      /* NB: the node starts inside the <template> fragment of `el()`, so the
+         test is "is it already in the bar", not "does it have a parent". */
+      if (on) {
+        if (box.parentNode !== bar) bar.insertBefore(box, bar.firstChild);
+      } else if (box.parentNode && box.parentNode.nodeType === 1) {
+        box.parentNode.removeChild(box);
+      }
+      state.deviceActive = !on;
+      state.playing = false;
+      renderPlayer();
+      return true;
+    },
+    /** Swap the main view for the (logged-out) login page.
+     *  `opts.loggedIn` = the session is valid and Spotify offers to open the
+     *  web player (the case `loginDetected()` exists for). */
+    login: function (on, opts) {
+      var main = q("#main-view");
+      if (on) {
+        main.innerHTML =
+          '<div data-testid="login-page"><section>' +
+          '<h1>Se connecter à Spotify</h1>' +
+          '<button data-testid="login-button">S\'identifier</button>' +
+          (opts && opts.loggedIn
+            ? '<button data-testid="web-player-link">Ouvrir le lecteur web</button>'
+            : "") +
+          "</section></div>";
+        var wpl = q('button[data-testid="web-player-link"]', main);
+        if (wpl) {
+          wpl.addEventListener("click", function () {
+            simulate.login(false);
+          });
+        }
+        document.documentElement.classList.add("mock-login");
+      } else {
+        document.documentElement.classList.remove("mock-login");
+        renderMain();
+      }
+      return !!on;
+    },
+  };
+
   /* ---------------------------------------------------------------- boot */
   shell();
   window.MockSpotify = {
     state: state,
     tracks: TRACKS,
+    calls: calls,
+    simulate: simulate,
     play: play,
     navigate: navigate,
     get track() {

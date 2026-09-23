@@ -281,6 +281,153 @@ await checkAsync("wake/sleep lock state follows playback (manageTShut/manageTSle
   return playing.join(" ") + " / " + paused.join(" ");
 });
 
+await checkAsync("options sheet lists the player actions", async () => {
+  SD.openPlayer();
+  await tick(60);
+  q(".sd-player-menu").click();
+  await tick(60);
+  const sheet = q(".sd-sheet-menu");
+  assert(sheet.classList.contains("is-open"), "the options sheet did not open");
+  const ids = [...sheet.querySelectorAll("[data-row]")]
+    .filter((r) => !r.hidden)
+    .map((r) => r.getAttribute("data-row"));
+  ["queue", "lyrics", "devices", "share", "settings"].forEach((id) =>
+    assert(ids.includes(id), "missing action row: " + id)
+  );
+  SD.close();
+  await tick(40);
+  SD.closePlayer();
+  await tick(40);
+  return ids.join(" · ");
+});
+
+await checkAsync("settings sheet applies + persists a setting", async () => {
+  SD.openSettings();
+  await tick(60);
+  const sheet = q(".sd-sheet-settings");
+  assert(sheet.classList.contains("is-open"), "the settings sheet did not open");
+  const seg = sheet.querySelector('[data-seg="theme"]');
+  seg.querySelector('button[data-value="dark"]').click();
+  await tick(40);
+  assert(SD.settings.theme === "dark", "theme setting not applied");
+  assert(
+    JSON.parse(window.localStorage.getItem("sd.ui.settings")).theme === "dark",
+    "theme not persisted to localStorage"
+  );
+  assert(seg.querySelector('button[data-value="dark"]').classList.contains("is-on"), "segment not marked active");
+  const sw = sheet.querySelector('[data-switch="reduceMotion"]');
+  sw.click();
+  await tick(40);
+  assert(SD.settings.reduceMotion === true, "switch did not flip the setting");
+  assert(doc.documentElement.classList.contains("sd-reduce-motion"), "sd-reduce-motion class missing");
+  sw.click(); // back to the default for the rest of the run
+  seg.querySelector('button[data-value="auto"]').click();
+  await tick(40);
+  SD.close();
+  await tick(30);
+  return "theme=dark persisted · reduce-motion toggled";
+});
+
+await checkAsync("take control clicks Spotify's transfer prompt", async () => {
+  const M = window.MockSpotify;
+  const before = M.calls.takeover;
+  /* The earlier checks asked for playback through the UI: forget that, so the
+     "no request → no takeover" rule is actually tested. */
+  SD._internals.Auto.wantPlay = false;
+  M.simulate.takeover(true); // another device holds playback
+  await tick(80);
+  /* Nothing may happen until the user asks for playback… */
+  await tick(500);
+  assert(M.calls.takeover === before, "playback was stolen from the other device without a request");
+  /* …then pressing play must take control and start playing here. */
+  q(".sd-mini-play").click();
+  await tick(500); // the layer's own play path + observer debounce
+  await tick(700); // second step: the device row
+  assert(M.calls.takeover > before, "the transfer button was never clicked");
+  assert(M.calls.deviceRow > 0, "the device list row was never clicked");
+  M.simulate.takeover(false);
+  return "no theft · prompt + device row clicked";
+});
+
+await checkAsync("hardware back closes the top panel", async () => {
+  SD.openPlayer();
+  await tick(60);
+  SD.openSettings();
+  await tick(60);
+  assert(SD._internals.Sheets.active === "settings", "sheet not open");
+  assert(SD.back() === true, "back() did not consume the press");
+  await tick(40);
+  assert(SD._internals.Sheets.active === null, "back() did not close the sheet");
+  assert(SD._internals.Player.open === true, "the player must stay open under the sheet");
+  assert(SD.back() === true, "back() did not consume the second press");
+  await tick(40);
+  assert(SD._internals.Player.open === false, "back() did not close the player");
+  return "sheet → player → app";
+});
+
+await checkAsync("panels push exactly one history entry", async () => {
+  const Back = SD._internals.Back;
+  SD.openPlayer();
+  await tick(50);
+  assert(Back.pushed === true, "opening the player must push a history entry");
+  window.history.back(); // the real Android back button
+  await tick(140);
+  assert(SD._internals.Player.open === false, "a real back navigation did not close the player");
+  return "popstate consumed ✓";
+});
+
+await checkAsync("login page exposes the e-mail/password route", async () => {
+  const M = window.MockSpotify;
+  const html = doc.documentElement;
+  M.simulate.login(true);
+  SD._internals.Login.apply();
+  await tick(50);
+  assert(html.classList.contains("sd-login"), "sd-login class missing");
+  assert(html.classList.contains("sd-need-password"), "the classic-login call-to-action is not enabled");
+  const cta = q(".sd-login-cta");
+  assert(cta && /allow_password=1/.test(cta.getAttribute("href")), "wrong classic-login URL");
+  /* Second case: the player already offers "open the web player" → the layer
+     must tell Android and click through. */
+  const Login = SD._internals.Login;
+  Login.done = false;
+  M.simulate.login(true, { loggedIn: true });
+  Login.apply();
+  await tick(60);
+  const called = window.__bridgeCalls.some((c) => c[0] === "loginDetected");
+  assert(called, "AndBridge.loginDetected() was not called");
+  assert(!q('button[data-testid="web-player-link"]'), "the web player link was not clicked");
+  M.simulate.login(false);
+  SD._internals.Login.apply();
+  await tick(40);
+  assert(!html.classList.contains("sd-login"), "sd-login not cleared after login");
+  return "?allow_password=1 + loginDetected()";
+});
+
+await checkAsync("offline banner toggles with the connection", async () => {
+  const html = doc.documentElement;
+  Object.defineProperty(window.navigator, "onLine", { value: false, configurable: true });
+  window.dispatchEvent(new window.Event("offline"));
+  await tick(40);
+  assert(html.classList.contains("sd-offline"), "sd-offline class missing");
+  Object.defineProperty(window.navigator, "onLine", { value: true, configurable: true });
+  window.dispatchEvent(new window.Event("online"));
+  await tick(40);
+  assert(!html.classList.contains("sd-offline"), "sd-offline not cleared");
+  return "banner toggled ✓";
+});
+
+await checkAsync("share uses the real track link", async () => {
+  let copied = "";
+  Object.defineProperty(window.navigator, "clipboard", {
+    value: { writeText: (t) => { copied = t; } },
+    configurable: true,
+  });
+  SD._internals.Actions.share();
+  await tick(40);
+  assert(/\/track\//.test(copied), "share did not copy a track URL, got: " + (copied || "(nothing)"));
+  return copied.replace(/^https:\/\//, "");
+});
+
 await checkAsync("tab bar can be disabled without leaving a floating mini player", async () => {
   SD.set("tabbar", false);
   await tick(40);

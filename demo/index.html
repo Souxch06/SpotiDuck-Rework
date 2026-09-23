@@ -193,13 +193,27 @@
         </div>
 
         <div class="card">
+          <h2>Scénarios</h2>
+          <div class="row" id="scenarios"></div>
+          <div class="hint" style="text-align: left; margin-top: 8px">
+            « Transfert » = Spotify joue sur un autre appareil : la couche doit
+            cliquer « Écouter sur cet appareil » puis démarrer la lecture.
+            « Connexion » = page de login mobile avec le bouton e-mail/mot de
+            passe. « Hors ligne » = bandeau rouge au-dessus du mini-player.
+          </div>
+        </div>
+
+        <div class="card">
           <h2>À vérifier</h2>
           <ul class="checklist">
             <li><b>Barre d'onglets</b> : 3 onglets, l'actif est blanc et rempli.</li>
             <li><b>Mini-player</b> : apparaît dès qu'un titre joue, la ligne de progression avance, swipe ←/→ = piste suivante/précédente, swipe ↑ = plein écran.</li>
-            <li><b>Lecteur plein écran</b> : chevron pour fermer, glisser vers le bas pour fermer, poser le doigt sur la barre de progression pour scrubber.</li>
+            <li><b>Lecteur plein écran</b> : chevron pour fermer, glisser vers le bas pour fermer, poser le doigt sur la barre de progression pour scrubber, « … » = menu (file d'attente, paroles, appareils, artiste, album, partager, paramètres).</li>
+            <li><b>Paramètres</b> : engrenage dans l'en-tête de la bibliothèque ou menu « … » → thème Auto/Sombre/Clair, animations, prise de contrôle, rechargement du lecteur.</li>
+            <li><b>Retour matériel</b> : ferme d'abord le panneau ouvert, puis le lecteur, puis quitte l'appli.</li>
             <li><b>Bibliothèque</b> : plein écran, titre collant, lignes de 64 px, sous-titre sans les « • • » cassés.</li>
             <li><b>Recherche</b> : champ unique en haut, cartes en 2 colonnes.</li>
+            <li><b>Connexion</b> : formulaire lisible, champs de 48 px, bouton « e-mail + mot de passe ».</li>
             <li><b>Aucun chevauchement</b> avec la barre système, même en paysage.</li>
           </ul>
         </div>
@@ -279,6 +293,106 @@
       insetsEl.onchange = render;
       offEl.onchange = render;
       render();
+
+      /* ------------------------------------------------------- scénarios */
+      /* Same-origin: the harness drives the mock player *inside* the frame,
+         so what is shown is really the injected layer reacting to the DOM. */
+      function inFrame(fn) {
+        try {
+          var w = frame.contentWindow;
+          if (w && w.MockSpotify) fn(w);
+        } catch (e) {
+          /* frame not ready yet */
+        }
+      }
+      var SCENARIOS = [
+        {
+          label: "▶︎ Lecture",
+          run: function () {
+            inFrame(function (w) {
+              w.MockSpotify.play();
+            });
+          },
+        },
+        {
+          label: "⏸ Pause",
+          run: function () {
+            inFrame(function (w) {
+              w.MockSpotify.play();
+              var b = w.document.querySelector('button[data-testid="control-button-playpause"]');
+              if (b) b.click();
+            });
+          },
+        },
+        {
+          label: "Transfert / autre appareil",
+          run: function () {
+            inFrame(function (w) {
+              w.MockSpotify.simulate.takeover(true);
+            });
+          },
+        },
+        {
+          label: "Page de connexion",
+          run: function () {
+            inFrame(function (w) {
+              w.MockSpotify.simulate.login(true);
+            });
+          },
+        },
+        {
+          label: "Hors ligne",
+          run: function () {
+            inFrame(function (w) {
+              Object.defineProperty(w.navigator, "onLine", { value: false, configurable: true });
+              w.dispatchEvent(new w.Event("offline"));
+            });
+          },
+        },
+        {
+          label: "Tout remettre à zéro",
+          run: function () {
+            inFrame(function (w) {
+              Object.defineProperty(w.navigator, "onLine", { value: true, configurable: true });
+              w.dispatchEvent(new w.Event("online"));
+              w.MockSpotify.simulate.takeover(false);
+              w.MockSpotify.simulate.login(false);
+              if (w.SpotiDuckUI) {
+                w.SpotiDuckUI.close();
+                w.SpotiDuckUI.closePlayer();
+                w.SpotiDuckUI.set("theme", "auto");
+              }
+            });
+          },
+        },
+        {
+          label: "Ouvrir le lecteur",
+          run: function () {
+            inFrame(function (w) {
+              w.SpotiDuckUI && w.SpotiDuckUI.openPlayer();
+            });
+          },
+        },
+        {
+          label: "Paramètres",
+          run: function () {
+            inFrame(function (w) {
+              w.SpotiDuckUI && w.SpotiDuckUI.openSettings();
+            });
+          },
+        },
+      ];
+      var scenEl = document.getElementById("scenarios");
+      SCENARIOS.forEach(function (s) {
+        var b = document.createElement("button");
+        b.className = "choice";
+        b.textContent = s.label;
+        b.onclick = function () {
+          s.run();
+          b.blur();
+        };
+        scenEl.appendChild(b);
+      });
     </script>
   </body>
 </html>

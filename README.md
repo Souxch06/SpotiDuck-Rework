@@ -72,7 +72,8 @@ layout lives in this repository and is built into a single injectable file:
 
 ```
 src/inject/10-base.css      design tokens, viewport, web-player takeover
-src/inject/20-shell.css     tab bar, mini player, full-screen player, sheets
+src/inject/20-shell.css     tab bar, mini player, full-screen player, queue sheet
+src/inject/30-sheets.css    options & settings sheets, login page, offline banner
 src/inject/spotiduck-ui.js  runtime (reads the player, drives playback, gestures)
 dist/spotiduck-ui.js        ← built bundle, this is what the app injects
 demo/                       mock Spotify web player + phone-frame preview
@@ -80,12 +81,23 @@ demo/                       mock Spotify web player + phone-frame preview
 
 ```bash
 npm run build    # rebuild dist/spotiduck-ui.js
-npm run smoke    # 20 behaviour tests against the built bundle
+npm run smoke    # 30 behaviour tests against the built bundle
 npm run demo     # http://localhost:5173 — preview in a phone frame
 ```
 
+The preview ships a mock web player (same `data-testid`s as the real one) plus
+scenario buttons: **transfer from another device**, **login page**, **offline**,
+open the player / the settings, and an A/B switch that disables the whole layer.
+
 Everything is scoped to `html.sd-mobile`, so the layer can be shipped, disabled
-or A/B-compared (`demo/player.html?off=1`) without touching the app.
+or A/B-compared (`demo/player.html?off=1`) without touching the app. Settings
+live in `localStorage['sd.ui.settings']` and are also exposed at runtime:
+
+```js
+window.SpotiDuckUI.set("theme", "light");
+window.SpotiDuckUI.openSettings();
+window.SpotiDuckUI.back();   // call from onBackPressed, returns true if consumed
+```
 
 ---
 
