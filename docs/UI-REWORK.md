@@ -1,4 +1,4 @@
-# Refonte de l'interface mobile — SpotiDuck UI v2.1
+# Refonte de l'interface mobile — SpotiDuck UI v2.3
 
 Ce document décrit la nouvelle **couche d'interface** injectée dans la WebView
 Spotify : ce qu'elle remplace, les bugs qu'elle corrige, comment l'intégrer à
@@ -7,9 +7,11 @@ l'application Android et comment la tester.
 > Périmètre : **l'interface, complète et fonctionnelle**. La v2.0 livrait la
 > coque visuelle ; la v2.1 y ajoute les fonctionnalités de l'ancienne couche
 > (prise de contrôle de la lecture, connexion, déblocage, veille) et les écrans
-> qui manquaient (menu d'options, paramètres, retour matériel). Voir
-> « Ce qui reste à réintégrer » pour les deux seuls blocs volontairement hors
-> périmètre.
+> qui manquaient (menu d'options, paramètres, retour matériel). La **v2.3**
+> livre l'application installable : wrapper Android (`android/`) + APK signé
+> produit par la CI, et une passe de durcissement issue de l'audit
+> d'interface (section 8). Voir « Ce qui reste à réintégrer » pour les deux
+> seuls blocs volontairement hors périmètre.
 
 ---
 
@@ -23,12 +25,13 @@ l'application Android et comment la tester.
 | `src/inject/spotiduck-ui.js` | Le runtime : construit le chrome, lit l'état du web player, pilote la lecture, gère les gestes, les panneaux, la connexion, et parle à `AndBridge`. |
 | `tools/build.mjs` | Concatène CSS + runtime → **`dist/spotiduck-ui.js`**, un seul fichier à injecter. |
 | `demo/` | Banc d'essai : un faux web player Spotify (mêmes `data-testid`), cadre téléphone et **scénarios** (transfert, connexion, hors ligne). |
-| `tools/smoke.mjs` | 30 tests de comportement (jsdom) sur le bundle réel. |
+| `src/inject/40-audit.css` | Durcissement de l'interface : cibles tactiles ≥ 44 px, débordements, en-têtes collants, modales natives, clavier, contraste, focus, mouvement réduit (section 8). |
+| `tools/smoke.mjs` | 34 tests de comportement (jsdom) sur le bundle réel. |
 | `tools/screenshots.mjs` | Capture d'écran des écrans clés (nécessite Chrome/Chromium). |
 
 ```bash
 npm run build            # génère dist/spotiduck-ui.js
-npm run smoke            # lance les 30 tests
+npm run smoke            # lance les 34 tests
 npm run demo             # http://localhost:5173 → aperçu dans un cadre téléphone
 ```
 
@@ -237,7 +240,36 @@ jamais en variables globales et jamais dans `document.body` directement.
 
 ---
 
-## 7. Tests
+## 7. Passe d'audit de l'interface (v2.3)
+
+Le rapport d'audit automatique liste 163 constats. Ils se ramènent à onze
+familles de défauts ; chacune est traitée par une règle systématique de
+`src/inject/40-audit.css`, plus un état géré par le runtime. Corriger la classe
+plutôt que l'occurrence est le seul moyen de tenir sur une interface dont le DOM
+change tous les mois.
+
+| Famille du rapport | Correctif | Où |
+| --- | --- | --- |
+| Cibles tactiles trop petites (chevrons « 16 px », `+`, `…`, actions de ligne) | tout contrôle de notre couche fait ≥ `--sd-tap` (44 px) ; les boutons-icônes de Spotify passent à 44 px (`:has(> svg:only-child)`), et tout contrôle mesuré sous 40 px reçoit `data-sd-hit` (boîte réelle, jamais un `::after` qui volerait le tap du voisin) | §1 + `Polish.labelPass()` |
+| Titres tronqués, textes qui débordent, lignes qui s'élargissent | `min-width: 0`, `overflow-wrap: anywhere`, ellipsis sur les titres de cartes et de pistes, `overflow-x: clip` sur les pages, images sans `src` masquées | §2 |
+| Texte illisible (métadonnées 10–11 px) | plancher de 12 px sur les métadonnées du web player, chiffres tabulaires pour les durées, `line-height` qui ne coupe plus les accents | §3 |
+| Contraste insuffisant, thème clair cassé | jetons clairs complets sous `html.sd-theme-light`, `--sd-sub` à 4,6:1, fond opaque sous les barres | §4 |
+| Focus invisible / anneau persistant au doigt | `:focus-visible` → anneau accent sur **tous** les contrôles (nôtres et ceux de Spotify), `:focus:not(:focus-visible)` → aucun anneau | §5 |
+| Infobulles collées après un tap | `@media (hover: none)` masque les infobulles (`tippy`, `[role=tooltip]`), largeur bornée et `z-index` sous nos feuilles | §6 |
+| En-têtes collants qui recouvrent les lignes | `position: sticky` recollé sous l'encoche, fond opaque, `overscroll-behavior: contain` sur les conteneurs | §7 |
+| Modales/menus natifs cachés derrière notre chrome | état `html.sd-native-modal` : mini-player, barre d'onglets et top bar s'effacent, notre calque passe sous la modale | §8 + `Polish.watchOverlays()` |
+| Clavier logiciel qui masque le champ de recherche | état `html.sd-keyboard` : barres masquées, `--sd-bottom` réduit, `scroll-margin` sur le champ | §9 + `Polish.watchKeyboard()` |
+| Boutons sans retour visuel, contrôles désactivés indistinguables | fond `--sd-bg-tint` au `:active`, opacité 0,45 sur `[disabled]` | §10 |
+| Animations pénibles / sélection accidentelle | `prefers-reduced-motion` coupe aussi les animations native, `user-select: none` sur la coque (texte des paroles conservé), fin du halo de tap | §11 + `sd-reduce-motion` |
+
+Deux points de méthode : aucune règle ne cible `*`, `div` ou `button` sans
+qualification (c'est ce qui cassait les mises en page non testées de l'ancienne
+couche), et tout ce qui touche au DOM de Spotify est **scopé sur `.sd-root`**,
+classe posée par le runtime sur `<body>`, donc jamais sur notre propre couche.
+
+---
+
+## 8. Tests
 
 ```
 npm run smoke
@@ -251,6 +283,11 @@ glissement, la file d'attente, le suivi `manageTShut`/`manageTSleep` quand la
 lecture démarre ou s'arrête, l'extinction possible de la barre d'onglets,
 l'absence de `setInterval`, et le **payload `AndBridge` figé**
 (clés `artist,cover,duration,fav,playing,position,repeat,track`).
+
+Depuis la v2.3, il couvre aussi le durcissement : une **modale native** fait
+reculer notre chrome (`html.sd-native-modal`), le **clavier logiciel** masque
+barre d'onglets et mini-player (`html.sd-keyboard`), et les **contrôles natifs
+trop petits** reçoivent `data-sd-hit` + un `title` repris de leur `aria-label`.
 
 Depuis la v2.1, il couvre aussi : le menu d'options (file d'attente, paroles,
 appareils, artiste, album, partager, paramètres), les paramètres (segmented

@@ -32,7 +32,7 @@
 
   if (window.SpotiDuckUI && window.SpotiDuckUI.version) return; // idempotent
 
-  var VERSION = "2.0.0";
+  var VERSION = "2.3.0";
   var STYLE_ID = "spotiduck-ui-style";
   var BODY_CLASS = "sd-mobile";
 
@@ -2566,6 +2566,110 @@
   };
 
   /* ------------------------------------------------------------------ *
+   * 15b. Interface hardening (every rule of src/inject/40-audit.css needs
+   *      one of these three states/classes to be meaningful).
+   * ------------------------------------------------------------------ */
+  var Polish = {
+    started: false,
+    overlayOpen: false,
+
+    /** Native overlays our chrome has to step back for. */
+    OVERLAYS: [
+      '[role="dialog"]',
+      '[aria-modal="true"]',
+      '[data-testid="modal"]',
+      '[data-testid="modal-container"]',
+      '[data-testid="context-menu"]',
+      "#context-menu",
+    ],
+
+    start: function () {
+      if (this.started) return;
+      this.started = true;
+      this.watchOverlays();
+      this.watchKeyboard();
+      this.labelPass();
+      /* The SPA swaps whole views: re-scan once the dust settles. */
+      onState(
+        debounce(function () {
+          Polish.labelPass();
+        }, 500)
+      );
+    },
+
+    /** 1) Native dialog/menu open → `html.sd-native-modal` (our bars fade and
+     *  stop taking taps so nothing hides behind the mini player). */
+    watchOverlays: function () {
+      var self = this;
+      if (!window.MutationObserver || !document.body) return;
+      var check = debounce(function () {
+        self.syncOverlay();
+      }, 120);
+      new MutationObserver(check).observe(document.body, { childList: true, subtree: true });
+      ["pointerup", "keyup"].forEach(function (ev) {
+        document.addEventListener(ev, check, { passive: true });
+      });
+    },
+
+    syncOverlay: function () {
+      var open = false;
+      for (var i = 0; i < this.OVERLAYS.length && !open; i++) {
+        var found = document.querySelectorAll(this.OVERLAYS[i]);
+        for (var j = 0; j < found.length; j++) {
+          /* Our own player and sheets are dialogs too — never treat them as a
+             native overlay, or the shell would hide itself on open. */
+          if (found[j].closest(".sd-layer")) continue;
+          open = true;
+          break;
+        }
+      }
+      if (open === this.overlayOpen) return;
+      this.overlayOpen = open;
+      document.documentElement.classList.toggle("sd-native-modal", open);
+    },
+
+    /** 2) Software keyboard → `html.sd-keyboard` hides the tab bar + mini so
+     *  the search field and its results stay reachable. Deliberately based on
+     *  `clientHeight`: the Android wrapper may fake `window.innerHeight`. */
+    watchKeyboard: function () {
+      var vv = window.visualViewport;
+      if (!vv) return;
+      var apply = function () {
+        var gap = (document.documentElement.clientHeight || 0) - vv.height;
+        document.documentElement.classList.toggle("sd-keyboard", gap > 120);
+      };
+      vv.addEventListener("resize", apply);
+      vv.addEventListener("scroll", apply);
+      apply();
+    },
+
+    /** 3) Name + size pass over Spotify's own controls: icon buttons get a
+     *  `title` tooltip when they only have an `aria-label`, and any control
+     *  smaller than a fingertip is flagged `data-sd-hit` for the CSS to grow.
+     *  Read-mostly, capped, and skipped inside our own layer. */
+    labelPass: function () {
+      var nodes;
+      try {
+        nodes = document.querySelectorAll('button, [role="button"]');
+      } catch (e) {
+        return;
+      }
+      var budget = 300;
+      for (var i = 0; i < nodes.length && budget > 0; i++, budget--) {
+        var el = nodes[i];
+        if (el.closest && el.closest(".sd-layer")) continue;
+        var label = el.getAttribute("aria-label");
+        if (label && !el.hasAttribute("title")) el.setAttribute("title", label);
+        if (el.hasAttribute("data-sd-hit")) continue;
+        var r = el.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0 && (r.width < 40 || r.height < 40)) {
+          el.setAttribute("data-sd-hit", "1");
+        }
+      }
+    },
+  };
+
+  /* ------------------------------------------------------------------ *
    * 16. Theme detection (follow Spotify's own palette)
    * ------------------------------------------------------------------ */
   var Theme = {
@@ -2600,6 +2704,10 @@
     html.classList.add(BODY_CLASS);
     html.classList.add("sd-tab-home");
     html.classList.toggle("sd-reduce-motion", !!Settings.reduceMotion);
+    /* `sd-root` marks Spotify's own markup (everything in <body> that is not
+       our layer): the hardening stylesheet scopes its native-DOM rules on it,
+       so they can never leak into the injected UI. */
+    document.body.classList.add("sd-root");
     Theme.apply();
   }
 
@@ -2633,6 +2741,7 @@
     Ticker.start();
     History.install();
     Api.watch();
+    Polish.start();
     Auto.start();
     Login.apply();
     Offline.check();
@@ -2713,6 +2822,31 @@
     openPlayer: function () {
       Player.openSheet();
     },
+    /* ---- playback API for the native side (notification, widget, Android
+       Auto, assistant). All of them are idempotent: calling `play()` while
+       already playing does nothing instead of toggling (a toggle racing with
+       the notification is how you get "the pause button plays music"). */
+    play: function () {
+      if (!State.playing) Actions.playPause();
+    },
+    pause: function () {
+      if (State.playing) Actions.playPause();
+    },
+    playPause: function () {
+      Actions.playPause();
+    },
+    next: function () {
+      Actions.next();
+    },
+    previous: function () {
+      Actions.prev();
+    },
+    like: function () {
+      Actions.like();
+    },
+    seek: function (ms) {
+      Actions.seek(Math.max(0, Number(ms) || 0));
+    },
     closePlayer: function () {
       Player.closeSheet();
     },
@@ -2769,7 +2903,7 @@
       Api: Api,
       Login: Login,
       Offline: Offline,
-      Bridge: Bridge,
+      Polish: Polish,
       Back: Back,
       Icons: ICONS,
     },

@@ -1,0 +1,349 @@
+/* ==========================================================================
+   SpotiDuck — Mobile UI layer · part 4/4: interface hardening
+   --------------------------------------------------------------------------
+   This file answers the automated interface audit: every rule here fixes a
+   *class* of reported defect, on our own chrome AND on Spotify's DOM, which we
+   only restyle and never rewrite.
+
+   What it enforces (the audit codes in brackets are the report families):
+
+     1. Touch targets      — nothing interactive below 40–44 px      [PP-*-TAP]
+     2. Truncation/wrap    — no clipped titles, no overflowing rows  [*-TXT-*]
+     3. Readability        — size/line-height floors, tabular times  [*-TYPO-*]
+     4. Contrast           — light theme + subdued text on every bg  [*-CONTRAST]
+     5. Focus & keyboard   — visible ring, no stuck focus outline    [*-A11Y-*]
+     6. Tooltips           — never stuck, never above our sheets     [*-TIP-*]
+     7. Sticky headers     — no row hiding under a translucent bar   [*-SCROLL-*]
+     8. Overlays           — our chrome steps back for native modals [*-MODAL-*]
+     9. Keyboard space     — search field stays visible              [SD-KEY-*]
+    10. Feedback           — every press is visible                  [*-PRESS-*]
+    11. Motion/selection   — reduced motion, no callout on chrome    [*-MOTION-*]
+
+   Deliberately NOT global (`*`, `div`, `button`) except where a bug class can
+   only be fixed that way; wide rules are the reason the previous layer broke
+   layouts it had not been tested on.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1. Touch targets
+   -------------------------------------------------------------------------- */
+
+/* Our controls already use --sd-tap; this keeps them honest when a font-size
+   or a theme override changes the intrinsic size. */
+html.sd-mobile .sd-layer button,
+html.sd-mobile .sd-layer [role="button"],
+html.sd-mobile .sd-layer a.sd-row,
+html.sd-mobile .sd-layer .sd-tab,
+html.sd-mobile .sd-layer .sd-switch,
+html.sd-mobile .sd-layer [role="tab"] {
+  min-height: var(--sd-tap);
+  touch-action: manipulation;
+}
+
+/* Spotify's own icon-only buttons: the desktop UI ships 24–32 px hit areas,
+   which is what the audit measured as "chevron de 16 px". `:has()` keeps this
+   limited to real icon buttons, so text buttons and inline links keep their
+   natural size. WebViews without `:has()` simply ignore the rule. */
+html.sd-mobile .sd-root button:has(> svg:only-child),
+html.sd-mobile .sd-root [role="button"]:has(> svg:only-child),
+html.sd-mobile .sd-root button[data-testid^="control-button-"],
+html.sd-mobile .sd-root button[data-testid="top-bar-back-button"],
+html.sd-mobile .sd-root button[data-testid="top-bar-back-button"] svg,
+html.sd-mobile .sd-root [class*="iconButton"],
+html.sd-mobile .sd-root [data-encore-id="iconButton"] {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+/* Standalone small controls (badges, "+"/"…" on a row) get a real box instead
+   of a click-through overlay: expanding the box can never steal a neighbouring
+   tap, which an `::after` slop does on dense lists. */
+html.sd-mobile .sd-root [data-sd-hit] {
+  min-width: 40px;
+  min-height: 40px;
+}
+
+/* Chevrons drawn as bare <svg> inside a clickable row. */
+html.sd-mobile .sd-root [class*="chevron"] svg,
+html.sd-mobile .sd-root svg[class*="Chevron"] {
+  width: 24px;
+  height: 24px;
+}
+
+/* --------------------------------------------------------------------------
+   2. Truncation & overflow
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile .sd-root [data-testid="tracklist-row"],
+html.sd-mobile .sd-root [data-testid="tracklist-row"] *,
+html.sd-mobile .sd-root [role="row"] *,
+html.sd-mobile .sd-root [data-testid="card-click-handler"] *,
+html.sd-mobile .sd-root [data-testid="context-item-link"],
+html.sd-mobile .sd-root [data-testid="context-item-info-artist"] {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+html.sd-mobile .sd-root [data-testid="tracklist-row"] [dir="auto"],
+html.sd-mobile .sd-root [role="row"] [dir="auto"],
+html.sd-mobile .sd-root [data-testid="card-title"],
+html.sd-mobile .sd-root [data-testid="card-subtitle"] {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A long single word (French titles love them) must never widen the app. */
+html.sd-mobile .sd-root,
+html.sd-mobile .sd-root > *,
+html.sd-mobile #main-view,
+html.sd-mobile [data-testid="home-page"],
+html.sd-mobile [data-testid="search-page"],
+html.sd-mobile [data-testid="playlist-page"],
+html.sd-mobile [data-testid="album-page"],
+html.sd-mobile [data-testid="artist-page"] {
+  max-width: 100%;
+  overflow-x: clip;
+}
+
+/* Broken/absent artwork shows a neutral plate instead of a torn icon. */
+html.sd-mobile .sd-root img:not([src]),
+html.sd-mobile .sd-root img[src=""] {
+  visibility: hidden;
+}
+
+/* --------------------------------------------------------------------------
+   3. Readability
+   -------------------------------------------------------------------------- */
+
+/* Desktop meta text (10–11 px in the web player) is unreadable on a phone. */
+html.sd-mobile .sd-root [data-testid="context-item-info-artist"],
+html.sd-mobile .sd-root [data-testid="card-subtitle"],
+html.sd-mobile .sd-root [data-testid="tracklist-row"] span,
+html.sd-mobile .sd-root [data-testid="playback-position"],
+html.sd-mobile .sd-root [data-testid="playback-duration"] {
+  font-size: max(12px, 1em);
+}
+
+html.sd-mobile .sd-root [data-testid="playback-position"],
+html.sd-mobile .sd-root [data-testid="playback-duration"],
+html.sd-mobile .sd-layer .sd-times,
+html.sd-mobile .sd-layer .sd-mini-artist,
+html.sd-mobile .sd-layer .sd-row-value {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+
+/* Titles must not have their descenders cut by a too-tight line box. */
+html.sd-mobile .sd-layer .sd-player-track,
+html.sd-mobile .sd-layer .sd-topbar-title,
+html.sd-mobile .sd-root h1,
+html.sd-mobile .sd-root h2,
+html.sd-mobile .sd-root h3 {
+  line-height: 1.25;
+  padding-bottom: 0.05em;
+}
+
+/* --------------------------------------------------------------------------
+   4. Contrast
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile {
+  --sd-sub: var(--text-subdued, #b3b3b3); /* 4.6:1 on #121212 */
+}
+
+html.sd-mobile.sd-theme-light {
+  --sd-text: var(--text-base, #121212);
+  --sd-sub: var(--text-subdued, #5e5e5e);
+  --sd-bg: var(--background-base, #ffffff);
+  --sd-bg-elev: var(--background-elevated-base, #f7f7f7);
+  --sd-bar: rgba(255, 255, 255, 0.88);
+  --sd-border: rgba(0, 0, 0, 0.12);
+}
+
+/* Our bars sit on top of Spotify's content: give them an opaque base so text
+   never lands on a random cover image. */
+html.sd-mobile .sd-layer .sd-mini,
+html.sd-mobile .sd-layer .sd-tabbar,
+html.sd-mobile .sd-layer .sd-topbar {
+  backdrop-filter: blur(18px) saturate(1.2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+}
+
+html.sd-mobile .sd-layer .sd-tabbar {
+  background: var(--sd-bar);
+}
+
+/* Subdued text inside Spotify's own menus on a light background. */
+html.sd-mobile.sd-theme-light .sd-root [class*="encore-text-body-small"],
+html.sd-mobile.sd-theme-light .sd-root [data-testid="context-item-info-artist"] {
+  color: var(--sd-sub);
+}
+
+/* --------------------------------------------------------------------------
+   5. Focus & keyboard navigation
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile .sd-layer :focus-visible,
+html.sd-mobile .sd-root :focus-visible {
+  outline: 2px solid var(--sd-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Touch input should not leave a persistent focus ring behind. */
+html.sd-mobile .sd-layer :focus:not(:focus-visible),
+html.sd-mobile .sd-root :focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* --------------------------------------------------------------------------
+   6. Tooltips
+   -------------------------------------------------------------------------- */
+
+/* The desktop player shows hover tooltips. On touch they stick to the last tap
+   and stay on screen after the action — hide them where hovering does not
+   exist, and keep them below our sheets elsewhere. */
+@media (hover: none) {
+  html.sd-mobile #context-menu,
+  html.sd-mobile [data-tippy-root],
+  html.sd-mobile .tippy-box,
+  html.sd-mobile [role="tooltip"] {
+    display: none !important;
+  }
+}
+
+html.sd-mobile [data-tippy-root],
+html.sd-mobile .tippy-box {
+  z-index: 30 !important;
+  max-width: min(280px, 80vw) !important;
+}
+
+/* --------------------------------------------------------------------------
+   7. Sticky headers / scroll containers
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile .sd-root [data-testid="sticky-header"],
+html.sd-mobile .sd-root [class*="stickyHeader"],
+html.sd-mobile .sd-root [data-testid="playlist-page"] > header {
+  position: sticky;
+  top: var(--sd-safe-t);
+  z-index: 5;
+  background: var(--sd-bg);
+}
+
+html.sd-mobile .sd-root [data-testid="main-view-container"],
+html.sd-mobile .sd-root [data-overlayscrollbars-viewport] {
+  overscroll-behavior: contain;
+}
+
+/* The desktop player can leave a 1px seam under a sticky bar (the audit's
+   "ligne blanche entre le titre et la liste"). */
+html.sd-mobile .sd-root [data-testid="sticky-header"] + * {
+  margin-top: 0;
+}
+
+/* --------------------------------------------------------------------------
+   8. Native overlays win over our chrome
+   -------------------------------------------------------------------------- */
+
+/* While Spotify shows a dialog/menu (`.sd-native-modal`, toggled by the
+   runtime) the shell steps back: our bars fade, stop taking taps and drop
+   below the dialog, so nothing is hidden behind the mini player. */
+html.sd-mobile.sd-native-modal .sd-layer > .sd-mini,
+html.sd-mobile.sd-native-modal .sd-layer > .sd-tabbar,
+html.sd-mobile.sd-native-modal .sd-layer > .sd-topbar {
+  opacity: 0;
+  pointer-events: none;
+}
+
+html.sd-mobile.sd-native-modal .sd-layer {
+  z-index: 20;
+  transition: opacity 0.15s ease;
+}
+
+html.sd-mobile .sd-layer {
+  transition: opacity 0.15s ease;
+}
+
+/* --------------------------------------------------------------------------
+   9. Software keyboard
+   -------------------------------------------------------------------------- */
+
+/* With the keyboard up, the tab bar and mini player would sit on top of the
+   search results — hide them and give the field the whole screen. */
+html.sd-mobile.sd-keyboard .sd-layer > .sd-tabbar,
+html.sd-mobile.sd-keyboard .sd-layer > .sd-mini {
+  transform: translateY(120%);
+  pointer-events: none;
+}
+
+html.sd-mobile.sd-keyboard {
+  --sd-bottom: var(--sd-safe-b);
+}
+
+html.sd-mobile.sd-keyboard .sd-root input:focus,
+html.sd-mobile.sd-keyboard .sd-root [role="searchbox"]:focus {
+  scroll-margin-bottom: 30vh;
+}
+
+/* --------------------------------------------------------------------------
+   10. Press feedback
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile .sd-layer button:active:not([disabled]),
+html.sd-mobile .sd-layer [role="button"]:active,
+html.sd-mobile .sd-layer .sd-tab:active,
+html.sd-mobile .sd-layer .sd-row:active {
+  background: var(--sd-bg-tint);
+}
+
+html.sd-mobile .sd-root [data-testid="tracklist-row"]:active,
+html.sd-mobile .sd-root [role="row"]:active,
+html.sd-mobile .sd-root [data-testid="card-click-handler"]:active {
+  background: var(--sd-bg-tint);
+}
+
+/* Disabled controls must look disabled instead of simply doing nothing. */
+html.sd-mobile .sd-layer button[disabled],
+html.sd-mobile .sd-layer [aria-disabled="true"] {
+  opacity: 0.45;
+}
+
+/* --------------------------------------------------------------------------
+   11. Motion & selection
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile .sd-layer,
+html.sd-mobile .sd-root [data-testid="tracklist-row"],
+html.sd-mobile .sd-root [data-testid="card-click-handler"] {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Our chrome is a UI surface, not text: no long-press callout, no accidental
+   text selection while swiping the mini player. */
+html.sd-mobile .sd-layer .sd-tabbar,
+html.sd-mobile .sd-layer .sd-topbar,
+html.sd-mobile .sd-layer .sd-mini,
+html.sd-mobile .sd-layer .sd-player-controls,
+html.sd-mobile .sd-layer .sd-sheet-head {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Lyrics, on the other hand, must stay selectable. */
+html.sd-mobile .sd-root [data-testid="lyrics-container"],
+html.sd-mobile .sd-layer .sd-sheet-body {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html.sd-mobile .sd-root *,
+  html.sd-mobile .sd-layer * {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

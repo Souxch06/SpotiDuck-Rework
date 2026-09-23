@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Same palette as the injected UI (src/inject/10-base.css). -->
+    <color name="sd_accent">#1ED760</color>
+    <color name="sd_background">#000000</color>
+    <color name="sd_surface">#121212</color>
+    <color name="ic_launcher_background">#121212</color>
+    <color name="notification_color">#1ED760</color>
+</resources>

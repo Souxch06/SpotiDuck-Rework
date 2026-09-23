@@ -1,0 +1,51 @@
+#!/usr/bin/env node
+/**
+ * Copies the built UI bundle and the ad-block list into the Android app so the
+ * WebView can load them from `file:///android_asset/`.
+ *
+ *     node tools/sync-android.mjs       (npm run sync:android)
+ *
+ * Run it after `npm run build`. The files it writes are committed, so a plain
+ * `gradle assembleRelease` works without the Node toolchain — this script only
+ * keeps them in sync.
+ */
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const assets = join(root, "android/app/src/main/assets");
+
+const jobs = [
+  { from: join(root, "dist/spotiduck-ui.js"), to: join(assets, "spotiduck-ui.js") },
+  { from: join(root, "adblock_hosts.txt"), to: join(assets, "adblock_hosts.txt") },
+];
+
+mkdirSync(assets, { recursive: true });
+
+let ok = 0;
+for (const { from, to } of jobs) {
+  if (!existsSync(from)) {
+    console.error(`missing ${from} — run \`npm run build\` first`);
+    process.exitCode = 1;
+    continue;
+  }
+  copyFileSync(from, to);
+  const size = statSync(to).size;
+  console.log(`synced ${to.replace(root + "/", "")} (${size} B)`);
+  ok++;
+}
+
+/* The bundle must never be committed empty or truncated: a broken asset means
+   the app silently falls back to Spotify's own (desktop) interface. */
+const bundle = readFileSync(join(assets, "spotiduck-ui.js"), "utf8");
+if (bundle.length < 50_000 || !bundle.includes("sd-layer")) {
+  console.error("spotiduck-ui.js looks invalid — refusing to keep it");
+  process.exitCode = 1;
+}
+if (bundle.includes("</script>")) {
+  console.error("bundle contains a literal </script>, which would break injection");
+  process.exitCode = 1;
+} else {
+  console.log(`bundle checked (${bundle.length} chars, ${ok}/${jobs.length} assets synced)`);
+}

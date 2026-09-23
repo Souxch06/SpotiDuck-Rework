@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SpotiDuck</string>
+    <string name="channel_playback">Lecture</string>
+    <string name="channel_playback_desc">Titre en cours et commandes de lecture</string>
+    <string name="action_play">Lecture</string>
+    <string name="action_pause">Pause</string>
+    <string name="action_next">Suivant</string>
+    <string name="action_previous">Précédent</string>
+    <string name="logged_in">Connecté à Spotify</string>
+    <string name="msg_unlock">Lecture débloquée</string>
+    <string name="msg_reload">Session expirée — rechargement…</string>
+</resources>

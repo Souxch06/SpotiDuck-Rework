@@ -74,15 +74,18 @@ layout lives in this repository and is built into a single injectable file:
 src/inject/10-base.css      design tokens, viewport, web-player takeover
 src/inject/20-shell.css     tab bar, mini player, full-screen player, queue sheet
 src/inject/30-sheets.css    options & settings sheets, login page, offline banner
+src/inject/40-audit.css     interface hardening (touch targets, overflow, modals…)
 src/inject/spotiduck-ui.js  runtime (reads the player, drives playback, gestures)
 dist/spotiduck-ui.js        ← built bundle, this is what the app injects
 demo/                       mock Spotify web player + phone-frame preview
+android/                    the APK: WebView wrapper around the built layer
 ```
 
 ```bash
-npm run build    # rebuild dist/spotiduck-ui.js
-npm run smoke    # 30 behaviour tests against the built bundle
-npm run demo     # http://localhost:5173 — preview in a phone frame
+npm run build          # rebuild dist/spotiduck-ui.js
+npm run smoke          # 34 behaviour tests against the built bundle
+npm run demo           # http://localhost:5173 — preview in a phone frame
+npm run android        # build + copy the bundle into android/app/src/main/assets
 ```
 
 The preview ships a mock web player (same `data-testid`s as the real one) plus
@@ -98,6 +101,52 @@ window.SpotiDuckUI.set("theme", "light");
 window.SpotiDuckUI.openSettings();
 window.SpotiDuckUI.back();   // call from onBackPressed, returns true if consumed
 ```
+
+---
+
+## 🤖 The Android app (APK)
+
+`android/` contains the wrapper that ships this interface: a single
+`MainActivity` with a WebView, a foreground playback service, the `AndBridge`
+object the layer talks to, ad-host blocking and the hardware back button.
+
+```
+android/app/src/main/java/com/spotiduck/app/
+    MainActivity.kt        WebView, desktop UA, injection, insets, back button
+    Bridge.kt              AndBridge (media status, wake/sleep locks, messages)
+    PlaybackService.kt     media notification + lock screen / headset controls
+    AdBlocker.kt           host-list blocking (assets/adblock_hosts.txt)
+android/app/src/main/assets/
+    spotiduck-ui.js        ← copy of dist/spotiduck-ui.js (npm run sync:android)
+    adblock_hosts.txt      ← copy of the repository list
+```
+
+**Build it**
+
+```bash
+cd android
+gradle assembleRelease        # needs a JDK 17 and the Android SDK
+# → android/app/build/outputs/apk/release/app-release.apk
+```
+
+The APK is also built by CI: pushing a tag (or publishing a release) runs
+[`.github/workflows/android.yml`](./.github/workflows/android.yml), which
+assembles the release build and attaches it to the matching GitHub release —
+that is where the downloadable `.apk` comes from.
+
+**Signing.** Android only installs an update over an existing app when both
+builds carry the same signature, so:
+
+* **default** — the workflow derives a fixed key from a public seed
+  (`android/tools/derive-key.py`), so every release is signed identically and
+  updates install straight over the previous version;
+* **your own key** — generate one with `android/tools/make-keystore.py`, store
+  it as the repository secrets `SD_KEYSTORE_BASE64`, `SD_KEYSTORE_PASSWORD`,
+  `SD_KEY_ALIAS`, `SD_KEY_PASSWORD`, and the workflow uses it instead.
+
+Switching keys later means users must uninstall once, so choose before the
+first public APK. (Regardless of the key, the official SpotiDuck build is not
+signed by the original Spotifuck key: uninstall the old app before installing.)
 
 ---
 

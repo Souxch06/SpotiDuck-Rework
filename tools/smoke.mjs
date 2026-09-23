@@ -67,6 +67,21 @@ window.eval(`
 `);
 const errors = () => window.__errors || [];
 
+/* jsdom has no layout: give it a phone viewport and a `visualViewport` so the
+   viewport-dependent code paths (keyboard detection, gesture thresholds) run
+   exactly like they do in the app. */
+window.eval(`
+  Object.defineProperty(document.documentElement, "clientWidth", { get: () => 360, configurable: true });
+  Object.defineProperty(document.documentElement, "clientHeight", { get: () => 640, configurable: true });
+  window.__vvListeners = [];
+  window.visualViewport = {
+    width: 360,
+    height: 640,
+    addEventListener: (type, fn) => window.__vvListeners.push([type, fn]),
+    removeEventListener: () => {},
+  };
+`);
+
 window.eval(await read("demo/mock/spotify.js"));
 window.eval(await read("dist/spotiduck-ui.js"));
 await tick(80);
@@ -428,6 +443,35 @@ await checkAsync("share uses the real track link", async () => {
   return copied.replace(/^https:\/\//, "");
 });
 
+await checkAsync("native playback API is idempotent", async () => {
+  /* The Android notification calls these; a toggle racing the notification is
+     how you end up with "pause" starting the music. */
+  const playBtn = q('button[data-testid="control-button-playpause"]');
+  const playing = () => playBtn.getAttribute("aria-label") === "Pause";
+  if (playing()) {
+    SD.pause();
+    await tick(120);
+  }
+  assert(!playing(), "could not reach a paused state");
+  SD.play();
+  await tick(120);
+  assert(playing(), "play() did not start playback");
+  SD.play(); // idempotent: must NOT pause
+  await tick(120);
+  assert(playing(), "play() toggled playback instead of being idempotent");
+  SD.pause();
+  await tick(120);
+  assert(!playing(), "pause() did not stop playback");
+  SD.pause();
+  await tick(120);
+  assert(!playing(), "pause() toggled playback instead of being idempotent");
+  SD.seek(5000);
+  await tick(120);
+  const pos = SD.state.position;
+  assert(pos >= 4000 && pos <= 9000, "seek() did not move the position, got " + pos + " ms");
+  return "play/pause idempotent · seek " + Math.round(pos / 1000) + " s";
+});
+
 await checkAsync("tab bar can be disabled without leaving a floating mini player", async () => {
   SD.set("tabbar", false);
   await tick(40);
@@ -436,6 +480,41 @@ await checkAsync("tab bar can be disabled without leaving a floating mini player
   await tick(40);
   assert(!doc.documentElement.classList.contains("sd-no-tabbar"), "sd-no-tabbar not removed");
   return "class toggled ✓";
+});
+
+await checkAsync("a native dialog makes our chrome step back", async () => {
+  const modal = doc.createElement("div");
+  modal.setAttribute("role", "dialog");
+  doc.body.appendChild(modal);
+  await tick(300);
+  assert(doc.documentElement.classList.contains("sd-native-modal"), "sd-native-modal not set");
+  modal.remove();
+  await tick(300);
+  assert(!doc.documentElement.classList.contains("sd-native-modal"), "sd-native-modal not cleared");
+  return "ours fades, dialog keeps the taps ✓";
+});
+
+await checkAsync("software keyboard hides the bars but keeps search usable", async () => {
+  const fire = () => window.__vvListeners.filter(([t]) => t === "resize").forEach(([, fn]) => fn());
+  window.visualViewport.height = 300; // keyboard takes ~340px
+  fire();
+  await tick(30);
+  assert(doc.documentElement.classList.contains("sd-keyboard"), "sd-keyboard not set");
+  window.visualViewport.height = 640;
+  fire();
+  await tick(30);
+  assert(!doc.documentElement.classList.contains("sd-keyboard"), "sd-keyboard not cleared");
+  return "tab bar + mini slide away ✓";
+});
+
+check("tiny native controls get a real hit box and a label", () => {
+  const btn = doc.querySelector('[data-testid="control-button-shuffle"]');
+  assert(btn, "mock control not found");
+  btn.getBoundingClientRect = () => ({ width: 24, height: 24, top: 0, left: 0, right: 24, bottom: 24 });
+  SD._internals.Polish.labelPass();
+  assert(btn.getAttribute("data-sd-hit") === "1", "control not flagged with data-sd-hit");
+  assert(btn.getAttribute("title"), "aria-label was not copied to title");
+  return "data-sd-hit + title tooltip ✓";
 });
 
 await checkAsync("no polling loops left behind", async () => {
