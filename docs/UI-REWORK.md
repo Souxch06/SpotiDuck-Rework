@@ -940,3 +940,84 @@ et toute barre de navigation en tant que telle.
 * **dernier lien** — ce que l'application a fait du dernier lien non-web :
   converti (avec la conversion) ou ignoré. C'est la seule trace d'un tap qui
   n'aurait rien déclenché.
+
+## 18. L'offre du démarrage, et les onglets qui ne répondaient pas (v2.7.7)
+
+### 1. La fenêtre « Premium à 0 € » survivait au balayage
+
+Elle a exactement les caractéristiques qui la rendaient invisible pour la
+2.7.5 : une **croix de fermeture**, **deux boutons** et un **prix** — donc trois
+éléments cliquables (le filtre refusait d'aller plus loin au-delà de deux), son
+texte ne ressemblait à aucun des motifs élevés (« passer à Premium », « essai
+gratuit »…), et elle ne portait aucun identifiant technique connu.
+
+Trois corrections :
+
+* **Un troisième niveau de motifs : le prix.** `MONEY_TEXT` reconnaît
+  `0 €`, `0,00 €`, `€ 0`, `gratuit pendant`, `3 mois offerts`, `% de
+  réduction`, `économisez`, `profitez de`… Un prix, à lui seul, ne prouve rien :
+  la page en parle aussi dans ses conditions. Mais **dans une fenêtre posée
+  par-dessus la page**, c'en est une preuve — c'est précisément ce que fait
+  cette offre.
+* **La fenêtre est reconnue comme telle** : `overlayAncestor` remonte six
+  niveaux à la recherche de `role="dialog"`, `aria-modal="true"`, d'un nom qui
+  parle de fenêtre (`modal`, `dialog`, `overlay`, `pop-up`, `upsell`, `sheet`) —
+  ou, à défaut, d'un bloc en position `fixed`/`absolute` qui couvre au moins 60 %
+  de la largeur et 35 % de la hauteur de l'écran. Une barre de navigation ne peut
+  pas y répondre : elle est large mais basse.
+* **Ce qui est masqué, c'est la fenêtre entière**, marquée
+  `data-sd-premium-dialog` : la croix, les deux boutons, le fond assombri — pas
+  seulement le texte. Le garde-fou qui comptait les éléments cliquables ne
+  s'applique plus à ce chemin-là, précisément parce que les fenêtres en ont
+  plusieurs.
+* Les identifiants techniques qui contiennent `premium`, `upsell` ou `upgrade`
+  sont masqués d'office (`[data-testid*='premium' i]`…), en plus des noms fixes.
+
+### 2. Le bouton Bibliothèque, deuxième round
+
+La 2.7.5 avait corrigé une erreur réelle (un lien `spotify:` ne suffit plus à
+faire disparaître un onglet) et converti les onglets `spotify:` en adresses web.
+Ce n'était pas suffisant : l'appui ne produit toujours rien. Trois causes
+possibles restent, et aucune n'est visible depuis la page :
+
+* **a.** le script de Spotify intercepte le clic avant que la WebView ne voie la
+  navigation — notre conversion ne sert alors à rien ;
+* **b.** l'onglet est un **bouton**, sans lien, et le routeur de Spotify ne fait
+  rien dans une WebView ;
+* **c.** la navigation aboutit, mais la page ne peint rien.
+
+Une seule méthode couvre les trois : **si l'appui ne produit rien, c'est
+l'application qui navigue.** C'est ce qu'ajoute la section 2-ter de
+`native-mode.js` :
+
+* au clic, on note l'onglet touché, ce qu'il désignait et l'adresse avant
+  (`window.__sdNavTap`) ;
+* au bout de **1,2 s**, si l'adresse n'a pas bougé et si l'onglet désigne une
+  autre adresse, l'application fait la navigation elle-même
+  (`location.assign`) — dans le cas (c), la page est simplement rechargée sur la
+  bonne adresse ;
+* l'onglet peut être un lien **ou** un bouton : `routeForNav` lit d'abord le
+  lien (`spotify:collection`, `spotify:library` → `/collection` ;
+  `spotify:search` → `/search`; `spotify:home` → `/`), et à défaut **ce que
+  l'onglet raconte** (« Bibliothèque », « Library », « Ma musique » →
+  `/collection` ; « Rechercher » → `/search` ; « Accueil » → `/`).
+
+C'est vérifié par le banc d'essai : un onglet sans lien, libellé
+« Bibliothèque », reçoit bien `/collection`, et la navigation est reprise par
+l'application quand la page ne bouge pas.
+
+### 3. Ce que la sonde dit de plus
+
+* **fenêtres d'offre** encore présentes ;
+* **dernier onglet** : libellé, lien, adresse visée, adresse avant et après, et
+  `-> force /collection` si l'application a dû reprendre la navigation. C'est la
+  ligne qui tranche entre les cas (a), (b) et (c).
+
+### 4. L'agent mobile passe à Chrome 150
+
+Le mode mobile annonçait Chrome **124** (2024) tout en étant mesuré en CI avec
+Chrome 150. C'était un reste du passé : la page mobile est servie à un agent
+récent, et un agent périmé n'obtient pas forcément les mêmes ressources. L'agent
+du mode mobile suit maintenant la version avec laquelle la page a été mesurée.
+L'agent de bureau, lui, ne bouge pas : l'interface d'origine et l'empreinte
+1920×1080 s'appuient dessus.

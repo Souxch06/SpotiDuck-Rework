@@ -209,6 +209,20 @@ if (!/data-sd-premium/.test(nativeAsset) || !/PREMIUM_TEXT/.test(nativeAsset)) {
 if (!/ancestorInvite/.test(nativeAsset) || /APP_PROMPT_LINK = \/\^\(spotify:/.test(nativeAsset)) {
   errors.push("native-mode.js : un lien `spotify:` suffit de nouveau à masquer un élément");
 }
+/* Les **fenêtres** d'offre : celle du démarrage (« à 0 € ») porte une croix, deux
+   boutons et un prix qui ne ressemble à aucun motif d'attribut. Elle part en
+   entier, et elle est reconnue par ce qu'elle affiche. */
+if (!/overlayAncestor/.test(nativeAsset) || !/MONEY_TEXT/.test(nativeAsset) || !/data-sd-premium-dialog/.test(nativeAsset)) {
+  errors.push("native-mode.js : les fenêtres d'offre (prix affiché) ne sont plus reconnues");
+}
+/* La veille des onglets du bas : un appui qui ne produit rien doit être repris
+   par l'application, sinon « le bouton Bibliothèque ne fait rien ». */
+if (!/watchNav/.test(nativeAsset) || !/routeForNav/.test(nativeAsset) || !/__sdNavRouteFor/.test(nativeAsset)) {
+  errors.push("native-mode.js : les onglets de la barre du bas ne sont plus surveillés");
+}
+if (!/__sdNavTap/.test(activity)) {
+  errors.push("MainActivity : la sonde n'affiche plus le dernier onglet touché");
+}
 if (!/function inBar/.test(nativeAsset)) {
   errors.push("native-mode.js : les barres de navigation ne sont plus protégées");
 }

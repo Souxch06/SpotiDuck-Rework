@@ -775,7 +775,7 @@ class MainActivity : AppCompatActivity() {
          */
         private const val MOBILE_UA =
             "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) " +
-                "Chrome/124.0.0.0 Mobile Safari/537.36"
+                "Chrome/150.0.0.0 Mobile Safari/537.36"
 
         private const val FAKE_DESKTOP_VIEWPORT = false
         private const val IDLE_SHUTDOWN_MS = 15L * 60L * 1000L
@@ -842,6 +842,16 @@ class MainActivity : AppCompatActivity() {
               }
               return n;
             };
+            /* Le dernier onglet de la barre du bas touché : ce qu'il désignait,
+               et ce que la page en a fait. Un `after` vide veut dire que le
+               script de veille s'apprêtait à forcer la navigation. */
+            var navTap = function () {
+              var t = window.__sdNavTap;
+              if (!t) return "aucun";
+              return (t.label || "?") + " | " + (t.href || "-") + " -> " +
+                (t.route || "sans adresse") + " | avant " + (t.before || "?") +
+                " apres " + (t.after || "en cours") + (t.forced ? " -> force " + t.forced : "");
+            };
             /* Invites « ouvrir dans l'application » encore présentes, marquées ou
                non : c'est le seul moyen de savoir si Spotify les repose. */
             var appPrompts = function (marked) {
@@ -864,6 +874,8 @@ class MainActivity : AppCompatActivity() {
               "haut de page " + topThing() + " / barre d'etat reservee par la page " + safeTop() + " px",
               "invites ouvrir-dans-l-application " + appPrompts(false) + " / retirees " + appPrompts(true),
               "invitations premium " + premiumLine(false) + " / retirees " + premiumLine(true),
+              "fenetres d'offre " + q("[data-sd-premium-dialog='1']"),
+              "dernier onglet " + navTap(),
               "navigation " + navLine(),
               "interface d'origine " + (typeof window.firstFuck === "function" ? "chargee" : "absente"),
               "adresse " + location.pathname

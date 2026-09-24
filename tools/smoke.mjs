@@ -844,6 +844,15 @@ const natHtml =
   /* Et l'encart d'abonnement, en fenêtre. */
   '<div id="premium-dialog" role="dialog"><p>Passez à Premium</p>' +
   '<button>Essai gratuit</button></div>' +
+  /* L'offre du démarrage, telle que Spotify la pose : une fenêtre, sa croix de
+     fermeture et deux boutons — trois éléments cliquables, et un prix qui ne
+     ressemble à aucun de nos motifs par attribut. */
+  '<div id="premium-0" role="dialog" aria-modal="true">' +
+  '<button aria-label="Fermer">×</button><p>Premium à 0 € pendant 3 mois</p>' +
+  '<button>Essayer</button><button>Plus tard</button></div>' +
+  /* Et un onglet qui n'est pas un lien : le routeur de Spotify décide. */
+  '<nav id="bottom-nav-2"><button id="lib-button">Bibliothèque</button>' +
+  '<a href="/search">Rechercher</a></nav>' +
   '<div data-testid="now-playing-widget">' +
   '<a data-testid="context-item-link" href="/track/1">Titre test</a>' +
   '<div data-testid="context-item-info-artist">Artiste test</div>' +
@@ -945,8 +954,12 @@ check("native mode: a nav tab with a spotify: link is never touched", () => {
 
 check("native mode: the subscription upsell and its tab are removed", () => {
   const dialog = nd.querySelector("#premium-dialog");
+  /* Une fenêtre part en entier (`data-sd-premium-dialog`) : c'est la marque que
+     pose le chemin « fenêtre posée par-dessus la page ». */
   assert(
-    dialog && dialog.getAttribute("data-sd-premium") === "1",
+    dialog &&
+      (dialog.getAttribute("data-sd-premium-dialog") === "1" ||
+        dialog.getAttribute("data-sd-premium") === "1"),
     "the premium dialog was not recognised"
   );
   const tab = nd.querySelector("#premium-tab");
@@ -961,6 +974,57 @@ check("native mode: the subscription upsell and its tab are removed", () => {
   const track = nd.querySelector("a[data-testid='context-item-link']");
   assert(track && !track.hasAttribute("data-sd-premium"), "a track link must not be hidden");
   return "encart entier · onglet seul · barre préservée ✓";
+});
+
+check("native mode: the 0 € offer dialog goes, close button and all", () => {
+  const offer = nd.querySelector("#premium-0");
+  assert(offer, "the test page no longer has the 0 € offer");
+  assert(
+    offer.getAttribute("data-sd-premium-dialog") === "1",
+    "the offer dialog was not recognised (a price, a close button and two CTAs)"
+  );
+  const css = nd.querySelector("style[data-sd='native-mode']");
+  assert(
+    /\[data-sd-premium-dialog='1'\]\s*\{[^}]*display:none/.test(css.textContent),
+    "nothing hides the whole offer dialog"
+  );
+  const plain = nd.querySelector("#premium-dialog");
+  assert(
+    plain &&
+      (plain.getAttribute("data-sd-premium-dialog") === "1" ||
+        plain.getAttribute("data-sd-premium") === "1"),
+    "the upsell dialog must go too"
+  );
+  const nav = nd.querySelector("#bottom-nav");
+  assert(nav && !nav.hasAttribute("data-sd-premium-dialog"), "a nav bar must never pass for a dialog");
+  return "fenêtre entière (croix + 2 boutons) ✓";
+});
+
+check("native mode: a nav tab says where it leads, link or not", () => {
+  const routeFor = nw.__sdNavRouteFor;
+  assert(typeof routeFor === "function", "native-mode.js no longer exposes the tab mapping");
+  assert(routeFor(nd.querySelector("#lib-tab")) === "/collection", "a spotify:collection tab must lead to /collection");
+  assert(routeFor(nd.querySelector("#lib-button")) === "/collection", "a « Bibliothèque » button must lead to /collection");
+  const search = nd.querySelector("#bottom-nav a[href='/search']");
+  assert(routeFor(search) === "/search", "the search tab must lead to /search");
+  const home = nd.querySelector("#bottom-nav a[href='/']");
+  assert(routeFor(home) === "/", "the home tab must lead to /");
+  assert(routeFor(nd.querySelector("a[data-testid='context-item-link']")) === null, "a track link is not a tab");
+  return "bibliothèque · rechercher · accueil ✓";
+});
+
+await checkAsync("native mode: a tab that leads nowhere is navigated for it", async () => {
+  const tab = nd.querySelector("#lib-button");
+  tab.dispatchEvent(new nw.MouseEvent("click", { bubbles: true }));
+  const tap = nw.__sdNavTap;
+  assert(tap && tap.route === "/collection", "the press was not recorded: " + JSON.stringify(tap));
+  assert(tap.label.indexOf("Bibliothèque") === 0, "the label was not recorded: " + tap.label);
+  /* Au bout d'une seconde sans mouvement de la page, la navigation est faite
+     par l'application. jsdom ne sait pas naviguer (« Not implemented:
+     navigation ») : c'est la marque qui compte. */
+  await tick(1500);
+  assert(nw.__sdNavTap.forced === "/collection", "the app did not take over the navigation");
+  return "appui noté · navigation reprise par l'application ✓";
 });
 
 check("native mode: the notification controls press Spotify's buttons", () => {

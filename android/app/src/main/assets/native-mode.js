@@ -23,7 +23,11 @@
  *      pont `AndBridge` — sinon l'écran de verrouillage reste vide ;
  *   4. installer un appui long de 3 secondes, invisible, qui rouvre le choix
  *      de l'interface (c'est le seul moyen de revenir en arrière puisque notre
- *      couche n'est plus là où sont ses paramètres).
+ *      couche n'est plus là où sont ses paramètres) ;
+ *   5. veiller sur les onglets de la barre du bas : si un appui ne produit rien
+ *      (lien `spotify:` que la WebView ne sait pas ouvrir, routeur de Spotify
+ *      inerte, page qui ne peint pas), l'application fait la navigation
+ *      elle-même vers l'adresse que l'onglet désigne.
  */
 (function () {
   if (window.__sdNative) return;
@@ -112,6 +116,13 @@
     "[data-testid='upsell-banner']",
     "[data-testid='upsell-dialog']",
     "[data-testid='announcement-banner']",
+    /* Les offres changent de nom souvent : ce qui contient « premium » ou
+       « upsell » dans son identifiant technique en fait partie. */
+    "[data-testid*='premium' i]",
+    "[data-testid*='upsell' i]",
+    "[data-testid*='upgrade' i]",
+    "[data-encore-id='premiumUpsell']",
+    "[data-encore-id='premium-upsell']",
   ];
 
   /* Même chose pour l'apparence : rien de ce qui fait « page web » ne doit
@@ -130,6 +141,9 @@
        « ouvrir dans l'application », et les invitations à l'abonnement. */
     "\n[data-sd-appprompt='1']{display:none !important}\n" +
     "\n[data-sd-premium='1']{display:none !important}\n" +
+    /* …et la fenêtre que le balayage a reconnue : elle part en entier, avec ses
+       boutons, sa croix de fermeture et son fond assombri. */
+    "\n[data-sd-premium-dialog='1']{display:none !important}\n" +
     "\n" +
     "html{-webkit-text-size-adjust:100% !important;-webkit-tap-highlight-color:transparent !important;overscroll-behavior:none !important}\n" +
     "body{overscroll-behavior:none !important;-webkit-tap-highlight-color:transparent !important}\n" +
@@ -282,7 +296,65 @@
     ].join("|"),
     "i"
   );
+  /**
+   * Un prix affiché (« **à 0 €** pendant 3 mois », « 3 mois offerts », « 30 %
+   * de réduction ») : ce n'est pas une preuve à soi seul — la page en parle
+   * aussi dans ses conditions — mais c'en est une dès que ça apparaît dans une
+   * **fenêtre posée par-dessus** la page. C'est exactement l'offre du démarrage.
+   */
+  var MONEY_TEXT = /(^|[^0-9])0+([,.][0-9]{2})?\s*(€|euros?|\$|£)|(^|[^0-9])(€|\$|£)\s*0+([,.][0-9]{2})?([^0-9]|$)|gratuit pendant|mois (?:offert|gratuit)|(?:offert|gratuit)[a-z]* pendant|% de r[ée]duction|r[ée]duction de|économisez|profitez de/i;
   var PREMIUM_LINK = /spotify:premium|spotify\.com\/premium|^\/premium(?:\/|\?|$)|^https?:\/\/[^/]*\/premium(?:\/|\?|$)/i;
+  var OVERLAY_NAME = /modal|dialog|overlay|pop-?up|upsell|sheet|encore-.*overlay|consent/i;
+
+  /**
+   * La fenêtre posée par-dessus la page, s'il y en a une : cinq niveaux au plus,
+   * et seulement des signes qui ne trompent pas — `role="dialog"`,
+   * `aria-modal`, un nom qui parle de fenêtre, ou bien un bloc fixé qui couvre
+   * la majeure partie de l'écran. Une barre de navigation ne peut pas passer
+   * pour une fenêtre : elle est large mais basse.
+   */
+  function overlayAncestor(el) {
+    var n = el && el.parentNode;
+    var hops = 0;
+    while (n && n !== document.body && n !== document.documentElement && hops < 6) {
+      var role = "";
+      var modal = "";
+      var sig = "";
+      try {
+        role = (n.getAttribute("role") || "").toLowerCase();
+        modal = (n.getAttribute("aria-modal") || "").toLowerCase();
+        sig =
+          (n.id || "") +
+          " " +
+          (typeof n.className === "string" ? n.className : "") +
+          " " +
+          (n.getAttribute("data-testid") || "");
+      } catch (e) {
+        return null;
+      }
+      var named = OVERLAY_NAME.test(sig);
+      if (role === "dialog" || role === "alertdialog" || modal === "true" || named) {
+        /* Un conteneur nommé « dialog » qui porte tout le document n'est pas
+           une fenêtre : on ne masque jamais l'application entière. */
+        if (n === document.body || n === document.documentElement) return null;
+        return n;
+      }
+      var pos = "";
+      var rect = null;
+      try {
+        pos = document.defaultView.getComputedStyle(n).position || "";
+        rect = n.getBoundingClientRect();
+      } catch (e) {}
+      if (rect && /fixed|absolute/.test(pos)) {
+        var vw = document.documentElement.clientWidth || 360;
+        var vh = document.documentElement.clientHeight || 640;
+        if (rect.width >= vw * 0.6 && rect.height >= vh * 0.35) return n;
+      }
+      n = n.parentNode;
+      hops++;
+    }
+    return null;
+  }
 
   function clickablesIn(el) {
     try {
@@ -381,9 +453,11 @@
       if (text.length > 160) text = "";
       var found = verdict(text, href, el);
       if (!found) continue;
-      var host = placeSweep(el, found.allowInBar);
-      if (!host || host.getAttribute(attr) === "1") continue;
-      host.setAttribute(attr, "1");
+      var host = found.host || placeSweep(el, found.allowInBar);
+      if (!host) continue;
+      var mark = found.attr || attr;
+      if (host.getAttribute(attr) === "1" || host.getAttribute("data-sd-premium-dialog") === "1") continue;
+      host.setAttribute(mark, "1");
       hits++;
     }
     return hits;
@@ -433,7 +507,27 @@
     if (!byText && !byLink && /^premium$/i.test(text) && (href !== "" || inBar(el))) {
       byText = true;
     }
-    if (!byText && !byLink) return null;
+    /* Une **fenêtre** posée par-dessus la page qui parle d'offre ou de prix :
+       elle part en entier, quel que soit son nombre de boutons. C'est le cas de
+       l'offre du démarrage (« à 0 € pendant 3 mois »), qui a une croix de
+       fermeture, deux boutons, et ne correspondait donc à aucun de nos motifs
+       par attribut. */
+    var overlay = overlayAncestor(el);
+    var byMoney = false;
+    if (overlay) {
+      var full = "";
+      try {
+        full = (overlay.textContent || "").replace(/\s+/g, " ").trim();
+      } catch (e) {
+        full = "";
+      }
+      if (full.length > 3000) full = full.slice(0, 3000);
+      if (PREMIUM_TEXT.test(full) || MONEY_TEXT.test(full) || PREMIUM_LINK.test(href)) {
+        return { host: overlay, attr: "data-sd-premium-dialog" };
+      }
+      byMoney = MONEY_TEXT.test(text);
+    }
+    if (!byText && !byLink && !byMoney) return null;
     /* Ici, un lien vers les offres suffit, même dans une barre : c'est
        précisément le bouton d'abonnement du bas de page qu'on veut retirer. */
     return { allowInBar: byText || byLink };
@@ -450,6 +544,133 @@
   /* Spotify repose son bandeau et ses encarts à chaque changement d'écran : le
      balayage est donc répété, mais borné (900 éléments, des motifs courts). */
   window.setInterval(sweepAll, 2000);
+
+  /* ------------------------------------------------------------------ *
+   * 2-ter. Les onglets de la barre du bas
+   *
+   * Constat utilisateur, deux versions de suite : « le bouton Bibliothèque ne
+   * fait rien, quand on clique il ne s'affiche rien ». Trois causes possibles,
+   * et aucune n'est visible depuis la page :
+   *
+   *   a. l'onglet est un lien `spotify:` — que la WebView ne sait pas ouvrir
+   *      (l'application le convertit, mais le script de Spotify peut avoir
+   *      intercepté le clic avant) ;
+   *   b. l'onglet est un simple bouton, et le routeur de Spotify décide de ne
+   *      rien faire dans une WebView ;
+   *   c. la navigation aboutit, mais la page ne peint rien.
+   *
+   * Ce qui suit ne devine pas : au clic, on note ce qui s'est passé, et si rien
+   * n'a bougé au bout d'une seconde, on **fait la navigation nous-mêmes** vers
+   * l'adresse que l'onglet désigne (bibliothèque, recherche, accueil). C'est la
+   * seule chose qui marche dans les trois cas (a), (b) et (c) — dans le (c) la
+   * page est simplement rechargée sur la bonne adresse.
+   * ------------------------------------------------------------------ */
+  var NAV_TABS = [
+    { re: /biblioth|library|collection|ma musique/i, route: "/collection" },
+    { re: /recherch|search/i, route: "/search" },
+    { re: /accueil|home/i, route: "/" },
+  ];
+
+  /** L'adresse que cet onglet désigne, ou `null` s'il ne dit rien. */
+  function routeForNav(el) {
+    var href = "";
+    var label = "";
+    try {
+      href = (el.getAttribute && el.getAttribute("href")) || "";
+      label =
+        (el.getAttribute &&
+          (el.getAttribute("aria-label") || el.getAttribute("title") || "")) ||
+        "";
+      label = (label + " " + (el.textContent || "")).replace(/\s+/g, " ").trim();
+    } catch (e) {
+      return null;
+    }
+    /* 1. Ce que le lien dit. */
+    if (/^spotify:/i.test(href)) {
+      var tail = href.replace(/^spotify:/i, "").split(":")[0].toLowerCase();
+      if (tail === "collection" || tail === "library") return "/collection";
+      if (tail === "search") return "/search";
+      if (tail === "home" || tail === "app") return "/";
+    } else if (/^\/(collection|search)?(\/|\?|$)/i.test(href)) {
+      return href.split("?")[0] || "/";
+    }
+    /* 2. Ce que l'onglet raconte, quand le lien ne dit rien (bouton JS). */
+    for (var i = 0; i < NAV_TABS.length; i++) {
+      if (NAV_TABS[i].re.test(label)) return NAV_TABS[i].route;
+    }
+    return null;
+  }
+
+  /** Le bouton ou le lien sous le doigt, en remontant quelques niveaux. */
+  function pressable(e) {
+    var el = e.target;
+    var hops = 0;
+    while (el && el !== document.body && hops < 6) {
+      var role = el.getAttribute ? el.getAttribute("role") : "";
+      if (el.tagName === "A" || el.tagName === "BUTTON" || role === "button") return el;
+      el = el.parentNode;
+      hops++;
+    }
+    return null;
+  }
+
+  function goTo(route) {
+    try {
+      window.location.assign(route);
+    } catch (e) {
+      try {
+        window.location.href = route;
+      } catch (err) {}
+    }
+  }
+
+  function watchNav() {
+    document.addEventListener(
+      "click",
+      function (e) {
+        var el = pressable(e);
+        if (!el || !inBar(el)) return;
+        var route = routeForNav(el);
+        var before = window.location.pathname + window.location.search;
+        var tap = {
+          label: "",
+          href: "",
+          route: route || "",
+          before: before,
+          after: "",
+          forced: "",
+        };
+        try {
+          tap.label = (el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 20);
+          tap.href = el.getAttribute("href") || "";
+        } catch (err) {}
+        /* Ce que la sonde de diagnostic affiche : le dernier onglet touché, ce
+           qu'il désignait, et ce qui s'est réellement passé. */
+        try {
+          window.__sdNavTap = tap;
+        } catch (err) {}
+        if (!route) return;
+        window.setTimeout(function () {
+          var after = window.location.pathname + window.location.search;
+          tap.after = after;
+          /* La page a suivi toute seule : rien à faire. */
+          if (after !== before) return;
+          /* On est déjà sur cette adresse : l'onglet est simplement un
+             « retour en haut », on ne recharge pas la page sous le doigt. */
+          if (route === after) return;
+          tap.forced = route;
+          goTo(route);
+        }, 1200);
+      },
+      true
+    );
+  }
+
+  watchNav();
+
+  /* Pour le banc d'essai : la correspondance onglet → adresse, vérifiable sans
+     navigateur. */
+  window.__sdNavRouteFor = routeForNav;
 
   /* ------------------------------------------------------------------ *
    * 2. Pont minimal pour la notification Android
