@@ -1787,3 +1787,63 @@ on relisait donc une annotation périmée en croyant mesurer la version qu'on ve
 d'écrire. Il suit désormais `src/inject/**` et `dist/spotiduck-ui.js`.
 
 **Une mesure ne vaut que si l'on sait sur quelle version elle a été prise.**
+
+## 29. « La lecture de contenus protégés est désactivée » : la permission que la WebView n'accordait pas (v2.9.6)
+
+### Le constat, sur le téléphone
+
+Capture du 24/09 : la coque s'affiche correctement (barre du haut complète, logo
+centré) — « Tous est bon sur la disposition » — mais le contenu du lecteur est
+remplacé par l'écran de Spotify :
+
+> **La lecture de contenus protégés est désactivée** — Consultez le site d'aide
+> Spotify pour savoir comment activer la lecture dans votre navigateur.
+> [Service D'assistance Spotify]
+
+Ce n'est pas un pop-up décoratif : c'est le **moteur de lecture** qui refuse de
+démarrer. Et ça n'avait rien à voir avec l'affichage.
+
+### La cause : une permission refusée par défaut
+
+Une WebView ne sait déchiffrer un flux protégé que si l'application le lui
+**accorde explicitement** : Chromium demande la permission
+`RESOURCE_PROTECTED_MEDIA_ID` (« contenu protégé ») au `WebChromeClient`, et
+**refuse par défaut** quand la méthode `onPermissionRequest` n'est pas
+implémentée — sans erreur, sans trace, sans message. Notre `SpotiChrome` gérait
+les fenêtres (`onCreateWindow`), les boîtes de dialogue (`onJsAlert`…) et la barre
+de progression, mais pas cette permission-là. Android refusait donc Widevine, et
+Spotify concluait que le navigateur ne sait pas lire le contenu protégé.
+
+Le silence de la WebView était la panne. Rien dans la page, dans les feuilles de
+style ou dans la couche d'interface ne pouvait le réparer — c'est ce qui a rendu
+le diagnostic long : le symptôme (un écran de Spotify) désignait la page, alors
+que la cause était côté application.
+
+### Le correctif
+
+```kotlin
+override fun onPermissionRequest(request: PermissionRequest) {
+    val resources = request.resources ?: emptyArray()
+    val granted = resources.filter { it == PermissionRequest.RESOURCE_PROTECTED_MEDIA_ID }
+    if (granted.isEmpty()) {
+        request.deny()
+        return
+    }
+    request.grant(granted.toTypedArray())
+}
+```
+
+On accorde **exactement** le contenu protégé (et on refuse le reste : caméra,
+microphone, géolocalisation — la page n'en a pas besoin). Deux garde-fous sont
+posés pour que ça ne se reperde pas : un test du banc (la permission est
+implémentée, la bonne ressource est demandée, le reste est refusé) et un
+garde-fou d'audit.
+
+### Ce que ça change
+
+* le lecteur ne se remplace plus par l'écran « contenus protégés » ;
+* la lecture redevient possible sur les flux chiffrés — c'est-à-dire la musique.
+
+La leçon rejoint celle des §26-28 : **avant de corriger l'interface, il faut
+savoir qui parle**. Ici, l'écran venait de Spotify, mais la décision venait de
+notre `WebChromeClient`.

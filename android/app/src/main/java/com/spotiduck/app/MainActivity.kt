@@ -25,6 +25,7 @@ import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.JsPromptResult
 import android.webkit.JsResult
+import android.webkit.PermissionRequest
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -409,6 +410,32 @@ class MainActivity : AppCompatActivity() {
         override fun onCloseWindow(window: WebView) {
             if (window === webView) return
             closeLoginWindow(window)
+        }
+
+        /**
+         * **Le contenu protégé** — la permission que la WebView demande avant
+         * d'ouvrir Widevine, son module de déchiffrement.
+         *
+         * Sans elle, Android refuse. Spotify ne trouve alors plus de module
+         * pour ses flux chiffrés et remplace le lecteur par un écran « La
+         * lecture de contenus protégés est désactivée — Consultez le site
+         * d'aide Spotify… » (capture du 24/09). Ce n'était donc pas
+         * l'affichage : c'était **le moteur de lecture**, et rien d'autre dans
+         * l'application ne pouvait le réparer.
+         *
+         * Une WebView dont le `WebChromeClient` n'implémente pas cette méthode
+         * **refuse par défaut** : le silence était la panne. On accorde donc
+         * explicitement, et rien d'autre — caméra, microphone et
+         * géolocalisation restent refusés, la page n'en a pas besoin.
+         */
+        override fun onPermissionRequest(request: PermissionRequest) {
+            val resources = request.resources ?: emptyArray()
+            val granted = resources.filter { it == PermissionRequest.RESOURCE_PROTECTED_MEDIA_ID }
+            if (granted.isEmpty()) {
+                request.deny()
+                return
+            }
+            request.grant(granted.toTypedArray())
         }
 
         override fun onProgressChanged(view: WebView, newProgress: Int) {

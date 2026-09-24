@@ -608,6 +608,25 @@ for (const fn of ["window.actPlayPause", "window.actSkipForward", "window.actSki
 if (!/loadWithOverviewMode\s*=\s*true/.test(activity)) {
   errors.push("MainActivity : loadWithOverviewMode n'est plus activé");
 }
+/* La permission « contenu protégé » : c'est par elle que la WebView ouvre
+   Widevine, son module de déchiffrement. Sans elle Android **refuse par
+   défaut** (une WebView qui n'implémente pas `onPermissionRequest` refuse en
+   silence), Spotify ne trouve plus de module pour ses flux chiffrés et remplace
+   le lecteur par « La lecture de contenus protégés est désactivée — Consultez le
+   site d'aide Spotify » : capture du 24/09, et « y a rien qui va » de
+   l'utilisateur. Ce n'était pas l'affichage, c'était le moteur de lecture. */
+if (!/onPermissionRequest/.test(activity) || !/RESOURCE_PROTECTED_MEDIA_ID/.test(activity)) {
+  errors.push(
+    "MainActivity : la permission « contenu protégé » n'est plus accordée — Spotify afficherait « La lecture de contenus protégés est désactivée »"
+  );
+}
+if (!/request\.grant\(granted\.toTypedArray\(\)\)|request\.grant\(/.test(activity)) {
+  errors.push("MainActivity : la permission « contenu protégé » n'est plus accordée (request.grant absent)");
+}
+/* …et on n'accorde rien d'autre : caméra, micro, position restent refusés. */
+if (!/request\.deny\(\)/.test(activity)) {
+  errors.push("MainActivity : les autres permissions ne sont plus refusées explicitement");
+}
 if (!/VIEWPORT_META_JS/.test(activity) || !/device-width/.test(activity)) {
   errors.push("MainActivity : le meta viewport n'est plus forcé");
 }

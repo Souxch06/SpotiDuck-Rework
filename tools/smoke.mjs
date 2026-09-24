@@ -762,6 +762,26 @@ check("the welcome CTA is handed to the app, not just a link", () => {
   return "appui → AndBridge.openLogin ✓";
 });
 
+await checkAsync("the WebView is allowed to open Widevine (protected media)", async () => {
+  /* Sans cette permission, Android refuse le contenu protégé : Spotify, qui ne
+     trouve plus de module de déchiffrement, remplace le lecteur par un écran
+     « La lecture de contenus protégés est désactivée ». C'est le « y a rien qui
+     va » du 24/09 : la lecture, pas l'affichage. */
+  const activity = await read("android/app/src/main/java/com/spotiduck/app/MainActivity.kt");
+  assert(/import android\.webkit\.PermissionRequest/.test(activity), "PermissionRequest n'est pas importé");
+  assert(
+    /override fun onPermissionRequest\(request: PermissionRequest\)/.test(activity),
+    "le WebChromeClient n'implémente pas onPermissionRequest : Android refuse par défaut"
+  );
+  assert(
+    /PermissionRequest\.RESOURCE_PROTECTED_MEDIA_ID/.test(activity),
+    "la permission demandée n'est pas celle du contenu protégé"
+  );
+  assert(/request\.grant\(/.test(activity), "la permission du contenu protégé n'est jamais accordée");
+  assert(/request\.deny\(\)/.test(activity), "les autres permissions ne sont plus refusées");
+  return "contenu protégé accordé, le reste refusé ✓";
+});
+
 check("the original app's fit-to-screen sheet is carried over", () => {
   /* Mesuré sans elle, dans les conditions de la WebView : `contenu=800×731`
      dans un écran de 412 px, `débordement=388`. C'est elle qui fait tenir la
