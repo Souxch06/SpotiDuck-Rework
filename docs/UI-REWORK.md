@@ -1439,6 +1439,30 @@ message sur la version d'origine ».
   code **sans ses commentaires**, sinon une explication qui cite `innerWidth`
   le ferait échouer (erreur commise, puis corrigée, dans cette passe).
 
+### Ce que la sonde a fini par dire, en quatre annotations
+
+Deux exécutions de suite, GitHub a **coupé la fin** de la liste d'annotations :
+le relevé navigateur, la moitié utile, n'arrivait jamais. La sonde ne publie donc
+plus que quatre annotations (`Page servie`, `Où vit le message`, `Repères
+techniques`, `Relevé navigateur`) — leçon à garder pour tout diagnostic futur
+qui publie beaucoup.
+
+| Constat | Mobile (agent téléphone) | Bureau (agent du code d'origine) |
+| --- | --- | --- |
+| Paquet servi | `mobile-web-player/mobile-web-player.6883d1fd.js` (6 scripts, 3 270 Ko) | `web-player/web-player.eb2d94d5.js` (8 scripts, 6 549 Ko) |
+| « Lecture désactivée » | présent (`mwp.header.playback.error`) | **absent** |
+| « …bloquez le contenu protégé… » | présent (`mwp.playback.error.protected.content`) | **absent** |
+| Mise en page | aucun repère bureau | barre latérale + barre de lecture + accueil |
+| `requestMediaKeySystemAccess('com.widevine.alpha')` | `ok` (Chrome du runner) | `ok` (Chrome du runner) |
+| Bandeau à l'écran (sans connexion) | aucun | aucun |
+
+Deux précisions qui comptent : le relevé « widevine = ok » est celui du **Chrome
+de bureau du runner**, pas de la WebView du téléphone (qui, elle, n'expose pas
+Widevine) — raison de plus pour faire lire la page **bureau**, dont la lecture
+ne dépend pas de l'EME ; et le code EME existe dans les **deux** paquets, donc
+sa seule présence ne dit rien de la lecture : c'est le *paquet* servi qui décide,
+et c'est lui qui change avec l'agent.
+
 ### Vérifications
 
 audit 0 erreur / 0 avertissement, smoke 84/84, ressources compilées par `aapt2`
