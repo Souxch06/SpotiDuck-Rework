@@ -35,7 +35,7 @@ l'application Android et comment la tester.
 | `src/inject/50-android.css` | Passe **Android / Material 3** : Roboto, échelle typographique, cibles 48 dp, formes et surfaces Material, courbes de mouvement, barres système, écran d'accueil (voir §9). |
 | `src/inject/60-metrics.css` | **Métriques de l'application mobile** : le web player est remis à l'échelle mobile (2 tuiles par ligne, 56 dp de ligne, titres 20 px, hero 200 dp, marges 16 dp) au lieu de garder ses dimensions desktop. |
 | `src/inject/40-audit.css` | Durcissement de l'interface : cibles tactiles ≥ 44 px, débordements, en-têtes collants, modales natives, clavier, contraste, focus, mouvement réduit (section 8). |
-| `android/app/src/main/assets/native-mode.js` | Le **mode natif** (v2.5, par défaut) : masque les bandeaux navigateur de Spotify et branche les boutons de la notification Android sur les vrais contrôles de la page Spotify (section 10). |
+| `android/app/src/main/assets/native-mode.js` | L'**affichage mobile** (v2.5 ; **défaut depuis la 2.7.3**) : masque les bandeaux navigateur de Spotify et branche les boutons de la notification Android sur les vrais contrôles de la page Spotify (sections 10 et 15). |
 | `tools/smoke.mjs` | 47 tests de comportement (jsdom) sur le bundle réel et sur le script du mode natif. |
 | `tools/screenshots.mjs` | Capture d'écran des écrans clés (nécessite Chrome/Chromium). |
 

@@ -366,10 +366,14 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * Mode enregistré… **s'il a été choisi**. La 2.6.0 écrivait `native` pour
-     * tout le monde au premier lancement : les installations mises à jour
-     * restaient donc bloquées sur la page web mobile de Spotify (qui n'est pas
-     * l'application mobile et où la connexion ne fonctionne pas). Seul un choix
-     * explicite de l'utilisateur est désormais respecté.
+     * tout le monde au premier lancement, y compris aux installations mises à
+     * jour, et sans aucun moyen d'en sortir : c'est ce qui avait imposé de
+     * revenir en arrière. Seul un choix explicite de l'utilisateur est
+     * désormais respecté — le mode par défaut, lui, s'applique tel quel.
+     *
+     * Le sélecteur d'interface (appui long) reste accessible dans les trois
+     * modes, y compris celui-ci : c'est la sortie de secours si Spotify sert
+     * une page inutilisable (connexion refusée, région, panne).
      */
     private fun storedUiMode(): String {
         val p = prefs()
@@ -450,12 +454,14 @@ class MainActivity : AppCompatActivity() {
 
     /** Sélecteur : appui long de 3 s (n'importe où) ou rangée des paramètres. */
     fun showUiChooser() {
+        /* Le mode livré par défaut est en tête : c'est celui qu'on cherche en
+           ouvrant ce sélecteur, et c'est celui que la version a choisi. */
         val labels = arrayOf(
-            getString(R.string.ui_mode_original),
             getString(R.string.ui_mode_native),
+            getString(R.string.ui_mode_original),
             getString(R.string.ui_mode_inject)
         )
-        val modes = arrayOf(MODE_ORIGINAL, MODE_NATIVE, MODE_INJECT)
+        val modes = arrayOf(MODE_NATIVE, MODE_ORIGINAL, MODE_INJECT)
         val checked = modes.indexOf(uiMode).coerceAtLeast(0)
         AlertDialog.Builder(this)
             .setTitle(getString(R.string.ui_mode_title))
@@ -653,17 +659,22 @@ class MainActivity : AppCompatActivity() {
         const val MODE_INJECT = "inject"
 
         /**
-         * Interface livrée par défaut : la couche injectée, celle qui sait
-         * s'afficher comme l'application mobile **et** où la connexion
-         * e-mail/mot de passe fonctionne. Le mode `native` (la page web mobile
-         * de Spotify, servie en annonçant Chrome Android) reste proposé, mais
-         * c'est une page web : ni la disposition de l'application, ni la
-         * connexion classique.
+         * Interface livrée par défaut : la **page web mobile de Spotify** — la
+         * page que Spotify sert lui-même à un téléphone. C'est l'affichage
+         * mobile demandé : navigation basse, listes compactes, lecteur plein
+         * écran, rien de redessiné ici.
+         *
+         * Deux écueils déjà payés, à ne pas repayer : la 2.6.0 l'avait livrée
+         * par défaut puis on l'a retirée, parce que cette version-là n'offrait
+         * aucun moyen d'en sortir. Aujourd'hui le sélecteur (appui long) est
+         * toujours là, dans tous les modes. Le second — la connexion — dépend
+         * de ce que Spotify sert à un agent mobile : voir la note au-dessus de
+         * `storedUiMode`.
          */
-        const val MODE_DEFAULT = MODE_ORIGINAL
+        const val MODE_DEFAULT = MODE_NATIVE
 
         /** Incrémenter à chaque fois que `MODE_DEFAULT` change. */
-        const val UI_MODE_REV = 3
+        const val UI_MODE_REV = 4
 
         /** Types d'URL `spotify:` convertibles en lien web. */
         private val WEB_KINDS = setOf(

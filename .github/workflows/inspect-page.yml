@@ -65,6 +65,30 @@ jobs:
           N=$(grep -o "Desktop_LeftSidebar_Id" /tmp/mobile.html | wc -l)
           echo "::notice title=Mobile : repères bureau::Desktop_LeftSidebar_Id × $N ($SIZE octets)"
 
+      - name: The sign-in page, as each user agent sees it
+        # Le mode « mobile » est livré par défaut : reste à savoir si un
+        # téléphone peut s'y connecter. Les boutons sociaux ne fonctionnent pas
+        # dans une WebView (Google refuse « disallowed_useragent »), donc s'il
+        # n'y a qu'eux, la connexion passe par l'autre interface.
+        run: |
+          set +e -uo pipefail
+          DESKTOP="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
+          MOBILE="Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Mobile Safari/537.36"
+          for pair in "desktop|$DESKTOP" "mobile|$MOBILE"; do
+            NAME="${pair%%|*}"; UA="${pair#*|}"
+            curl -sSL -o "/tmp/login-$NAME.html" -w "code=%{http_code} final=%{url_effective}\n" \
+              -A "$UA" -H "accept-language: fr-FR,fr;q=0.9" "https://accounts.spotify.com/fr/login" || true
+            SIZE=$(wc -c < "/tmp/login-$NAME.html" 2>/dev/null || echo 0)
+            PW=$(grep -o 'type="password"' "/tmp/login-$NAME.html" 2>/dev/null | wc -l)
+            MAIL=$(grep -o 'type="email"\|name="username"\|name="email"' "/tmp/login-$NAME.html" 2>/dev/null | wc -l)
+            TITLE=$(grep -o '<title>[^<]*</title>' "/tmp/login-$NAME.html" 2>/dev/null | head -1)
+            echo "::notice title=Connexion ($NAME)::$SIZE octets — champ mot de passe × $PW, champ e-mail × $MAIL — ${TITLE:-sans titre}"
+          done
+          for NAME in desktop mobile; do
+            N=$(grep -o 'Continuer avec Google\|Continue with Google\|Connexion avec Google' "/tmp/login-$NAME.html" 2>/dev/null | wc -l)
+            echo "::notice title=Connexion ($NAME) : bouton Google::occurrences : $N"
+          done
+
       - name: The page head, verbatim
         run: |
           set +e -uo pipefail   # GitHub lance les étapes en « -e » : un grep sans résultat tuait le diagnostic

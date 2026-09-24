@@ -159,15 +159,31 @@ for (const sel of CORE_SELECTORS) {
 }
 
 /* 2-quater. Le mode livré par défaut. Ce n'est pas une broutille : le 2.6.0 a
-   expédié la page web mobile de Spotify comme interface par défaut, sans
-   connexion utilisable, et il a fallu deux versions entières pour revenir à
-   l'affichage voulu. Le choix reste donc sous surveillance. */
+   expédié la page web mobile de Spotify comme interface par défaut sans qu'on
+   puisse en sortir, et il a fallu deux versions pour revenir en arrière. Le
+   défaut est donc une décision explicite, surveillée ici : c'est
+   l'**affichage mobile**, c'est-à-dire la page que Spotify sert à un
+   téléphone. Jamais notre propre habillage : une coque maison livrée par
+   défaut, c'est ce que l'utilisateur avait justement refusé. */
 const activity = read("android/app/src/main/java/com/spotiduck/app/MainActivity.kt");
 for (const stale of ["the two interfaces", "MODE_INJECT is the default"]) {
   if (activity.includes(stale)) errors.push(`MainActivity : commentaire périmé (« ${stale} »)`);
 }
-if (!/MODE_DEFAULT\s*=\s*MODE_ORIGINAL/.test(activity)) {
-  errors.push("MainActivity : le mode par défaut n'est plus l'interface d'origine");
+if (!/MODE_DEFAULT\s*=\s*MODE_NATIVE/.test(activity)) {
+  errors.push("MainActivity : le mode par défaut n'est plus l'affichage mobile");
+}
+if (/MODE_DEFAULT\s*=\s*MODE_INJECT/.test(activity)) {
+  errors.push("MainActivity : le mode par défaut est redevenu notre habillage");
+}
+/* …et le mode par défaut doit rester quittable **depuis lui-même**, sans
+   réinstaller : c'est ce qui manquait à la 2.6.0. Dans le mode mobile, le seul
+   chemin vers le sélecteur est l'appui long de `native-mode.js`. */
+if (!/MODE_NATIVE,\s*MODE_ORIGINAL,\s*MODE_INJECT/.test(activity.replace(/\s+/g, " "))) {
+  errors.push("MainActivity : le sélecteur d'interface ne propose plus les trois modes");
+}
+const nativeAsset = read("android/app/src/main/assets/native-mode.js");
+if (!/showUiChooser/.test(nativeAsset)) {
+  errors.push("native-mode.js : plus rien n'ouvre le sélecteur d'interface (appui long)");
 }
 /* Le mode « natif » ne doit être retenu que s'il a été choisi explicitement. */
 if (!/KEY_UI_MODE_CHOSEN/.test(activity)) {

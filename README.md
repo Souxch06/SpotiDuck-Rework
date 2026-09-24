@@ -58,35 +58,34 @@ By wrapping the Spotify Web Player in a highly optimized Android WebView, SpotiD
 </p>
 
 > [!NOTE]
-> Those screenshots are the interface shipped **by default**: the project's
-> original display, restored as-is in `src/original/`. The tweaked shell that
-> was being written in `src/inject/` is still there, as a secondary interface —
-> see **[docs/UI-REWORK.md](./docs/UI-REWORK.md)**.
+> The app now opens on the **mobile display**: the page Spotify serves to a
+> phone, untouched. Those screenshots show the project's **original** interface
+> — still shipped, one long-press away.
 
 ---
 
-## 🧩 The interface: the project's original one, restored as-is
+## 🧩 The display: Spotify's own mobile page, by default
 
-The app ships the interface it started with, **unedited**: the original injected
-script (navigation at the top — home · library · search · logo · notifications ·
-friends · profile — compact home rows, library opening full screen, and a
-complete player at the bottom with a red gradient), taken from the decompiled
-`Spotifuck` source and rebuilt in `src/original/`. Nothing was written by hand;
-see **[src/original/README.md](./src/original/README.md)** for the exact
-provenance and the fingerprints that guard it.
+Out of the box the app announces Chrome on Android, so open.spotify.com serves
+its **mobile web player** — the bottom navigation bar, compact lists, the
+full-screen player, artwork and controls. That is the same layout the Spotify
+app uses on a phone, and nothing here redraws it: that was the whole point of
+shipping it.
 
-Three interfaces, switchable at runtime (**long-press anywhere** → the chooser,
-or *Settings → Interface* in our own shell):
+Three interfaces, switchable at runtime (**long-press 3 s anywhere** → the
+chooser, or *Settings → Interface* in our own shell). The chooser works in every
+mode, including the default one — no way to get locked in:
 
-| | **Original** (default) | **Our shell** | **“Native”** (beta) |
+| | **Mobile display** (default) | **Original** | **Our shell** |
 | --- | --- | --- | --- |
-| What you see | The project's original display: the **desktop** web player arranged by the original stylesheet | Our own mobile shell on the same desktop player: bottom/top navigation, sheets, settings, density setting | The **mobile web page** Spotify serves when the app pretends to be Chrome on Android |
-| Sign-in | e-mail/password works (desktop player) | e-mail/password works | social buttons only (WebViews often reject them) |
-| Notification | the original script reports the track to Android; the shim relays play/pause/next/previous/like/seek | the layer's playback API | clicks Spotify's real buttons and mirrors title/artist/cover |
+| What you see | The **mobile web player** Spotify serves to Chrome on Android: bottom bar, compact lists, full-screen player, nothing redrawn | The project's original display: the **desktop** web player arranged by the original stylesheet (`src/original/`, taken from the decompiled `Spotifuck` source, **unedited** — see **[src/original/README.md](./src/original/README.md)**) | Our own shell on the desktop player: navigation, sheets, settings, density setting |
+| Sign-in | Spotify's own sign-in page | e-mail/password on the desktop player | e-mail/password on the desktop player |
+| Notification | presses Spotify's real buttons and mirrors title/artist/cover | the original script reports the track to Android; the shim relays play/pause/next/previous/like/seek | the layer's playback API |
 
 Either way the nuisance windows are removed: cookie/consent banners, “open in
 the app” prompts, promo banners, tooltips, browser long-press menus and
-scrollbars. The choice is stored in `SharedPreferences` and survives restarts.
+scrollbars. The choice is stored in `SharedPreferences` and survives restarts;
+installing an update does not silently keep an old default with it.
 
 ## 🧩 The injected layer (development)
 
@@ -96,7 +95,7 @@ injectable file:
 
 ```
 src/original/spotiduck-original.js
-                            the default interface: the original injected script,
+                            the original interface, picked from the chooser:
                             its stylesheet and a labelled shim — see the README
                             in that folder
 src/inject/10-base.css      design tokens, viewport, web-player takeover
@@ -109,7 +108,7 @@ src/inject/70-original.css the shell's own layout: top navigation bar, full mini
                             2-column home shortcuts
 src/inject/spotiduck-ui.js  runtime (reads the player, drives playback, gestures)
 dist/spotiduck-ui.js        ← built bundle of our shell (mode “inject”)
-dist/spotiduck-original.js  ← built bundle of the original interface (default)
+dist/spotiduck-original.js  ← built bundle of the original interface
 demo/                       mock Spotify web player + phone-frame preview
 android/                    the APK: WebView wrapper around the built layer
 android/app/src/main/assets/native-mode.js
@@ -120,7 +119,7 @@ android/app/src/main/assets/native-mode.js
 ```bash
 npm run build          # rebuild both dist/ bundles (original + our shell)
 npm run build:original # the original interface only, with its fingerprints checked
-npm run smoke          # 67 behaviour tests (bundle + original + native mode)
+npm run smoke          # 69 behaviour tests (bundle + original + mobile mode)
 npm run demo           # http://localhost:5173 — preview in a phone frame
 npm run android        # build + copy the bundle into android/app/src/main/assets
 ```

@@ -15,8 +15,8 @@ plus méfiant).
 
 L'application peut t'y emmener directement :
 
-* **mode d'origine** (celui livré par défaut) : appui long sur la page → bouton
-  **Play Protect** ;
+* **affichage mobile** (celui livré par défaut) et **mode d'origine** : appui
+  long de 3 secondes sur la page → bouton **Play Protect** ;
 * **habillage SpotiDuck** : Paramètres → **À propos** → **Vérification Play
   Protect**.
 

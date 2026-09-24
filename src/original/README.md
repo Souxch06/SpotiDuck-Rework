@@ -46,6 +46,6 @@ C'est la seule différence de configuration entre les trois interfaces :
 
 | Mode | Agent | Script injecté | Viewport |
 | --- | --- | --- | --- |
-| `original` (défaut) | Chrome bureau | ce dossier | laissé à la page |
-| `native` (bêta) | Chrome Android | `native-mode.js` | posé par le script |
+| `native` (défaut) | Chrome Android | `native-mode.js` | posé par le script |
+| `original` | Chrome bureau | ce dossier | laissé à la page |
 | `inject` | Chrome bureau | `spotiduck-ui.js` | posé par le script (couche en dp) |

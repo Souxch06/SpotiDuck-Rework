@@ -12,9 +12,10 @@
     <string name="msg_reload">Session expirée — rechargement…</string>
     <string name="ui_mode_title">Interface de l\'application</string>
     <!-- Trois interfaces :
+         · « native » = la page web mobile de Spotify — l'affichage mobile,
+           livré par défaut ;
          · « original » = le code de l'application d'origine, repris tel quel
-           (c'est celle-ci qui est livrée par défaut) ;
-         · « native » = la page web mobile de Spotify (bêta) ;
+           (l'affichage historique du projet) ;
          · « inject » = la couche SpotiDuck, habillage maison. -->
     <string name="diagnostic">Diagnostic</string>
     <string name="diagnostic_title">Ce que la page affiche</string>
