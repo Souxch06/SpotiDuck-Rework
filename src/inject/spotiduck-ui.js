@@ -1116,6 +1116,23 @@
         "</p>" +
         "</div>";
 
+      /* Le bouton de l'écran d'accueil passe par la partie native, comme
+         celui de la page de connexion : même adresse, mais chargée par la
+         WebView elle-même, sans dépendre du routeur de Spotify. Sans ça, un
+         appui qui n'aboutit pas laissait l'utilisateur sur l'écran d'accueil
+         sans aucun moyen d'avancer. */
+      var welcomeCta = welcome.querySelector(".sd-welcome-cta");
+      if (welcomeCta) {
+        welcomeCta.addEventListener("click", function (event) {
+          try {
+            if (window.AndBridge && AndBridge.openLogin) {
+              event.preventDefault();
+              Bridge.call("openLogin");
+            }
+          } catch (e) {}
+        });
+      }
+
       /* ---- queue sheet scrim + grabber ---- */
       var scrim = document.createElement("div");
       scrim.className = "sd-scrim";
@@ -2598,6 +2615,10 @@
       /* Écran d'accueil : décidé à chaque passage, y compris quand on n'est
          ni sur la page de connexion ni dans l'application (page marketing). */
       Welcome.apply();
+      /* Et l'état de session part vers Android au même rythme : c'est lui qui
+         confirme la session à la connexion (et la range), et qui distingue une
+         déconnexion volontaire d'un lancement sans session. */
+      LoginState.report();
       if (!onLogin) {
         html.classList.remove("sd-login-classic", "sd-need-password");
         return;
@@ -2621,6 +2642,51 @@
   };
 
   /* ------------------------------------------------------------------ *
+   * 11e-ter. Session — l'état de connexion, rapporté à Android.
+   *
+   * Le mode mobile rapportait `in` / `out` / `login` ; la coque, non (elle se
+   * contentait de `loginDetected`). Tant que le défaut était la page mobile,
+   * ça passait inaperçu ; depuis que la coque est livrée par défaut,
+   * l'application ne recevait plus « connecté » : la session n'était donc ni
+   * confirmée ni rangée à la connexion, et une déconnexion volontaire n'était
+   * plus distinguée d'un lancement sans session.
+   *
+   * On tient ici **exactement** le contrat du mode mobile : mêmes trois états,
+   * même silence quand on ne sait pas — le pont ignore ce qu'il ne comprend
+   * pas, et un « je ne sais pas » ne doit pas faire jeter une session valable.
+   * ------------------------------------------------------------------ */
+  var LoginState = {
+    sent: null,
+    count: 0,
+    isLoginPage: function () {
+      return (
+        document.documentElement.classList.contains("sd-login") ||
+        /(^|\.)accounts\.spotify\.com$/.test(location.hostname) ||
+        !!pick(SEL.loginPage)
+      );
+    },
+    signedIn: function () {
+      return !!(pick(SEL.mainView) || pick(SEL.npBar));
+    },
+    signedOut: function () {
+      return !this.signedIn() && !!$('a[href^="/login"], a[href*="/login"]');
+    },
+    report: function () {
+      var state = this.isLoginPage() ? "login" : this.signedIn() ? "in" : this.signedOut() ? "out" : null;
+      /* Inconnu : on ne dit rien. (Le pont écarte de toute façon ce qu'il ne
+         comprend pas ; autant ne pas l'appeler pour rien.) */
+      if (!state) return null;
+      /* Le même constat part trois fois — l'application peut s'attacher après
+         le premier passage — puis seulement quand il change. */
+      if (state === this.sent && this.count > 2) return state;
+      this.sent = state;
+      this.count++;
+      Bridge.call("loginState", state);
+      return state;
+    },
+  };
+
+  /* ------------------------------------------------------------------ *
    * 11e-bis. Welcome — écran d'accueil maison.
    *
    * Quand la session est déconnectée, open.spotify.com sert sa page
@@ -2635,7 +2701,14 @@
       var login = html.classList.contains("sd-login");
       var app = !!(pick(SEL.mainView) || pick(SEL.npBar));
       var marketing = !!$('a[href^="/login"], a[href*="/login"]');
-      var show = !app && (login || marketing);
+      /* **Jamais** sur la page de connexion. C'était le défaut : la coque
+         s'installe aussi sur `accounts.spotify.com`, y reconnaît une page de
+         connexion (`sd-login`) et posait l'écran d'accueil **par-dessus le
+         formulaire** ; son bouton menait à la page déjà affichée, donc « le
+         bouton ne fait rien » et l'utilisateur restait bloqué là. L'écran
+         d'accueil n'a de sens que sur la page marketing du lecteur, quand
+         personne n'est connecté et qu'il n'y a rien à remplir. */
+      var show = !app && !login && !LoginState.isLoginPage() && marketing;
       html.classList.toggle("sd-welcome-on", show);
       if (UI.el.welcome) UI.el.welcome.setAttribute("aria-hidden", show ? "false" : "true");
       return show;
@@ -3554,6 +3627,7 @@
       Auto: Auto,
       Api: Api,
       Login: Login,
+      LoginState: LoginState,
       Offline: Offline,
       Polish: Polish,
       Back: Back,

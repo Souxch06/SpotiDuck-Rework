@@ -1468,3 +1468,71 @@ et c'est lui qui change avec l'agent.
 audit 0 erreur / 0 avertissement, smoke 84/84, ressources compilées par `aapt2`
 en local avant le push (`187 266 o`), `npm run build` + `npm run sync:android`
 avant le commit.
+
+## 25. La page de connexion : l'écran d'accueil la recouvrait (v2.9.2)
+
+Deux défauts, tous deux dans la coque, et tous deux invisibles tant que la
+**page mobile** était le mode par défaut — c'est le passage à la coque (§24) qui
+les a mis sous les yeux de l'utilisateur, sous la forme « l'interface de
+connexion ne fait rien, je suis bloqué là ».
+
+### 1. L'écran d'accueil se posait sur le formulaire
+
+La coque s'injecte sur **toutes** les pages, `accounts.spotify.com` compris —
+c'est voulu : c'est là qu'elle habille le formulaire et qu'elle propose la
+connexion e-mail + mot de passe quand Spotify ne montre que les boutons sociaux.
+Mais `Welcome.apply()` montrait l'écran d'accueil sur toute page reconnue comme
+« page de connexion » :
+
+```js
+var show = !app && (login || marketing);   // avant : `login` = page de connexion
+```
+
+Sur `accounts.spotify.com`, `sd-login` est vrai, donc l'écran d'accueil (logo,
+titre, bouton) **recouvrait le formulaire**, et son bouton menait à la page
+déjà affichée : un appui ne changeait rien. L'utilisateur était bloqué sur cet
+écran, sans autre issue que la touche retour.
+
+Correction : l'écran d'accueil n'a de sens que sur la **page marketing du
+lecteur**, quand personne n'est connecté et qu'il n'y a rien à remplir.
+
+```js
+var show = !app && !login && !LoginState.isLoginPage() && marketing;
+```
+
+Et son bouton ne se contente plus d'être un lien : il passe par la partie
+native (`AndBridge.openLogin`, la même adresse chargée par la WebView), comme
+celui de la page de connexion. Un appui qui n'aboutit pas ne laisse plus
+l'utilisateur sur place.
+
+### 2. La coque ne rapportait pas la session
+
+Le contrat de session (passe 22) tient à ce que la page dise à Android dans quel
+état elle est : `in` (connecté → la session est confirmée et rangée), `out`,
+`login`. Le mode mobile le faisait ; **la coque, non** — elle n'envoyait que
+`loginDetected`. Tant que le défaut était la page mobile, personne ne le voyait.
+Depuis que la coque est livrée par défaut, l'application ne recevait plus
+« connecté » : la session n'était donc ni confirmée ni rangée au moment de la
+connexion, et une déconnexion volontaire n'était plus distinguée d'un lancement
+sans session.
+
+La coque tient maintenant **exactement** le contrat du mode mobile, mêmes trois
+états et même silence quand elle ne sait pas (`login` sur la page de connexion,
+`in` quand le lecteur est là, `out` sur la seule page marketing — jamais
+`out` sur la page de connexion, où être déconnecté est normal).
+
+### Les garde-fous
+
+* audit : le bundle doit rapporter `loginState`, distinguer la page de connexion,
+  et la condition de l'écran d'accueil être **tenue à l'écart** de cette page —
+  le test lit la condition telle qu'elle est écrite (`var show = …`), pas une
+  approximation ;
+* smoke : trois tests neufs, dont un banc complet de la coque **sur
+  `accounts.spotify.com/fr/login?allow_password=1`** — le formulaire est là, il
+  n'est pas recouvert, la page rapporte `login` et jamais `out` ; plus l'appui du
+  bouton d'accueil qui doit appeler `AndBridge.openLogin` (89/89).
+
+### Vérifications
+
+audit 0 erreur / 0 avertissement, smoke 89/89, ressources compilées par `aapt2`
+avant le push, `npm run build` + `npm run sync:android` avant le commit.

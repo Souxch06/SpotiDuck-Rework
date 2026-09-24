@@ -697,6 +697,22 @@ check("logged-out landing page shows the native welcome screen", () => {
   return "logo + titre + bouton « Se connecter »";
 });
 
+check("the welcome CTA is handed to the app, not just a link", () => {
+  const calls = [];
+  early.window.AndBridge = new Proxy(
+    {},
+    { get: (t, p) => (...a) => { calls.push([String(p), a]); return undefined; } }
+  );
+  const cta = earlyDoc.querySelector(".sd-welcome-cta");
+  const event = new early.window.MouseEvent("click", { bubbles: true, cancelable: true });
+  cta.dispatchEvent(event);
+  assert(
+    calls.some((c) => c[0] === "openLogin"),
+    "l'appui n'a pas demandé à l'application d'ouvrir la connexion : " + JSON.stringify(calls)
+  );
+  return "appui → AndBridge.openLogin ✓";
+});
+
 check("navigation is at the top, like the original app", () => {
   const nav = doc.querySelector(".sd-nav");
   assert(nav, "the top navigation bar was not built");
@@ -1025,6 +1041,52 @@ await checkAsync("native mode: a tab that leads nowhere is navigated for it", as
   await tick(1500);
   assert(nw.__sdNavTap.forced === "/collection", "the app did not take over the navigation");
   return "appui noté · navigation reprise par l'application ✓";
+});
+
+/* ------------------------------------------------------------------ *
+ * La coque sur la page de connexion. C'est là qu'un nouvel utilisateur
+ * commence, et c'est là qu'elle recouvrait le formulaire : l'écran d'accueil
+ * maison se posait par-dessus `accounts.spotify.com`, et son bouton menait à
+ * la page déjà affichée — « le bouton ne fait rien », utilisateur bloqué.
+ * ------------------------------------------------------------------ */
+const coopLoginCalls = [];
+const coopLogin = new JSDOM(
+  '<!doctype html><html><body><div id="root">' +
+    '<form data-testid="login-form">' +
+    '<input id="login-username" name="username" type="text">' +
+    '<input name="password" type="password">' +
+    '<button type="submit">Se connecter</button>' +
+    "</form></div></body></html>",
+  { url: "https://accounts.spotify.com/fr/login?allow_password=1", pretendToBeVisual: true, runScripts: "dangerously" }
+);
+coopLogin.window.AndBridge = new Proxy(
+  {},
+  { get: (t, p) => (...a) => { coopLoginCalls.push([String(p), a]); return undefined; } }
+);
+coopLogin.window.eval(await read("dist/spotiduck-ui.js"));
+await tick(150);
+const cld = coopLogin.window.document;
+
+check("coop: the welcome screen never covers the login form", () => {
+  assert(!cld.documentElement.classList.contains("sd-welcome-on"), "welcome shown over the login page");
+  assert(cld.documentElement.classList.contains("sd-login"), "the login page was not recognised");
+  const form = cld.querySelector("[data-testid='login-form']");
+  assert(form, "the login form is gone");
+  assert(form.querySelector("input[type='password']"), "the password field is gone");
+  return "aucun écran d'accueil sur la page de connexion ✓";
+});
+
+check("coop: the login page reports `login` (not a lost session)", () => {
+  const states = coopLoginCalls.filter((c) => c[0] === "loginState").map((c) => c[1][0]);
+  assert(states.includes("login"), "rapporté : " + JSON.stringify(states));
+  assert(!states.includes("out"), "la page de connexion ne doit jamais être rapportée « déconnecté »");
+  return "login ✓";
+});
+
+check("coop: no runtime error on the login host", () => {
+  const errs = coopLogin.window.__errors || [];
+  assert(errs.length === 0, errs.join(" | "));
+  return "0 erreur";
 });
 
 /* Le banc de la connexion : une deuxième page, sur le domaine de connexion de
@@ -1499,6 +1561,12 @@ check("origine : en lecture, l'état part vers la notification", () => {
   const payload = JSON.parse(status[1][0]);
   assert(payload.track === "Titre test" && payload.artist === "Artiste test", "métadonnées incomplètes : " + status[1][0]);
   return "titre et artiste transmis ✓";
+});
+
+check("coop: the player reports a confirmed session", () => {
+  const states = window.__bridgeCalls.filter((c) => c[0] === "loginState").map((c) => c[1][0]);
+  assert(states.includes("in"), "aucun état « connecté » rapporté : " + JSON.stringify(states.slice(0, 6)));
+  return "in ✓";
 });
 
 check("origine : aucune erreur d'exécution", () => {

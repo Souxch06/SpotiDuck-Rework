@@ -169,6 +169,40 @@ for (const sel of CORE_SELECTORS) {
   if (!bundleCss.includes(sel)) errors.push(`le bundle ne contient plus le sélecteur ${sel}`);
 }
 
+/* 2-ter-bis. La page de connexion et l'état de session — les deux trous de la
+   2.9.1, payés par l'utilisateur (« le bouton ne fait rien », bloqué sur la page
+   de connexion).
+
+   Le premier : la coque s'installe aussi sur `accounts.spotify.com`. Elle y
+   reconnaît une page de connexion, y posait son **écran d'accueil par-dessus le
+   formulaire**, et son bouton menait à la page déjà affichée — donc rien ne
+   bougeait. L'écran d'accueil doit rester au lecteur, jamais à la page de
+   connexion.
+
+   Le second : la coque ne rapportait **pas** l'état de connexion
+   (`AndBridge.loginState`). Tant que la page mobile était le défaut, ça ne se
+   voyait pas ; depuis que la coque est livrée par défaut, la session n'était
+   plus ni confirmée ni rangée à la connexion, et une déconnexion volontaire
+   n'était plus distinguée d'un lancement sans session. */
+const shellJs = read("dist/spotiduck-ui.js");
+if (!/loginState/.test(shellJs)) {
+  errors.push("le bundle ne rapporte plus l'état de connexion à Android (AndBridge.loginState)");
+}
+if (!/isLoginPage\s*:/.test(shellJs)) {
+  errors.push("le bundle ne distingue plus la page de connexion (isLoginPage)");
+}
+/* La condition de l'écran d'accueil, telle qu'elle est écrite : jamais sur la
+   page de connexion. */
+const welcomeGate = (shellJs.match(/var show = [^;]+;/) || [""])[0];
+if (!/!login/.test(welcomeGate) || !/isLoginPage/.test(welcomeGate)) {
+  errors.push(`l'écran d'accueil n'est plus tenu à l'écart de la page de connexion : « ${welcomeGate} »`);
+}
+/* Le bouton de l'écran d'accueil doit passer par le natif, pas seulement poser
+   un lien que le routeur de Spotify peut ignorer. */
+if (!/welcome-cta[\s\S]{0,600}openLogin/.test(shellJs)) {
+  errors.push("le bouton de l'écran d'accueil n'est plus relié à la connexion native");
+}
+
 /* 2-quater. Le mode livré par défaut. C'est une décision surveillée, et elle a
    changé de sens une fois, pour une raison **mesurée** (sonde `probe-playback`,
    run 36028586893) : le message « Lecture désactivée » — « Spotify ne
