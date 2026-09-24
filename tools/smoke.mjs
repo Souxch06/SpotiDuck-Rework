@@ -1045,8 +1045,12 @@ check("native mode: a social-only login page gets an e-mail way through", () => 
   assert(bar, "no e-mail help on a login page without a password field");
   const button = bar.querySelector("a[data-sd='login-help-button']");
   assert(button, "the help has no button");
+  /* Adresse **absolue** : mesurée en CI, `open.spotify.com/login` répond 404 et
+     `/fr/login` tout court ne demande que l'e-mail. C'est
+     `accounts.spotify.com/fr/login?allow_password=1` qui affiche les deux champs,
+     et un lien relatif dépendrait de la page où on se trouve. */
   assert(
-    button.getAttribute("href") === "?allow_password=1",
+    button.getAttribute("href") === "https://accounts.spotify.com/fr/login?allow_password=1",
     "the button must ask Spotify for the password form: " + button.getAttribute("href")
   );
   assert(
@@ -1093,25 +1097,112 @@ await checkAsync("native mode: the logged-out home page offers the e-mail way to
   return "page déconnectée oui · lecteur non ✓";
 });
 
-check("native mode: a window the page opens is loaded in the page", () => {
-  /* « Continuer avec Google » passe par `window.open` chez Spotify : dans une
-     WebView qui n'ouvre pas de fenêtre, ce bouton ne fait rien. Le script doit
-     ramener la destination dans la page elle-même. */
-  const seen = [];
-  const previous = nw.__sdNavigate;
-  nw.__sdNavigate = (url) => seen.push(url);
-  nw.open("https://accounts.google.com/o/oauth2/v2/auth?client_id=x");
-  assert(seen.length === 1, "window.open did not reach the navigation shim");
+check("native mode: window.open is left to the WebView", () => {
+  /* Mesuré en CI : « Continuer avec Google » ouvre
+     `accounts.google.com/v3/signin/identifier?client_id=…&redirect_uri=accounts.spotify.com/login/google/redirect`
+     par `window.open`, et attends que cette fenêtre lui rende la main par
+     `window.opener`. Le script ne doit donc **pas** y toucher : la 2.8.1 le
+     remplaçait par une navigation dans la page courante, et le retour de
+     connexion n'arrivait plus.
+
+     La WebView, elle, en ouvre une vraie (transport de fenêtre + onCloseWindow,
+     vérifié par l'audit). Ici on vérifie seulement que la page garde la main. */
+  assert(typeof nw.__sdNavigate === "function", "__sdNavigate a disparu (liens internes et sonde)");
   assert(
-    seen[0].indexOf("https://accounts.google.com/") === 0,
-    "wrong destination: " + seen[0]
+    typeof nw.open === "function" && String(nw.open).indexOf("__sdNavigate") === -1,
+    "window.open est de nouveau remplacé par une navigation dans la page"
   );
-  /* Une fenêtre vide (about:blank) n'est pas une destination : on n'y va pas. */
-  seen.length = 0;
-  nw.open("about:blank");
-  assert(seen.length === 0, "about:blank must not navigate");
-  nw.__sdNavigate = previous;
-  return "window.open → navigation dans la page ✓";
+  /* Une fenêtre vide reste une fenêtre vide : c'est `about:blank` qui sert de
+     base à la vraie destination, et la WebView la gère. */
+  assert(!/realOpen/.test(natScript), "le shim de la 2.8.1 est encore dans le script");
+  return "window.open intact (vraie fenêtre côté WebView) ✓";
+});
+
+check("native mode: the login page announces its state, not a disconnection", () => {
+  /* Le cookie dit qu'une session a existé ; la page seule dit si elle vaut
+     encore quelque chose. Sur une page de connexion, être déconnecté est la
+     normale : l'annoncer « out » ferait jeter une copie de secours valable. */
+  const sent = [];
+  const previous = lw.AndBridge;
+  lw.AndBridge = new Proxy({}, { get: (_t, name) => (...args) => sent.push([name, args[0]]) });
+
+  assert(lw.__sdLoginState() === "login", "une page de connexion doit se dire « login » : " + lw.__sdLoginState());
+  lw.__sdLoginTick();
+  assert(
+    sent.some((c) => c[0] === "loginState" && c[1] === "login"),
+    "l'état de connexion n'est pas annoncé : " + JSON.stringify(sent)
+  );
+
+  lw.AndBridge = previous;
+  return "verdict « login » annoncé au pont ✓";
+});
+
+check("native mode: a connected player page is announced as « in »", () => {
+  const player = new JSDOM(
+    '<!doctype html><html><body><div data-testid="now-playing-widget"></div></body></html>',
+    { url: "https://open.spotify.com/", pretendToBeVisual: true, runScripts: "dangerously" }
+  );
+  const sent = [];
+  player.window.AndBridge = new Proxy({}, { get: (_t, name) => (...args) => sent.push([name, args[0]]) });
+  player.window.eval(natScript);
+  assert(player.window.__sdLoginState() === "in", "un lecteur connecté doit se dire « in » : " + player.window.__sdLoginState());
+  player.window.__sdLoginTick();
+  assert(
+    sent.some((c) => c[0] === "loginState" && c[1] === "in"),
+    "le lecteur connecté n'est pas annoncé : " + JSON.stringify(sent)
+  );
+  return "lecteur connecté → « in » ✓";
+});
+
+check("native mode: a logged-out player is announced as « out »", () => {
+  /* Un lecteur dont la session est morte : la coquille est là (barre de
+     navigation), mais aucune trace de compte. C'est le seul cas qui se dit
+     « out » — l'accueil déconnecté, lui, se dit « login ». */
+  const out = new JSDOM(
+    '<!doctype html><html><body><nav><a href="/">Accueil</a></nav>' +
+      '<button data-testid="login-button">Se connecter</button>' +
+      '<p>S\'inscrire gratuitement</p></body></html>',
+    { url: "https://open.spotify.com/", pretendToBeVisual: true, runScripts: "dangerously" }
+  );
+  const sent = [];
+  out.window.AndBridge = new Proxy({}, { get: (_t, name) => (...args) => sent.push([name, args[0]]) });
+  out.window.eval(natScript);
+  assert(out.window.__sdLoginState() === "out", "une page déconnectée doit se dire « out » : " + out.window.__sdLoginState());
+  out.window.__sdLoginTick();
+  assert(
+    sent.some((c) => c[0] === "loginState" && c[1] === "out"),
+    "la déconnexion n'est pas annoncée : " + JSON.stringify(sent)
+  );
+  return "lecteur déconnecté → « out » ✓";
+});
+
+check("native mode: after a form error, the state can be cleaned and retried", () => {
+  /* « E-mail ou mot de passe incorrect » arrive aussi quand ce n'est **pas** le
+     mot de passe : un jeton de page (CSRF) resté d'une visite précédente suffit.
+     Le bouton n'apparaît donc qu'après une erreur, et seulement si
+     l'application peut nettoyer (jamais `sp_dc` ni `sp_key`). */
+  const fail = new JSDOM(
+    '<!doctype html><html><body><div id="root"><button>Continuer avec Google</button>' +
+      '<div role="alert">E-mail ou mot de passe incorrect</div></div></body></html>',
+    { url: "https://accounts.spotify.com/fr/login", pretendToBeVisual: true, runScripts: "dangerously" }
+  );
+  const clean = [];
+  fail.window.AndBridge = new Proxy({}, {
+    get: (_t, name) => (...args) => {
+      clean.push(name);
+      return name === "resetLoginState" ? true : undefined;
+    },
+  });
+  fail.window.eval(natScript);
+  const retry = fail.window.document.querySelector("#sd-login-help [data-sd='login-help-reset']");
+  assert(retry, "aucun bouton de réessai après une erreur du formulaire");
+
+  /* Le clic ne doit pas partir en navigation dans le banc d'essai : jsdom ne
+     l'implémente pas, et le rechargement est de toute façon différé. */
+  fail.window.setTimeout = () => 0;
+  retry.dispatchEvent(new fail.window.MouseEvent("click", { bubbles: true, cancelable: true }));
+  assert(clean.includes("resetLoginState"), "l'état de connexion n'est pas nettoyé : " + JSON.stringify(clean));
+  return "erreur → nettoyage ciblé + réessai ✓";
 });
 
 check("native mode: the notification controls press Spotify's buttons", () => {

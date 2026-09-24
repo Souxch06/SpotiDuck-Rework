@@ -103,11 +103,18 @@ async function describe(page) {
 async function tryLogin(page, { email, password }) {
   const filled = await page.evaluate(
     (values) => {
+      /* Les pages modernes lisent la valeur par le *setter natif* : écrire
+         `el.value` directement ne déclenche pas leur état interne, et le
+         formulaire répond « Veuillez saisir votre adresse e-mail » alors que le
+         champ est rempli. La sonde n°2 est tombée dedans. */
       const setValue = (el, value) => {
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
         el.focus();
-        el.value = value;
+        setter.call(el, value);
         el.dispatchEvent(new Event("input", { bubbles: true }));
         el.dispatchEvent(new Event("change", { bubbles: true }));
+        el.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "a" }));
+        el.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "a" }));
       };
       const pwd = document.querySelector("input[type='password']");
       const mail = document.querySelector(
@@ -115,17 +122,21 @@ async function tryLogin(page, { email, password }) {
       );
       if (mail) setValue(mail, values.email);
       if (pwd) setValue(pwd, values.password);
-      const wanted = /se connecter|continuer|connexion|log in|sign in|suivant/i;
-      const buttons = [...document.querySelectorAll("button,[role='button'],input[type='submit']")].filter(
-        (b) => wanted.test((b.innerText || b.textContent || "").trim()) && b.getBoundingClientRect().height > 4
-      );
-      const button = buttons[buttons.length - 1];
+      /* Le bouton de validation, **pas** « Connexion sans mot de passe » : la
+         sonde n°2 a cliqué celui-là, et n'a donc rien testé du tout. On prend le
+         texte exact quand il existe, sinon le premier qui y ressemble. */
+      const labels = [...document.querySelectorAll("button,[role='button'],input[type='submit']")]
+        .filter((b) => b.getBoundingClientRect().height > 4)
+        .map((b) => ({ el: b, text: (b.innerText || b.textContent || "").trim() }));
+      const skip = /sans mot de passe|passwordless|mot de passe oublié|forgot/i;
+      const exact = labels.find((b) => /^(se connecter|continuer|connexion|log in|sign in|suivant)$/i.test(b.text) && !skip.test(b.text));
+      const button = (exact || labels.find((b) => /se connecter|continuer|connexion|suivant/i.test(b.text) && !skip.test(b.text)) || {}).el;
       if (button) button.click();
       return { filledMail: !!mail, filledPassword: !!pwd, clicked: button ? (button.innerText || "").trim() : null };
     },
     { email, password }
   );
-  await sleep(9000);
+  await sleep(12000);
   const after = await page.evaluate(() => {
     const text = (document.body?.innerText || "").replace(/\s+/g, " ").trim();
     const alerts = [...document.querySelectorAll("[role='alert'],[aria-live],.error,[data-testid*='error'],[class*='error']")]
@@ -257,12 +268,25 @@ async function main() {
     // correctement à une tentative. Compte de sonde : adresse inexistante,
     // aucun mot de passe réel n'est envoyé.
     const stamp = Date.now();
+    const apiCalls = [];
     for (const [name, values] of [
       ["moderne", { email: `spotiduck-sonde-${stamp}@example.com`, password: "SondeSpotiDuck!42" }],
       ["classique", { email: `spotiduck-sonde-${stamp}@example.com`, password: "SondeSpotiDuck!42" }],
     ]) {
       const target = pages.find((p) => p.name === name);
       if (!target) continue;
+      /* La réponse du serveur, telle quelle : c'est elle qui dit si la connexion
+         est refusée pour cause d'identifiants, de captcha, ou de jeton de page. */
+      target.page.on("response", async (response) => {
+        try {
+          const request = response.request();
+          if (request.method() !== "POST") return;
+          const url = response.url();
+          if (!/spotify\.com/.test(url)) return;
+          const text = await response.text().catch(() => "");
+          apiCalls.push({ from: name, status: response.status(), url, body: (text || "").replace(/\s+/g, " ").slice(0, 300) });
+        } catch (e) {}
+      });
       const attempt = await tryLogin(target.page, values).catch((e) => ({ error: String(e) }));
       report[`attempt_${name}`] = attempt;
       note(
@@ -270,6 +294,13 @@ async function main() {
         `champs remplis ${JSON.stringify(attempt.filled)} · clic « ${attempt.clicked} » · après : mot de passe ${attempt.passwordFields} · captcha ${attempt.captcha ? "oui" : "non"}`
       );
       note(`Message « ${name} »`, `alertes ${JSON.stringify(attempt.alerts || [])} · texte : ${attempt.text || attempt.error}`);
+    }
+    report.apiCalls = apiCalls;
+    for (const call of apiCalls) {
+      note(`Réponse du serveur (${call.from}) : ${call.status}`, `${call.url} → ${call.body}`);
+    }
+    if (!apiCalls.length) {
+      warn("Aucune requête POST n'est partie", "le formulaire n'a pas envoyé de requête : le clic n'a pas atteint le bouton de validation");
     }
 
     // Le clic qui décide de tout : « Continuer avec Google ». Si Google refuse,

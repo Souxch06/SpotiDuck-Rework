@@ -34,6 +34,9 @@ class AdBlocker(private val context: Context) {
 
     private val blocked = HashSet<String>(8192)
 
+    /** Le type de contenu déjà reniflé pour une adresse (512 entrées au plus). */
+    private val typeCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+
     /** Contenu de `assets/silent.mp3`, lu en même temps que la liste. */
     private var silent: ByteArray? = null
 
@@ -136,12 +139,19 @@ class AdBlocker(private val context: Context) {
      * refait la sienne.
      */
     fun sniffContentType(url: String, headers: Map<String, String>?): String? {
+        /* Le même extrait revient à chaque écoute : la première réponse vaut
+           pour toutes les suivantes. Sans ce cache, chaque passage payait une
+           requête complète — c'était l'autre cause du « ça rame ». */
+        cachedType(url)?.let { return if (it == NONE) null else it }
         var conn: HttpURLConnection? = null
         return try {
             conn = (URL(url).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
-                connectTimeout = 3500
-                readTimeout = 3500
+                /* 1,2 s : au-delà, la lecture attend plus longtemps que la
+                   publicité n'aurait duré. `null` (donc blocage inchangé) vaut
+                   mieux qu'une attente. */
+                connectTimeout = 1200
+                readTimeout = 1200
                 instanceFollowRedirects = false
                 headers?.forEach { (key, value) ->
                     if (!key.equals("Range", true)) runCatching { setRequestProperty(key, value) }
@@ -157,11 +167,22 @@ class AdBlocker(private val context: Context) {
             }
             val type = conn.contentType ?: return null
             lastSilenced = "$type · $url"
+            rememberType(url, type)
             type
         } catch (_: Exception) {
             null
         } finally {
             runCatching { conn?.disconnect() }
+        }
+    }
+
+    /** La décision mémorisée pour une adresse, ou `null` si on ne sait pas encore. */
+    private fun cachedType(url: String): String? = typeCache[url]
+
+    private fun rememberType(url: String, type: String) {
+        runCatching {
+            if (typeCache.size > 512) typeCache.clear()
+            typeCache[url] = type.ifEmpty { NONE }
         }
     }
 
@@ -222,7 +243,25 @@ class AdBlocker(private val context: Context) {
         const val CUSTOM_LIST = "custom_blocklist.txt"
 
         /** Ce que même un bloqueur ne doit pas toucher. */
-        private val NEVER_BLOCK = Regex("podz-content|gew4-spclient", RegexOption.IGNORE_CASE)
+        /**
+         * Ce qu'aucune liste ne doit jamais pouvoir bloquer.
+         *
+         * `podz-content` et `gew4-spclient` sont les serveurs de lecture : les
+         * couper, c'est faire taire toute la musique. `recaptcha` (et l'hôte de
+         * la connexion) vient ensuite, pour une raison mesurée : la page de
+         * connexion de Spotify **utilise reCAPTCHA** (25 occurrences dans ses
+         * scripts), et une liste de filtres qui le bloque transforme le
+         * formulaire en « e-mail ou mot de passe incorrect » — la panne la plus
+         * incompréhensible possible. Une règle de liste ne doit jamais pouvoir
+         * casser la connexion.
+         */
+        /** Valeur du cache pour « on a demandé, il n'y avait pas de type ». */
+        private const val NONE = ""
+
+        private val NEVER_BLOCK = Regex(
+            "podz-content|gew4-spclient|recaptcha|gstatic\\.com/recaptcha|accounts\\.spotify\\.com",
+            RegexOption.IGNORE_CASE
+        )
 
         /** Chemins et hôtes des publicités audio. */
         private val AD_AUDIO = Regex(

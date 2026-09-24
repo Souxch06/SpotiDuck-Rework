@@ -23,6 +23,19 @@
          · « original » = le code de l'application d'origine, repris tel quel
            (l'affichage historique du projet) ;
          · « inject » = la couche SpotiDuck, habillage maison. -->
+    <!-- Connexion : la porte de secours, la fenêtre ouverte par la page, et le
+         cas — mesuré — où Google refuse l'autorisation à un navigateur
+         embarqué. Ce n'est pas un défaut de l'application : c'est une politique
+         de Google, et aucun réglage ne la désactive. Le dire clairement vaut
+         mieux que laisser l'utilisateur devant « Accès bloqué ». -->
+    <string name="login_window_title">Connexion</string>
+    <string name="close">Fermer</string>
+    <string name="login_blocked_title">Google refuse la connexion depuis une application</string>
+    <string name="login_blocked_text">Google n'autorise pas sa page de connexion dans un navigateur embarqué (c'est une règle de Google, pas un défaut de SpotiDuck), et Apple fait de même.\n\nLe chemin qui marche à coup sûr : l'e-mail et le mot de passe. L'application vous affiche le formulaire directement, et la session est gardée sur le téléphone — les prochaines mises à jour ne vous redemanderont rien.</string>
+    <string name="login_blocked_action">Utiliser mon e-mail et mon mot de passe</string>
+    <string name="session_restore">Rétablir la session</string>
+    <string name="session_restored">Session rétablie</string>
+    <string name="session_none">Aucune session de secours</string>
     <string name="diagnostic">Diagnostic</string>
     <string name="diagnostic_title">Ce que la page affiche</string>
     <string name="diagnostic_copy">Copier</string>

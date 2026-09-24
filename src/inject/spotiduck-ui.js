@@ -28,7 +28,17 @@
    were off on tablets.)
    ========================================================================== */
 (function () {
+
   "use strict";
+  /**
+   * La page de connexion e-mail + mot de passe.
+   *
+   * Mesuré en CI : `accounts.spotify.com/fr/login` ne demande que l'e-mail,
+   * `?allow_password=1` affiche les deux champs, et « /login » sur le lecteur
+   * (l'adresse utilisée jusqu'ici) **répond 404** — le bouton « connexion
+   * classique » menait donc à une page d'erreur.
+   */
+  var CLASSIC_LOGIN = "https://accounts.spotify.com/fr/login?allow_password=1";
 
   if (window.SpotiDuckUI && window.SpotiDuckUI.version) return; // idempotent
 
@@ -1098,7 +1108,7 @@
         '<p class="sd-welcome-text">' +
         Settings.labels.welcomeText +
         "</p>" +
-        '<a class="sd-btn sd-welcome-cta" href="/login?allow_password=1">' +
+        '<a class="sd-btn sd-welcome-cta" href="' + CLASSIC_LOGIN + '">' +
         Settings.labels.welcomeCta +
         "</a>" +
         '<p class="sd-welcome-note">' +
@@ -1115,7 +1125,18 @@
       /* ---- login helper + offline banner ---- */
       var loginCta = document.createElement("a");
       loginCta.className = "sd-login-cta";
-      loginCta.href = "/login?allow_password=1";
+      loginCta.href = CLASSIC_LOGIN;
+      /* La navigation passe par la partie native quand elle est là : même
+         adresse, mais chargée par la WebView elle-même, sans dépendre du
+         routeur de Spotify. */
+      loginCta.addEventListener("click", function (event) {
+        try {
+          if (window.AndBridge && AndBridge.openLogin) {
+            event.preventDefault();
+            Bridge.call("openLogin");
+          }
+        } catch (e) {}
+      });
       loginCta.textContent = Settings.labels.classicLogin;
       var offlineBar = document.createElement("div");
       offlineBar.className = "sd-offline-bar";

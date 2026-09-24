@@ -95,6 +95,44 @@ class Bridge(activity: MainActivity) {
     }
 
     /**
+     * L'état de connexion **constaté par la page** : `in` (connecté), `out`
+     * (déconnecté) ou `login` (page de connexion, où être déconnecté est
+     * normal). C'est la seule source fiable : le cookie dit qu'une session a
+     * existé, la page dit si elle vaut encore quelque chose.
+     *
+     * Sert à deux choses : ranger la session dès qu'elle est valable, et jeter
+     * une copie de secours qui ne ramène rien au lieu de la réinjecter à chaque
+     * lancement.
+     */
+    @JavascriptInterface
+    fun loginState(state: String?) {
+        val act = activity.get() ?: return
+        val clean = when (state) {
+            "in" -> "in"
+            "out" -> "out"
+            "login" -> "login"
+            else -> return
+        }
+        act.runOnUiThread { act.onLoginState(clean) }
+    }
+
+    /** Ouvre la page de connexion e-mail + mot de passe, sans détour. */
+    @JavascriptInterface
+    fun openLogin() {
+        val act = activity.get() ?: return
+        act.runOnUiThread { act.openLoginPage() }
+    }
+
+    /**
+     * Nettoie l'état de la page de connexion : les cookies CSRF d'`accounts.spotify.com`
+     * uniquement — jamais `sp_dc` ni `sp_key`. C'est ce qu'il faut quand le
+     * formulaire répond « e-mail ou mot de passe incorrect » alors que les
+     * identifiants sont bons : le jeton de la page ne correspond plus.
+     */
+    @JavascriptInterface
+    fun resetLoginState(): Boolean = activity.get()?.resetLoginPageState() ?: false
+
+    /**
      * Sleep timer / shutdown locks. The UI arms them on playback changes:
      * playing → `manageTSleep(true)` + `manageTShut(false)`, paused → the
      * inverse. Keeping the CPU awake while a track plays is what allows the

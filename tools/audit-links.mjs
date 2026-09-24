@@ -46,6 +46,12 @@ for (const m of runtime.matchAll(/this\.call\(\s*"(\w+)"/g)) usedBridgeNames.add
    l'audit réclamerait la suppression de méthodes bien utilisées. */
 const originalCalls = read("src/original/spotiduck-original.js");
 for (const m of originalCalls.matchAll(/AndBridge\.(\w+)\s*\(/g)) usedBridgeNames.add(m[1]);
+/* La page mobile de Spotify (le mode livré) parle au pont elle aussi : c'est
+   elle qui annonce l'état de connexion et qui demande le nettoyage de l'état du
+   formulaire. Sans cette lecture, l'audit réclamerait la suppression de méthodes
+   bien utilisées. */
+const nativeCalls = read("android/app/src/main/assets/native-mode.js");
+for (const m of nativeCalls.matchAll(/AndBridge\.(\w+)\s*\(/g)) usedBridgeNames.add(m[1]);
 
 for (const name of usedBridgeNames) {
   if (!kotlinMethods.has(name)) errors.push(`Bridge.kt n'expose pas « ${name} » (appelé par la couche injectée)`);
@@ -222,35 +228,63 @@ if (!/isAdAudio/.test(activity) || !/sniffContentType/.test(activity)) {
   errors.push("MainActivity : les publicités audio ne sont plus détectées avant blocage");
 }
 
-/* La session doit survivre à une mise à jour. Trois choses le garantissent, et
+/* La session doit survivre à une mise à jour. Cinq choses le garantissent, et
    chacune peut disparaître sans que rien ne casse visiblement — jusqu'au jour où
    l'utilisateur doit se reconnecter :
      · les cookies ne sont **jamais** effacés (aucun `removeAllCookies`) ;
      · ils sont **écrits sur le disque** au bon moment : fin de page du lecteur,
-       connexion détectée, pause, arrêt — la WebView le fait paresseusement, et
-       une mise à jour tue le processus avant ;
-     · une copie de secours est gardée et remise si la WebView n'a plus rien.
-   Enfin, un lien de connexion doit exister : les boutons sociaux ne fonctionnent
-   pas dans une WebView, et sans le bouton « e-mail et mot de passe » la page de
-   connexion de Spotify n'offre que des impasses. */
+       connexion détectée, mise en arrière-plan, arrêt, mémoire réclamée, arrêt
+       du processus — la WebView le fait paresseusement, et une mise à jour tue
+       le processus avant ;
+     · l'écriture est **synchrone** (`commit`) : `apply()` écrit « plus tard », et
+       « plus tard » n'arrive pas quand le paquet est mis à jour ;
+     · la copie de secours est réinjectée **sans doublon** : deux cookies du même
+       nom (une portée hôte, une portée `.spotify.com`) et le serveur en lit un
+       au hasard — c'est ce qui fait répondre « e-mail ou mot de passe
+       incorrect » à une connexion par ailleurs valable ;
+     · une copie qui ne ramène pas la session est **jetée** : réinjectée à chaque
+       lancement, elle rendrait la panne permanente.
+   Enfin, un lien de connexion doit exister : les boutons sociaux peuvent être
+   refusés par Google dans une WebView, et sans le bouton « e-mail et mot de
+   passe » la page de connexion de Spotify n'offre que des impasses. */
 if (/removeAllCookies|removeSessionCookies/.test(activity)) {
   errors.push("MainActivity : la session est effacée (removeAllCookies) — plus rien ne survivra à une mise à jour");
 }
-for (const need of ["flushCookies", "saveCookies", "restoreCookies", "KEY_COOKIES"]) {
+for (const need of ["flushCookies", "saveSession", "restoreSession", "KEY_SESSION", "invalidateSession", "expireCookie"]) {
   if (!new RegExp(need).test(activity)) errors.push(`MainActivity : ${need} a disparu — la session ne survivra plus à une mise à jour`);
 }
-if (!/restoreCookies\(\)[\s\S]{0,3000}?loadUrl\(/.test(activity)) {
+if (!/putString\(KEY_SESSION[\s\S]{0,400}?\.commit\(\)/.test(activity)) {
+  errors.push("MainActivity : la copie de session n'est plus écrite de façon synchrone (commit) — une mise à jour la tuera");
+}
+if (!/hasSessionCookie\(\)[\s\S]{0,80}?return false/.test(activity)) {
+  errors.push("MainActivity : la session restaurée peut désormais écraser une session vivante");
+}
+if (!/sessionRestored[\s\S]{0,400}?invalidateSession/.test(activity)) {
+  errors.push("MainActivity : une copie de secours qui ne ramène rien n'est plus jetée — elle empoisonnera les connexions suivantes");
+}
+if (!/restoreSession\(\)[\s\S]{0,3000}?loadUrl\(/.test(activity)) {
   errors.push("MainActivity : la session restaurée n'est plus remise avant le chargement de la page");
 }
-const lifecycle = activity.replace(/\s+/g, " ");
-if (!/override fun onPause[\s\S]{0,200}?flushCookies/.test(activity)) {
-  errors.push("MainActivity : les cookies ne sont plus écrits à la mise en arrière-plan");
+if (!/override fun onPause[\s\S]{0,300}?saveSession/.test(activity)) {
+  errors.push("MainActivity : la session n'est plus écrite à la mise en arrière-plan");
 }
-if (!/override fun onStop[\s\S]{0,300}?saveCookies/.test(activity)) {
+if (!/override fun onStop[\s\S]{0,300}?saveSession/.test(activity)) {
   errors.push("MainActivity : la copie de secours n'est plus prise à l'arrêt");
 }
-if (!/url\.contains\("open\.spotify\.com"\)[\s\S]{0,300}?saveCookies/.test(activity)) {
+if (!/override fun onTrimMemory[\s\S]{0,300}?saveSession/.test(activity)) {
+  errors.push("MainActivity : la session n'est plus écrite quand le système réclame de la mémoire");
+}
+if (!/SPOTIFY_SESSION_HOST[\s\S]{0,300}?saveSession/.test(activity)) {
   errors.push("MainActivity : la session n'est plus enregistrée en fin de chargement du lecteur");
+}
+/* Le seul juge de l'état de connexion, c'est la page : le cookie dit qu'une
+   session a existé, la page dit si elle vaut encore quelque chose. */
+if (!/fun onLoginState\(state: String\)/.test(activity) || !/fun loginState\(state: String\?\)/.test(bridgeKt) ||
+    !/onLoginState\(clean\)/.test(bridgeKt)) {
+  errors.push("Bridge/MainActivity : l'état de connexion annoncé par la page n'est plus écouté");
+}
+if (!/resetLoginPageState/.test(activity) || !/csrf/.test(activity)) {
+  errors.push("MainActivity : le nettoyage de l'état du formulaire de connexion a disparu");
 }
 
 /* Les fonctionnalités que SpotiDuck annonce : blocage de publicité (fait),
@@ -302,15 +336,52 @@ if (!/data-sd-appprompt/.test(nativeAsset) || !/APP_PROMPT_TEXT/.test(nativeAsse
 if (!/allow_password=1/.test(nativeAsset) || !/sd-login-help/.test(nativeAsset)) {
   errors.push("native-mode.js : plus rien n'offre la connexion par e-mail sur la page de connexion");
 }
-/* « Continuer avec Google » passe par `window.open` : si la WebView n'ouvre pas
-   de fenêtre **et** que le script ne ramène pas la destination dans la page, le
-   bouton ne fait rien du tout. Les deux moitiés doivent rester. */
-if (!/setSupportMultipleWindows\(true\)/.test(activity) || !/onCreateWindow/.test(activity)) {
-  errors.push("MainActivity : les fenêtres ouvertes par la page ne sont plus ramenées dans la vue");
+/* « Continuer avec Google » ouvre une **vraie fenêtre** : la page appelle
+   `window.open(...)` et attend que cette fenêtre lui rende la main par
+   `window.opener` (mesuré en CI : l'adresse ouverte est
+   `accounts.google.com/v3/signin/identifier?...redirect_uri=accounts.spotify.com/login/google/redirect`).
+   Trois choses doivent rester, et les trois ont été cassées une fois :
+     · la WebView accepte les fenêtres (`setSupportMultipleWindows(true)`) —
+       sans ça, `window.open` ne fait rien du tout : bouton mort ;
+     · elle en ouvre une **vraie** (transport de fenêtre + `onCloseWindow`) —
+       charger l'adresse dans la vue courante rompt le lien entre les deux pages
+       et le retour de connexion n'arrive jamais ;
+     · le script de la page ne **remplace plus** `window.open` : le shim de la
+       2.8.1 faisait exactement ça, et perdait `window.opener`. */
+if (!/setSupportMultipleWindows\(true\)/.test(activity) || !/onCreateWindow/.test(activity) || !/WebViewTransport/.test(activity)) {
+  errors.push("MainActivity : les fenêtres de connexion ne sont plus de vraies fenêtres");
 }
-if (!/__sdNavigate/.test(nativeAsset) || !/window\.open = function/.test(nativeAsset)) {
-  errors.push("native-mode.js : plus rien ne rattrape les fenêtres que Spotify ouvre (connexion Google)");
+if (!/onCloseWindow/.test(activity)) {
+  errors.push("MainActivity : une fenêtre de connexion fermée par la page resterait à l'écran");
 }
+if (/window\.open = function/.test(nativeAsset) || /realOpen/.test(nativeAsset)) {
+  errors.push("native-mode.js : `window.open` est de nouveau remplacé — le lien entre la page et sa fenêtre de connexion est rompu");
+}
+if (!/__sdNavigate/.test(nativeAsset)) {
+  errors.push("native-mode.js : `__sdNavigate` a disparu (les liens internes et la sonde s'en servent)");
+}
+if (!/REFUSAL/.test(activity) || !/login_blocked_action/.test(read("android/app/src/main/res/values/strings.xml"))) {
+  errors.push("MainActivity : le refus de Google n'est plus expliqué à l'utilisateur (ni la porte e-mail proposée)");
+}
+if (!/decodeJsString/.test(activity)) {
+  errors.push("MainActivity : le texte lu dans la page n'est plus décodé (accents JSON) — les refus en français passeraient inaperçus");
+}
+/* La page de connexion de Spotify utilise reCAPTCHA (25 occurrences dans ses
+   scripts, mesuré) : une liste de filtres qui le bloque transforme le formulaire
+   en « e-mail ou mot de passe incorrect ». Ces hôtes ne doivent donc jamais
+   pouvoir être bloqués, quoi qu'ajoute la liste. */
+const blockerKt = read("android/app/src/main/java/com/spotiduck/app/AdBlocker.kt");
+const neverBlock = (blockerKt.match(/private val NEVER_BLOCK[\s\S]{0,400}?\)/) || [""])[0];
+if (!/recaptcha/.test(neverBlock) || !/accounts/.test(neverBlock) || !/spclient/.test(neverBlock)) {
+  errors.push("AdBlocker : reCAPTCHA, la connexion Spotify ou les serveurs de lecture peuvent de nouveau être bloqués");
+}
+if (!/typeCache/.test(blockerKt)) {
+  errors.push("AdBlocker : le type de contenu n'est plus mémorisé — chaque publicité repayait une requête (lecture qui rame)");
+}
+if (!/connectTimeout = 1200/.test(blockerKt)) {
+  errors.push("AdBlocker : le reniflage attend de nouveau 3,5 s — la lecture s'arrête avant la publicité");
+}
+
 if (!/input\[type='password'\]/.test(nativeAsset)) {
   errors.push("native-mode.js : le lien de connexion n'est plus conditionné à l'absence du formulaire");
 }

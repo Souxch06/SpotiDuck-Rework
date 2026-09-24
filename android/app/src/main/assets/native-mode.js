@@ -546,9 +546,26 @@
   window.setTimeout(sweepAll, 400);
   window.setTimeout(sweepAll, 1500);
   window.setTimeout(sweepAll, 4000);
-  /* Spotify repose son bandeau et ses encarts à chaque changement d'écran : le
-     balayage est donc répété, mais borné (900 éléments, des motifs courts). */
-  window.setInterval(sweepAll, 2000);
+
+  /* Spotify repose son bandeau et ses encarts à chaque changement d'écran, et
+     redessine en permanence. Relancer un balayage complet toutes les deux
+     secondes coûtait cher pour rien — c'est une des causes du « ça rame ». On
+     ne relance donc que si la page a bougé depuis le dernier passage, et au
+     pire toutes les douze secondes ; écran éteint, on ne fait rien du tout. */
+  var sweepPass = 0;
+  var sweepSignature = "";
+  function sweepCycle() {
+    if (document.hidden) return;
+    sweepPass++;
+    var signature = "?";
+    try {
+      signature = (document.body ? document.body.childElementCount : 0) + "|" + window.location.pathname;
+    } catch (e) {}
+    if (signature === sweepSignature && sweepPass % 6 !== 0) return;
+    sweepSignature = signature;
+    sweepAll();
+  }
+  window.setInterval(sweepCycle, 2000);
 
   /* ------------------------------------------------------------------ *
    * 2-bis. Connexion : ne jamais rester devant une page sans issue
@@ -614,57 +631,91 @@
     }
   }
 
+  /** L'adresse de la connexion e-mail + mot de passe. Mesuré en CI : c'est la
+      seule page qui affiche les deux champs d'emblée (`/fr/login` ne demande que
+      l'e-mail, `open.spotify.com/login` répond 404). */
+  var LOGIN_URL = "https://accounts.spotify.com/fr/login?allow_password=1";
+
   function showLoginHelp() {
-    if (!isLoginPage()) {
+    if (!isLoginPage() || emailField() || passwordAllowed() || loginHelpHidden()) {
       removeLoginHelp();
       return;
     }
-    /* Un champ de mot de passe est là : Spotify propose déjà le formulaire. */
-    if (emailField() || passwordAllowed()) {
-      removeLoginHelp();
-      return;
+    var bar = document.getElementById("sd-login-help");
+    if (!bar) {
+      bar = document.createElement("div");
+      bar.id = "sd-login-help";
+      bar.setAttribute("data-sd", "login-help");
+      bar.style.cssText =
+        "position:fixed;left:0;right:0;bottom:0;z-index:2147483000;padding:12px 16px 20px;" +
+        "background:#121212;border-top:1px solid #2a2a2a;font-family:inherit;text-align:center";
+
+      var note = document.createElement("div");
+      note.style.cssText = "color:#a7a7a7;font-size:12px;line-height:1.4;margin-bottom:8px";
+      note.textContent =
+        "Ici, la connexion par e-mail fonctionne toujours. Les boutons Google, Apple et Facebook " +
+        "peuvent être refusés par Google dans une application — l'application ouvre leur fenêtre " +
+        "et vous le dira si ça arrive.";
+
+      var link = document.createElement("a");
+      link.setAttribute("data-sd", "login-help-button");
+      /* Adresse absolue : elle ne dépend pas de la page où on se trouve (la page
+         de connexion du lecteur, elle, répond 404). */
+      link.href = LOGIN_URL;
+      link.textContent = "Utiliser mon e-mail et mon mot de passe";
+      link.style.cssText =
+        "display:block;padding:12px;border-radius:30px;background:#1ed760;color:#000;" +
+        "font-weight:700;text-decoration:none;font-size:15px";
+
+      /* Un « masquer » : c'est notre bandeau, pas celui de Spotify, et personne
+         n'a à le subir s'il ne veut pas. Masqué, il ne revient plus. */
+      var hide = document.createElement("a");
+      hide.setAttribute("data-sd", "login-help-hide");
+      hide.href = "#";
+      hide.textContent = "Masquer";
+      hide.style.cssText =
+        "display:inline-block;margin-top:8px;color:#a7a7a7;font-size:12px;text-decoration:underline";
+      hide.addEventListener("click", function (e) {
+        e.preventDefault();
+        try {
+          window.sessionStorage.setItem("sd-login-help", "hidden");
+        } catch (err) {}
+        removeLoginHelp();
+      });
+
+      bar.appendChild(note);
+      bar.appendChild(link);
+      bar.appendChild(hide);
+      (document.body || document.documentElement).appendChild(bar);
     }
-    if (loginHelpHidden()) {
-      removeLoginHelp();
-      return;
+
+    /* Le bouton « réessayer proprement » n'a de sens qu'après une erreur du
+       formulaire (et seulement si l'application peut nettoyer l'état). */
+    var retry = bar.querySelector("[data-sd='login-help-reset']");
+    var canReset = !!(window.AndBridge && AndBridge.resetLoginState);
+    if (credentialsError() && canReset && !retry) {
+      retry = document.createElement("a");
+      retry.setAttribute("data-sd", "login-help-reset");
+      retry.href = "#";
+      retry.textContent = "Réessayer proprement (nettoyer l'état de connexion)";
+      retry.style.cssText =
+        "display:inline-block;margin-top:8px;margin-right:12px;color:#1ed760;font-size:12px;" +
+        "text-decoration:underline";
+      retry.addEventListener("click", function (e) {
+        e.preventDefault();
+        var cleaned = false;
+        try {
+          cleaned = AndBridge.resetLoginState();
+        } catch (err) {}
+        retry.textContent = cleaned ? "État nettoyé — rechargement…" : "Rechargement…";
+        window.setTimeout(function () {
+          window.location.reload();
+        }, 350);
+      });
+      bar.insertBefore(retry, bar.lastChild);
+    } else if (!credentialsError() && retry && retry.parentNode) {
+      retry.parentNode.removeChild(retry);
     }
-    if (document.getElementById("sd-login-help")) return;
-    var bar = document.createElement("div");
-    bar.id = "sd-login-help";
-    bar.setAttribute("data-sd", "login-help");
-    bar.style.cssText =
-      "position:fixed;left:0;right:0;bottom:0;z-index:2147483000;padding:12px 16px 20px;" +
-      "background:#121212;border-top:1px solid #2a2a2a;font-family:inherit;text-align:center";
-    var note = document.createElement("div");
-    note.style.cssText = "color:#a7a7a7;font-size:12px;line-height:1.4;margin-bottom:8px";
-    note.textContent =
-      "Les boutons Google/Apple/Facebook ne fonctionnent pas dans l'application. La connexion par e-mail, si.";
-    var link = document.createElement("a");
-    link.setAttribute("data-sd", "login-help-button");
-    link.href = "?allow_password=1";
-    link.textContent = "Utiliser mon e-mail et mon mot de passe";
-    link.style.cssText =
-      "display:block;padding:12px;border-radius:30px;background:#1ed760;color:#000;" +
-      "font-weight:700;text-decoration:none;font-size:15px";
-    /* Un « masquer » : c'est notre bandeau, pas celui de Spotify, et personne
-       n'a à le subir s'il ne veut pas. Masqué, il ne revient plus. */
-    var hide = document.createElement("a");
-    hide.setAttribute("data-sd", "login-help-hide");
-    hide.href = "#";
-    hide.textContent = "Masquer";
-    hide.style.cssText =
-      "display:inline-block;margin-top:8px;color:#a7a7a7;font-size:12px;text-decoration:underline";
-    hide.addEventListener("click", function (e) {
-      e.preventDefault();
-      try {
-        window.sessionStorage.setItem("sd-login-help", "hidden");
-      } catch (err) {}
-      removeLoginHelp();
-    });
-    bar.appendChild(note);
-    bar.appendChild(link);
-    bar.appendChild(hide);
-    (document.body || document.documentElement).appendChild(bar);
   }
 
   /**
@@ -682,13 +733,114 @@
     } catch (e) {}
   }
 
+  /* ------------------------------------------------------------------ *
+   * 2-quater. Ce que la page dit de la connexion
+   *
+   * Le cookie dit qu'une session a existé ; la page seule dit si elle vaut
+   * encore quelque chose. L'application s'en sert pour ranger la session dès
+   * qu'elle est valable, et pour **jeter** une copie de secours qui ne ramène
+   * rien — au lieu de la réinjecter à chaque lancement et d'empoisonner toutes
+   * les connexions suivantes.
+   * ------------------------------------------------------------------ */
+
+  /** Repères d'une page connectée (profil, lecteur en bas). */
+  function signedIn() {
+    try {
+      return !!document.querySelector(
+        "[data-testid='user-widget-link'],[data-testid='user-widget-dropdown']," +
+          "[data-testid='now-playing-widget'],[data-testid='now-playing-bar']," +
+          "[data-testid='avatar'],a[href^='/user/']"
+      );
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /**
+   * Le texte de la page. `innerText` n'existe pas dans tous les moteurs (le banc
+   * d'essai, par exemple) : on retombe alors sur `textContent`, sinon aucune
+   * détection par texte ne fonctionnerait ailleurs que dans la WebView.
+   */
+  function bodyText() {
+    var body = document.body;
+    if (!body) return "";
+    try {
+      if (typeof body.innerText === "string" && body.innerText) return body.innerText;
+    } catch (e) {}
+    return body.textContent || "";
+  }
+
+  /** Repères d'une page déconnectée (invitation à s'inscrire, bouton connexion). */
+  function signedOut() {
+    var text = "";
+    try {
+      text = bodyText().slice(0, 4000);
+    } catch (e) {
+      text = "";
+    }
+    if (/s'inscrire gratuitement|sign up free|inscription gratuite/i.test(text)) return true;
+    try {
+      return !!document.querySelector("button[data-testid='login-button'],a[href*='/login']");
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /** `in`, `out`, ou `login` (page de connexion : être déconnecté y est normal). */
+  function loginState() {
+    if (isLoginPage()) return "login";
+    if (signedIn()) return "in";
+    if (signedOut()) return "out";
+    return "inconnu";
+  }
+
+  var reportedState = null;
+  var reportCount = 0;
+  function reportLoginState() {
+    var state = loginState();
+    /* Le même constat est envoyé trois fois (l'application peut arriver après
+       le premier chargement), puis seulement quand il change. */
+    if (state === reportedState && reportCount > 2) return;
+    reportedState = state;
+    reportCount++;
+    try {
+      if (window.AndBridge && AndBridge.loginState) AndBridge.loginState(state);
+    } catch (e) {}
+  }
+
+  /* ------------------------------------------------------------------ *
+   * 2-quinquies. Le formulaire a-t-il répondu une erreur ?
+   *
+   * « E-mail ou mot de passe incorrect » arrive aussi quand ce n'est **pas** le
+   * mot de passe : un jeton de page (CSRF) resté d'une visite précédente suffit.
+   * Dans ce cas précis on propose de nettoyer l'état de connexion et de
+   * réessayer, au lieu de laisser l'utilisateur retenter indéfiniment.
+   * ------------------------------------------------------------------ */
+
+  function credentialsError() {
+    var text = "";
+    try {
+      text = bodyText().slice(0, 4000);
+    } catch (e) {
+      return false;
+    }
+    return /incorrect|invalide|n'est pas valide|wrong|invalid|erreur inattendue|something went wrong|une erreur est survenue/i.test(
+      text
+    );
+  }
+
   var loginTick = function () {
+    /* Écran éteint, page en arrière-plan : rien à faire, et c'est du temps
+       processeur pris à la lecture. */
+    if (document.hidden) return;
+    reportLoginState();
     acceptFacebookConsent();
     showLoginHelp();
   };
 
-  /* Pour le banc d'essai : la vérification du formulaire de connexion. */
+  /* Pour le banc d'essai : l'état de connexion et la vérification du formulaire. */
   window.__sdLoginTick = loginTick;
+  window.__sdLoginState = loginState;
 
   loginTick();
   window.setTimeout(loginTick, 600);
@@ -697,14 +849,21 @@
   window.setInterval(loginTick, 2500);
 
   /* ------------------------------------------------------------------ *
-   * 2-ter. Les fenêtres ouvertes par la page (connexion Google, Apple…)
+   * 2-ter. Les fenêtres de la page (connexion Google, Apple…)
    *
-   * « Continuer avec Google » n'est pas toujours un lien : chez Spotify c'est
-   * souvent `window.open(...)`. La WebView est réglée pour ne pas créer de
-   * seconde fenêtre (c'est ce qui garde les `target="_blank"` dans
-   * l'application), donc `window.open` ne faisait **rien** — le bouton semblait
-   * mort. Ici, on ouvre la destination dans la page elle-même : même écran, même
-   * session, et le retour de connexion retombe au bon endroit.
+   * « Continuer avec Google » ouvre une **seconde fenêtre** : la page appelle
+   * `window.open(...)` et attend que cette fenêtre lui rende la main
+   * (`window.opener`). Mesuré en CI : l'adresse ouverte est bien
+   * `accounts.google.com/v3/signin/identifier?client_id=1046568431490-…&`
+   * `redirect_uri=https://accounts.spotify.com/login/google/redirect`.
+   *
+   * On ne touche donc **plus** à `window.open`. La 2.8.1 le remplaçait par une
+   * navigation dans la page courante : le lien entre les deux pages était
+   * rompu, et le retour de connexion n'arrivait jamais. La WebView accepte
+   * maintenant les fenêtres et en ouvre une vraie — mêmes cookies, même agent
+   * (voir `SpotiChrome` dans MainActivity).
+   *
+   * `__sdNavigate` reste : nos propres liens s'en servent, et la sonde.
    * ------------------------------------------------------------------ */
   window.__sdNavigate = function (url) {
     try {
@@ -715,17 +874,6 @@
       } catch (err) {}
     }
   };
-
-  (function () {
-    var realOpen = window.open;
-    window.open = function (url) {
-      if (typeof url === "string" && url && url !== "about:blank") {
-        window.__sdNavigate(url);
-        return window;
-      }
-      return realOpen ? realOpen.apply(window, arguments) : null;
-    };
-  })();
 
   /* ------------------------------------------------------------------ *
    * 2-ter. Les onglets de la barre du bas

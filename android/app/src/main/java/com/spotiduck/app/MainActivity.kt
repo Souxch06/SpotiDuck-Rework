@@ -3,6 +3,7 @@ package com.spotiduck.app
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.ClipData
+import android.content.ComponentCallbacks2
 import android.content.ClipboardManager
 import android.content.ComponentName
 import android.content.Intent
@@ -17,16 +18,24 @@ import android.os.Message
 import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
+import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.JsPromptResult
+import android.webkit.JsResult
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.ProgressBar
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AlertDialog
@@ -77,6 +86,20 @@ class MainActivity : AppCompatActivity() {
     private var lastHandledLink: String = ""
     /** Horodatage du dernier enregistrement des cookies sur le disque. */
     private var lastCookieFlush: Long = 0L
+    /** Horodatage du dernier enregistrement de la session (copie de secours). */
+    private var lastSessionSave: Long = 0L
+    /** Dernière copie écrite : on ne réécrit pas la même chose toutes les secondes. */
+    private var sessionHash: String = ""
+    /** La page a confirmé la connexion : la copie de secours vaut la peine. */
+    private var sessionConfirmed = false
+    /** Une copie vient d'être réinjectée dans ce lancement (voir `onLoginState`). */
+    private var sessionRestored = false
+    /** Une seule tentative de récupération automatique par lancement. */
+    private var sessionRecoveryTried = false
+    /** Instant du lancement (voir `justLaunched`). */
+    private var launchAt: Long = 0L
+    /** Les fenêtres ouvertes par la page (connexion Google, Apple…) : empilées. */
+    private val loginWindows = ArrayList<LoginWindow>()
     private var powerManager: PowerManager? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var shutdownRunnable: Runnable? = null
@@ -90,6 +113,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
+        launchAt = System.currentTimeMillis()
         uiMode = storedUiMode()
         powerManager = getSystemService(POWER_SERVICE) as? PowerManager
         adBlocker = AdBlocker(this).also { it.loadAsync() }
@@ -173,7 +197,11 @@ class MainActivity : AppCompatActivity() {
            qui tue le processus avant l'écriture sur disque, réinstallation,
            nettoyage par le système), on remet celle qu'on avait sauvegardée.
            Sans ça, chaque mise à jour demandait de se reconnecter. */
-        restoreCookies()
+        restoreSession()
+
+        /* L'application arrive parfois déconnectée alors que la copie de secours
+           est là : `onLoginState("out")` la réinjecte alors une fois, et jette
+           la copie si elle ne ramène rien. */
 
         /* La WebView est posée dans un conteneur : c'est ce conteneur qui
            reçoit la place des barres système dans le mode mobile (voir
@@ -303,11 +331,9 @@ class MainActivity : AppCompatActivity() {
                    posés ou rafraîchis. On les écrit sur le disque **tout de
                    suite** (la WebView le fait paresseusement, et une mise à jour
                    tue le processus avant) et on garde une copie de secours. */
-                /* La session se pose sur `accounts.spotify.com` et vit sur
-                   `open.spotify.com` : les deux pages méritent l'enregistrement. */
-                if (url != null && (url.contains("open.spotify.com") || url.contains("accounts.spotify.com"))) {
+                if (url != null && SPOTIFY_SESSION_HOST.containsMatchIn(url)) {
                     flushCookies()
-                    saveCookies()
+                    saveSession("fin de chargement")
                 }
                 if (uiMode != MODE_ORIGINAL) view.evaluateJavascript(VIEWPORT_META_JS, null)
                 val script = scriptFor(uiMode)
@@ -330,48 +356,328 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Le client des fenêtres de la page.
+     *
+     * « Continuer avec Google » (et Apple, et Facebook) ouvre une **seconde
+     * fenêtre** : Spotify appelle `window.open(...)`, y joue l'autorisation, et
+     * attend que cette fenêtre lui rende la main (`window.opener`). Une WebView
+     * qui n'accepte pas les fenêtres rend le bouton inerte — c'était la 2.8.0.
+     * Une WebView qui charge l'adresse dans la vue courante casse le lien entre
+     * les deux pages — c'était la 2.8.1, et le retour de connexion n'arrivait
+     * plus. Mesuré en CI : la page de connexion ouvre bien
+     * `accounts.google.com/v3/signin/identifier?client_id=1046568431490-…&redirect_uri=https://accounts.spotify.com/login/google/redirect`.
+     *
+     * Ici, la fenêtre demandée est **réellement** une fenêtre : une seconde
+     * WebView posée par-dessus la première, même profil (donc mêmes cookies) et
+     * même agent. Elle se ferme quand la page la ferme, et le retour de
+     * connexion retombe alors dans la vue principale.
+     */
     private fun installWebChromeClient() {
-        webView.webChromeClient = object : WebChromeClient() {
+        webView.webChromeClient = SpotiChrome(webView, isPopup = false)
+    }
 
-            /**
-             * Une fenêtre demandée par la page (connexion Google, Apple…) est
-             * chargée **dans la vue courante** : l'utilisateur ne quitte pas
-             * l'application, et le retour de connexion retombe dans la même
-             * session. Le `WebView` temporaire ne sert qu'à recevoir la première
-             * adresse ; il est détruit aussitôt.
-             */
-            override fun onCreateWindow(
-                view: WebView,
-                isDialog: Boolean,
-                isUserGesture: Boolean,
-                resultMsg: Message
-            ): Boolean {
-                val transport = resultMsg.obj as? WebView.WebViewTransport ?: return false
-                val opener = WebView(this@MainActivity)
-                opener.settings.javaScriptEnabled = true
-                opener.webViewClient = object : WebViewClient() {
-                    override fun shouldOverrideUrlLoading(
-                        opened: WebView,
-                        request: WebResourceRequest
-                    ): Boolean {
-                        val target = request.url?.toString()
-                        if (!target.isNullOrBlank() && target != "about:blank") {
-                            webView.loadUrl(target)
-                        }
-                        opened.destroy()
-                        return true
-                    }
-                }
-                transport.webView = opener
-                resultMsg.sendToTarget()
+    /** Ce que la page a le droit de demander au navigateur. */
+    private inner class SpotiChrome(
+        private val host: WebView,
+        private val isPopup: Boolean
+    ) : WebChromeClient() {
+
+        override fun onCreateWindow(
+            view: WebView,
+            isDialog: Boolean,
+            isUserGesture: Boolean,
+            resultMsg: Message
+        ): Boolean {
+            val transport = resultMsg.obj as? WebView.WebViewTransport ?: return false
+            val popup = buildPopupWebView()
+            transport.webView = popup
+            resultMsg.sendToTarget()
+            showLoginWindow(popup)
+            return true
+        }
+
+        override fun onCloseWindow(window: WebView) {
+            if (window === webView) return
+            closeLoginWindow(window)
+        }
+
+        override fun onProgressChanged(view: WebView, newProgress: Int) {
+            if (!isPopup) return
+            loginWindows.firstOrNull { it.web === view }?.let { entry ->
+                entry.progress.progress = newProgress
+                entry.progress.visibility = if (newProgress >= 100) View.GONE else View.VISIBLE
+            }
+        }
+
+        override fun onReceivedTitle(view: WebView, title: CharSequence?) {
+            if (!isPopup) return
+            loginWindows.firstOrNull { it.web === view }?.title?.text = title ?: getString(R.string.login_window_title)
+        }
+
+        /**
+         * Les boîtes de la page (`alert`, `confirm`, `prompt`). Sans elles, une
+         * page qui en utilise une attend une réponse qui n'arrive jamais : la
+         * WebView se bloque, et rien ne l'explique à l'écran.
+         */
+        override fun onJsAlert(view: WebView, url: String?, message: String?, result: JsResult?): Boolean {
+            if (message == null || result == null) return false
+            AlertDialog.Builder(this@MainActivity)
+                .setMessage(message)
+                .setPositiveButton(android.R.string.ok) { _, _ -> result.confirm() }
+                .setOnCancelListener { result.cancel() }
+                .show()
+            return true
+        }
+
+        override fun onJsConfirm(view: WebView, url: String?, message: String?, result: JsResult?): Boolean {
+            if (message == null || result == null) return false
+            AlertDialog.Builder(this@MainActivity)
+                .setMessage(message)
+                .setPositiveButton(android.R.string.ok) { _, _ -> result.confirm() }
+                .setNegativeButton(android.R.string.cancel) { _, _ -> result.cancel() }
+                .setOnCancelListener { result.cancel() }
+                .show()
+            return true
+        }
+
+        override fun onJsPrompt(
+            view: WebView,
+            url: String?,
+            message: String?,
+            defaultValue: String?,
+            result: JsPromptResult?
+        ): Boolean {
+            if (message == null || result == null) return false
+            val field = EditText(this@MainActivity).apply { setText(defaultValue ?: "") }
+            AlertDialog.Builder(this@MainActivity)
+                .setMessage(message)
+                .setView(field)
+                .setPositiveButton(android.R.string.ok) { _, _ -> result.confirm(field.text.toString()) }
+                .setNegativeButton(android.R.string.cancel) { _, _ -> result.cancel() }
+                .setOnCancelListener { result.cancel() }
+                .show()
+            return true
+        }
+
+        override fun onConsoleMessage(msg: android.webkit.ConsoleMessage): Boolean {
+            Log.d("SpotiDuckJS", "${msg.message()} (${msg.sourceId()}:${msg.lineNumber()}) [${if (isPopup) "fenêtre" else "page"}]")
+            return true
+        }
+    }
+
+    /**
+     * La seconde WebView : mêmes réglages que la vue principale, parce que c'est
+     * la même session qui continue dedans. L'agent compte double ici : Google
+     * juge l'agent annoncé, et un agent différent entre la page et sa fenêtre
+     * suffit à faire échouer l'autorisation.
+     */
+    private fun buildPopupWebView(): WebView = WebView(this).apply {
+        settings.apply {
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            databaseEnabled = true
+            mediaPlaybackRequiresUserGesture = false
+            userAgentString = userAgentFor(uiMode)
+            setSupportMultipleWindows(true)
+            javaScriptCanOpenWindowsAutomatically = true
+            loadWithOverviewMode = true
+            useWideViewPort = true
+            builtInZoomControls = false
+            displayZoomControls = false
+            setSupportZoom(false)
+            textZoom = 100
+            cacheMode = WebSettings.LOAD_DEFAULT
+            mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            saveFormData = false
+            savePassword = false
+        }
+        setBackgroundColor(appBg)
+        CookieManager.getInstance().setAcceptCookie(true)
+        CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+        webChromeClient = SpotiChrome(this, isPopup = true)
+        webViewClient = object : WebViewClient() {
+            /** Une fenêtre de connexion ne sort jamais de l'application. */
+            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                val scheme = request.url?.scheme?.lowercase() ?: return false
+                if (scheme == "http" || scheme == "https") return false
+                val web = spotifyDeepLinkToWeb(request.url)
+                if (web != null) view.loadUrl(web)
                 return true
             }
-            override fun onConsoleMessage(msg: android.webkit.ConsoleMessage): Boolean {
-                Log.d("SpotiDuckJS", "${msg.message()} (${msg.sourceId()}:${msg.lineNumber()})")
-                return true
+
+            override fun onPageFinished(view: WebView, url: String?) {
+                watchLoginWindowPage(view, url)
             }
         }
     }
+
+    /**
+     * Ce que devient la fenêtre de connexion, page après page.
+     *
+     *  · elle revient au lecteur : l'autorisation a abouti, la session est
+     *    posée dans le pot commun — on la range tout de suite, on ferme la
+     *    fenêtre et on recharge la vue principale ;
+     *  · elle tombe sur un refus de Google : on l'explique en français, avec la
+     *    seule issue qui reste (e-mail + mot de passe), au lieu de laisser
+     *    l'utilisateur devant une page d'erreur en anglais.
+     */
+    private fun watchLoginWindowPage(view: WebView, url: String?) {
+        if (url.isNullOrBlank()) return
+        val host = runCatching { Uri.parse(url).host ?: "" }.getOrDefault("")
+        if (host == "open.spotify.com") {
+            loginReturned = true
+            flushCookies(force = true)
+            saveSession("retour de connexion", force = true)
+            closeLoginWindow(view)
+            return
+        }
+        if (!REFUSING_HOST.containsMatchIn(host)) return
+        view.evaluateJavascript("document.body?document.body.innerText.slice(0,900):''") { raw ->
+            if (REFUSAL.containsMatchIn(decodeJsString(raw))) offerPasswordLogin()
+        }
+    }
+
+    /** Vrai quand une fenêtre de connexion est revenue sur le lecteur. */
+    private var loginReturned = false
+
+    /** Une seule explication par fenêtre : pas de dialogue en rafale. */
+    private var passwordHelpShown = false
+
+    /** `sp_dc` était-il déjà là quand la fenêtre s'est ouverte ? */
+    private var sessionCookieBeforePopup = false
+
+    /** Pose la fenêtre de connexion par-dessus la vue principale. */
+    private fun showLoginWindow(popup: WebView) {
+        val dp = resources.displayMetrics.density
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#121212"))
+        }
+        val head = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding((16 * dp).toInt(), (10 * dp).toInt(), (6 * dp).toInt(), (10 * dp).toInt())
+        }
+        val title = TextView(this).apply {
+            text = getString(R.string.login_window_title)
+            setTextColor(Color.WHITE)
+            textSize = 15f
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        val close = TextView(this).apply {
+            text = getString(R.string.close)
+            setTextColor(Color.parseColor("#1ed760"))
+            textSize = 15f
+            setPadding((16 * dp).toInt(), (6 * dp).toInt(), (16 * dp).toInt(), (6 * dp).toInt())
+            setOnClickListener { closeLoginWindow(popup) }
+        }
+        head.addView(title, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        head.addView(close)
+        val progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100
+            visibility = View.VISIBLE
+        }
+        bar.addView(
+            head,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        )
+        bar.addView(progress, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (3 * dp).toInt()))
+        bar.addView(popup, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+
+        val dialog = AlertDialog.Builder(this)
+            .setView(bar)
+            .setCancelable(false)
+            .create()
+        dialog.setOnKeyListener { _, keyCode, event ->
+            if (keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_UP) {
+                closeLoginWindow(popup)
+                true
+            } else {
+                false
+            }
+        }
+        loginReturned = false
+        passwordHelpShown = false
+        sessionCookieBeforePopup = hasSessionCookie()
+        loginWindows.add(LoginWindow(dialog, popup, title, progress))
+        dialog.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        dialog.show()
+        Log.i(TAG, "fenêtre de connexion ouverte (${loginWindows.size} à l'écran)")
+    }
+
+    /** Ferme une fenêtre de connexion — et range la session si elle a abouti. */
+    private fun closeLoginWindow(web: WebView) {
+        val entry = loginWindows.firstOrNull { it.web === web } ?: return
+        loginWindows.remove(entry)
+        runCatching { entry.dialog.dismiss() }
+        runCatching { entry.web.destroy() }
+        val loggedInNow = hasSessionCookie()
+        if (loginReturned || (loggedInNow && !sessionCookieBeforePopup)) {
+            sessionConfirmed = loggedInNow
+            flushCookies(force = true)
+            saveSession("connexion terminée", force = true)
+            webView.reload()
+        }
+    }
+
+    /** Tout fermer (le bouton retour de la fenêtre, ou une connexion refusée). */
+    private fun closeAllLoginWindows() {
+        loginWindows.map { it.web }.forEach { closeLoginWindow(it) }
+    }
+
+    /** Une fenêtre de connexion ouverte par la page, et ses repères à l'écran. */
+    private class LoginWindow(
+        val dialog: AlertDialog,
+        val web: WebView,
+        val title: TextView,
+        val progress: ProgressBar
+    )
+
+    /**
+     * Une chaîne renvoyée par `evaluateJavascript` est du **JSON** : les accents
+     * y sont échappés (`\u00e9`). Sans les décoder, on ne reconnaîtrait pas le
+     * refus de Google écrit en français.
+     */
+    private fun decodeJsString(raw: String?): String {
+        if (raw == null) return ""
+        val body = raw.trim().removePrefix("\"").removeSuffix("\"")
+        return body
+            .replace(Regex("""\\u([0-9a-fA-F]{4})""")) { m ->
+                m.groupValues[1].toInt(16).toChar().toString()
+            }
+            .replace("""\n""", " ")
+            .replace("\\\"", "\"")
+            .replace("\\\\", "\\")
+    }
+
+    /**
+     * Google refuse l'autorisation aux navigateurs embarqués : c'est une
+     * politique de Google, il n'y a pas de réglage qui la désactive. Reste la
+     * porte e-mail/mot de passe — on l'ouvre, et on le dit clairement.
+     */
+    private fun offerPasswordLogin() {
+        if (passwordHelpShown) return
+        passwordHelpShown = true
+        runCatching {
+            AlertDialog.Builder(this)
+                .setTitle(R.string.login_blocked_title)
+                .setMessage(R.string.login_blocked_text)
+                .setPositiveButton(R.string.login_blocked_action) { _, _ ->
+                    closeAllLoginWindows()
+                    openLoginPage()
+                }
+                .setNegativeButton(R.string.close, null)
+                .show()
+        }
+    }
+
+    /** La porte de connexion, e-mail et mot de passe directement affichés. */
+    fun openLoginPage() {
+        webView.loadUrl(LOGIN_URL)
+    }
+
 
     /**
      * Deux régimes, selon le mode, parce que les pages ne savent pas les mêmes
@@ -465,12 +771,23 @@ class MainActivity : AppCompatActivity() {
                connexion. S'il est là, la mise à jour suivante ne demandera rien ;
                s'il manque alors qu'une copie existe, c'est `restoreCookies` qui
                travaille. */
-            val cookies = runCatching {
-                CookieManager.getInstance().getCookie(WEB_BASE) ?: ""
-            }.getOrDefault("")
-            val saved = prefs().getString(KEY_COOKIES, null)?.contains("sp_dc=") == true
-            val sessionLine = "\n\nsession : sp_dc " + (if (cookies.contains("sp_dc=")) "present" else "absent") +
-                " · copie de secours " + (if (saved) "oui" else "non")
+            val names = cookieNames(WEB_BASE)
+            val savedAt = prefs().getLong(KEY_SESSION_AT, 0L)
+            val age = if (savedAt == 0L) "" else {
+                val minutes = (System.currentTimeMillis() - savedAt) / 60_000L
+                if (minutes < 90) " (il y a ${minutes} min)" else " (il y a ${minutes / 60} h)"
+            }
+            val backup = when {
+                readSession() != null -> "oui$age"
+                prefs().getString(KEY_SESSION, null) == null -> "non"
+                else -> "jetée (" + (prefs().getString(KEY_SESSION_INVALID, "") ?: "") + ")"
+            }
+            val sessionLine = "\n\nsession : sp_dc " +
+                (if (names.contains("sp_dc")) "présent" else "absent") +
+                " · " + names.size + " cookies" +
+                (if (names.isEmpty()) "" else " (" + names.take(6).joinToString(", ") + ")") +
+                "\ncopie de secours : " + backup +
+                (if (sessionConfirmed) " · page connectée" else "")
             val ad = buildString {
                 append("\n\npublicités muettes : ").append(adBlocker.silenced.get())
                 append(" · hôtes bloqués : ").append(adBlocker.ruleCount)
@@ -483,6 +800,9 @@ class MainActivity : AppCompatActivity() {
                 .setTitle(getString(R.string.diagnostic_title))
                 .setMessage(text)
                 .setPositiveButton(android.R.string.ok, null)
+                .setNegativeButton(R.string.session_restore) { _, _ ->
+                    Toast.makeText(this, restoreSessionManually(), Toast.LENGTH_LONG).show()
+                }
                 .setNeutralButton(R.string.diagnostic_copy) { _, _ ->
                     val clip = getSystemService(ClipboardManager::class.java)
                     clip?.setPrimaryClip(ClipData.newPlainText("SpotiDuck", text))
@@ -677,17 +997,29 @@ class MainActivity : AppCompatActivity() {
 
     /* ------------------------------------------------------------------ *
      * La session : écrite sur le disque, et gardée en secours
+     *
+     * Ce qui est en jeu, c'est `sp_dc` — le cookie qui porte la connexion. La
+     * WebView l'écrit **paresseusement**, et une mise à jour tue le processus :
+     * ce qui n'a pas été écrit est perdu, et l'utilisateur se retrouve
+     * déconnecté. On écrit donc la session nous-mêmes, à chaque occasion.
+     *
+     * Trois règles, apprises à la dure — chacune corrige un défaut réel :
+     *
+     *  1. **aucun doublon** : un cookie réinjecté alors qu'il existe déjà sous
+     *     l'autre portée (hôte seul d'un côté, `.spotify.com` de l'autre) laisse
+     *     deux cookies du même nom ; le serveur en lit un au hasard. C'est
+     *     exactement ce qui fait répondre « e-mail ou mot de passe incorrect » à
+     *     une connexion par ailleurs valable. On expire donc la ou les variantes
+     *     existantes avant d'écrire la nôtre.
+     *  2. **écriture synchrone** (`commit`) : une mise à jour peut tuer le
+     *     processus dans la milliseconde qui suit ; `apply()` écrit « plus
+     *     tard », c'est-à-dire parfois jamais.
+     *  3. **une copie qui ne ramène pas la session est jetée**. Sinon elle est
+     *     réinjectée à chaque lancement et empoisonne toutes les connexions
+     *     suivantes — la panne devient permanente et incompréhensible.
      * ------------------------------------------------------------------ */
 
-    /**
-     * Force l'écriture des cookies sur le disque.
-     *
-     * La WebView garde ses cookies en mémoire et les écrit quand elle veut :
-     * un processus tué avant (mise à jour, arrêt forcé, gestionnaire de
-     * batterie) perd ce qui n'a pas été écrit — c'est-à-dire la connexion.
-     * Cette méthode est donc banale mais elle est **la** raison pour laquelle
-     * la session survit maintenant.
-     */
+    /** Force l'écriture des cookies sur le disque. */
     private fun flushCookies(force: Boolean = false) {
         val now = System.currentTimeMillis()
         /* `flush()` écrit tout le magasin sur le disque : inutile de le refaire
@@ -699,69 +1031,211 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** Le pot de cookies contient-il encore la session ? */
+    private fun hasSessionCookie(url: String = WEB_BASE): Boolean = runCatching {
+        CookieManager.getInstance().getCookie(url)?.contains("sp_dc=") == true
+    }.getOrDefault(false)
+
+    /** Les **noms** des cookies d'une adresse (jamais leurs valeurs). */
+    private fun cookieNames(url: String): List<String> = runCatching {
+        CookieManager.getInstance().getCookie(url)
+            ?.split("; ")
+            ?.mapNotNull { it.substringBefore("=").trim().ifEmpty { null } }
+            ?: emptyList()
+    }.getOrDefault(emptyList())
+
     /**
-     * Copie de secours des cookies de session, dans les préférences privées de
-     * l'application.
-     *
-     * Elle ne sert qu'au cas où la WebView n'a plus rien (voir
-     * `restoreCookies`). Le fichier n'est pas exporté et reste dans le dossier
-     * privé de l'application, comme le profil d'un navigateur — c'est la
-     * session de la personne qui l'a ouverte, sur son propre téléphone.
+     * Écrit la session sur le disque : par adresse, en une seule fois, et de
+     * façon synchrone. Rien n'est écrit si le pot ne contient pas de session —
+     * une copie d'un état déconnecté ne servirait qu'à nuire.
      */
-    private fun saveCookies() {
+    private fun saveSession(reason: String, force: Boolean = false) {
         runCatching {
+            flushCookies(force = true) // on écrit d'abord ce que la WebView garde en mémoire
             val cm = CookieManager.getInstance()
-            val cookies = COOKIE_URLS.mapNotNull { url -> cm.getCookie(url)?.takeIf { it.isNotBlank() } }
-                .joinToString("; ")
-            if (!cookies.contains("sp_dc=")) return
-            prefs().edit().putString(KEY_COOKIES, cookies).apply()
+            val backup = JSONObject()
+            COOKIE_URLS.forEach { url ->
+                val header = cm.getCookie(url)?.takeIf { it.isNotBlank() } ?: return@forEach
+                backup.put(url, header)
+            }
+            val json = backup.toString()
+            if (!json.contains("sp_dc=")) return
+            val now = System.currentTimeMillis()
+            if (!force && json == sessionHash && now - lastSessionSave < 60_000L) return
+            sessionHash = json
+            lastSessionSave = now
+            /* `commit()` : synchrone. `apply()` écrit « plus tard », et une mise à
+               jour du paquet tue le processus avant ce « plus tard ». */
+            prefs().edit()
+                .putString(KEY_SESSION, json)
+                .putLong(KEY_SESSION_AT, now)
+                .putBoolean(KEY_SESSION_OK, sessionConfirmed || hasSessionCookie())
+                .commit()
+            Log.i(TAG, "session écrite ($reason, ${cookieNames(WEB_BASE).size} cookies sur le lecteur)")
         }
     }
 
+    /** La copie de secours, telle qu'elle a été écrite. */
+    private fun readSession(): JSONObject? = runCatching {
+        val raw = prefs().getString(KEY_SESSION, null) ?: return null
+        val backup = JSONObject(raw)
+        if (!backup.toString().contains("sp_dc=")) return null
+        if (!prefs().getBoolean(KEY_SESSION_OK, false)) return null
+        /* Une copie trop vieille n'est plus une connexion : `sp_dc` vit un an,
+           mais la session côté serveur, non. Passé deux mois, on ne la propose
+           plus — mieux vaut une page de connexion qu'une session fantôme. */
+        val at = prefs().getLong(KEY_SESSION_AT, 0L)
+        if (at > 0L && System.currentTimeMillis() - at > SESSION_MAX_AGE_MS) return null
+        backup
+    }.getOrNull()
+
     /**
-     * Remet la session d'avant, **seulement** si la WebView n'en a plus.
+     * Remet la copie dans le pot de cookies.
      *
-     * Un cookie est réécrit avec son domaine : `.spotify.com` pour tous, sinon
-     * il ne serait envoyé qu'à l'hôte exact. Rien n'est écrasé quand une session
-     * est déjà là — au pire, elle vient d'être rafraîchie par Spotify.
+     * Appelée au démarrage (avant tout chargement de page) et, si la page se
+     * révèle déconnectée, une seconde fois dans le même lancement. Jamais
+     * au-dessus d'une session vivante, sauf demande explicite de l'utilisateur.
      */
-    private fun restoreCookies() {
+    private fun restoreSession(force: Boolean = false): Boolean {
+        if (!force && hasSessionCookie()) return false
+        val backup = readSession() ?: return false
+        var restored = 0
         runCatching {
             val cm = CookieManager.getInstance()
-            if (cm.getCookie(WEB_BASE)?.contains("sp_dc=") == true) return
-            val saved = prefs().getString(KEY_COOKIES, null) ?: return
-            if (!saved.contains("sp_dc=")) return
-            var restored = 0
-            saved.split("; ").forEach { pair ->
-                val name = pair.substringBefore("=").trim()
-                if (name.isEmpty() || !pair.contains("=")) return@forEach
-                val rules = if (name.startsWith("__Host-")) {
-                    "Path=/; Max-Age=31536000; Secure; SameSite=None"
-                } else {
-                    "Domain=.spotify.com; Path=/; Max-Age=31536000; Secure; SameSite=None"
-                }
-                COOKIE_URLS.forEach { url ->
+            COOKIE_URLS.forEach { url ->
+                val header = backup.optString(url, "")
+                if (header.isBlank()) return@forEach
+                header.split("; ").forEach { pair ->
+                    val name = pair.substringBefore("=").trim()
+                    if (name.isEmpty() || !pair.contains("=")) return@forEach
+                    /* Règle 1 : une seule variante de ce nom peut exister. */
+                    expireCookie(cm, url, name)
+                    val rules = if (name.startsWith("__Host-")) {
+                        /* `__Host-` impose : pas de Domain, Path=/, Secure. */
+                        "Path=/; Max-Age=31536000; Secure; SameSite=None"
+                    } else {
+                        "Domain=.spotify.com; Path=/; Max-Age=31536000; Secure; SameSite=None"
+                    }
                     cm.setCookie(url, "$pair; $rules")
+                    restored++
                 }
-                restored++
             }
             cm.flush()
-            Log.i(TAG, "session restaurée ($restored cookies)")
+        }
+        if (restored == 0) return false
+        sessionRestored = true
+        if (!hasSessionCookie()) {
+            /* Le pot refuse ce qu'on lui donne : la copie ne vaut rien ici. */
+            invalidateSession("le pot n'a pas accepté la copie")
+            return false
+        }
+        Log.i(TAG, "session réinjectée ($restored cookies, ${if (force) "demandé" else "pot vide"})")
+        return true
+    }
+
+    /** Expire les deux portées possibles d'un nom de cookie. */
+    private fun expireCookie(cm: CookieManager, url: String, name: String) {
+        runCatching { cm.setCookie(url, "$name=; Max-Age=0; Path=/") }
+        runCatching { cm.setCookie(url, "$name=; Domain=.spotify.com; Max-Age=0; Path=/") }
+    }
+
+    /** Jette la copie : elle ne ramène pas la session, elle ne doit plus servir. */
+    private fun invalidateSession(reason: String) {
+        sessionHash = ""
+        runCatching {
+            prefs().edit()
+                .remove(KEY_SESSION)
+                .putBoolean(KEY_SESSION_OK, false)
+                .putString(KEY_SESSION_INVALID, reason)
+                .commit()
+        }
+        Log.w(TAG, "copie de session jetée ($reason)")
+    }
+
+    /**
+     * L'état de connexion, tel que la page le constate.
+     *
+     * C'est la seule source fiable : le cookie dit qu'une session a existé, la
+     * page dit si elle vaut encore quelque chose. Reçoit `in`, `out` (page du
+     * lecteur) ou `login` (page de connexion, où être déconnecté est normal).
+     */
+    fun onLoginState(state: String) {
+        if (state == "in") {
+            sessionConfirmed = true
+            sessionRestored = false
+            sessionRecoveryTried = true
+            saveSession("page connectée", force = true)
+            return
+        }
+        /* `out` : lecteur sans session. `login` : page de connexion, ou accueil
+           déconnecté — pour la session, c'est la même chose. */
+        val wasConnected = sessionConfirmed
+        sessionConfirmed = false
+        when {
+            /* D'abord le cas le plus important : l'utilisateur **s'est
+               déconnecté**. On jette la copie, sinon elle le reconnecterait au
+               prochain lancement et il n'aurait aucun moyen de rester
+               déconnecté. */
+            wasConnected -> invalidateSession("déconnexion demandée")
+            /* On vient de réinjecter la copie et la page reste déconnectée :
+               elle est morte. La garder ferait échouer les connexions
+               suivantes. */
+            sessionRestored -> invalidateSession("réinjectée mais la page reste déconnectée")
+            /* Dernier cas : le pot a perdu la session alors qu'une copie existe.
+               On la remet **une fois**, et seulement au tout début du lancement :
+               plus tard, l'utilisateur a pu se déconnecter exprès, et le
+               reconnecter d'office serait une trahison. */
+            !sessionRecoveryTried && justLaunched() && !hasSessionCookie() && readSession() != null -> {
+                sessionRecoveryTried = true
+                if (restoreSession()) {
+                    Toast.makeText(this, R.string.session_restored, Toast.LENGTH_SHORT).show()
+                    webView.reload()
+                }
+            }
         }
     }
 
-    private fun readAsset(name: String): String =
-        runCatching { assets.open(name).bufferedReader().use { it.readText() } }
-            .getOrElse {
-                Log.e(TAG, "assets/$name missing — run `npm run build`", it)
-                ""
-            }
+    /**
+     * Les 45 premières secondes d'un lancement. Au-delà, un état déconnecté ne
+     * déclenche plus rien : l'utilisateur a pu se déconnecter lui-même, et une
+     * reconnexion automatique passerait pour un bug.
+     */
+    private fun justLaunched(): Boolean = System.currentTimeMillis() - launchAt < 45_000L
 
-    private fun toastFor(mode: String): Int = when (mode) {
-        MODE_INJECT -> R.string.ui_mode_inject_toast
-        MODE_NATIVE -> R.string.ui_mode_native_toast
-        else -> R.string.ui_mode_original_toast
+    /**
+     * « Rétablir la session » : ce que fait l'utilisateur quand il se retrouve
+     * déconnecté alors que la copie est là. On réinjecte, on recharge, et si
+     * ça ne suffit pas la copie est jetée par `onLoginState` — jamais de
+     * session fantôme qui n'en finit pas de pourrir les connexions.
+     */
+    fun restoreSessionManually(): String {
+        if (!hasSessionCookie() && readSession() == null) return getString(R.string.session_none)
+        val restored = restoreSession(force = true)
+        sessionRecoveryTried = true
+        if (restored) {
+            webView.reload()
+            return getString(R.string.session_restored)
+        }
+        return getString(R.string.session_none)
     }
+
+    /* Nettoyage ciblé de la page de connexion : les cookies de session CSRF sont
+       les seuls qui gênent un formulaire envoyé depuis une page restée ouverte
+       (le jeton de la page ne correspond plus à celui du serveur, et la
+       connexion échoue pour une raison qui n'a rien à voir avec le mot de
+       passe). On ne touche **jamais** à `sp_dc` ni `sp_key`. */
+    fun resetLoginPageState(): Boolean = runCatching {
+        val cm = CookieManager.getInstance()
+        var removed = 0
+        cookieNames(LOGIN_ORIGIN).filter { it.startsWith("csrf") || it.startsWith("__Host-csrf") }
+            .forEach { name ->
+                expireCookie(cm, LOGIN_ORIGIN, name)
+                removed++
+            }
+        cm.flush()
+        Log.i(TAG, "état de connexion nettoyé ($removed cookies csrf)")
+        removed > 0
+    }.getOrDefault(false)
 
     private fun prefs() = getSharedPreferences(PREFS, MODE_PRIVATE)
 
@@ -811,8 +1285,9 @@ class MainActivity : AppCompatActivity() {
     fun onLoggedIn() {
         /* C'est le moment où la session vaut la peine d'être écrite : juste
            après une connexion, avant que quoi que ce soit puisse la perdre. */
-        flushCookies()
-        saveCookies()
+        flushCookies(force = true)
+        sessionConfirmed = true
+        saveSession("connexion détectée", force = true)
         Toast.makeText(this, R.string.logged_in, Toast.LENGTH_SHORT).show()
     }
 
@@ -896,16 +1371,32 @@ class MainActivity : AppCompatActivity() {
     override fun onPause() {
         super.onPause()
         flushCookies()
+        /* Une mise à jour peut tuer le processus sans passer par `onStop` : on
+           écrit la session dès que l'écran n'est plus devant. */
+        saveSession("mise en arrière-plan")
     }
 
     override fun onStop() {
         super.onStop()
-        flushCookies()
-        saveCookies()
+        flushCookies(force = true)
+        saveSession("arrêt", force = true)
+    }
+
+    /** Le système réclame de la place : tout ce qu'on garde doit être écrit. */
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
+            flushCookies(force = true)
+            saveSession("mémoire réclamée", force = true)
+        }
     }
 
     override fun onDestroy() {
-        flushCookies()
+        flushCookies(force = true)
+        saveSession("destruction", force = true)
+        /* Une fenêtre de connexion qui survit à sa page laisserait un dialogue
+           vide à l'écran. */
+        closeAllLoginWindows()
         shutdownRunnable?.let { ui.removeCallbacks(it) }
         PlaybackService.jsExecutor = null
         releaseWakeLock()
@@ -954,13 +1445,47 @@ class MainActivity : AppCompatActivity() {
 
         private const val PREFS = "spotiduck"
         private const val KEY_UI_MODE = "ui_mode"
-        private const val KEY_COOKIES = "session_cookies"
+
+        /**
+         * La copie de secours de la session : les cookies de connexion **par
+         * adresse** (et non une seule chaîne aplatie, qui mélangeait les
+         * portées et fabriquait des doublons).
+         */
+        private const val KEY_SESSION = "session"
+        private const val KEY_SESSION_AT = "session_at"
+        private const val KEY_SESSION_OK = "session_ok"
+        private const val KEY_SESSION_INVALID = "session_invalid"
+
+        /** Au-delà, la copie n'est plus proposée : `sp_dc` vit un an, la session non. */
+        private const val SESSION_MAX_AGE_MS = 60L * 24L * 3600L * 1000L
+
+        /**
+         * La porte de connexion : la page où le formulaire e-mail + mot de passe
+         * est **directement affiché**. Mesuré en CI : `accounts.spotify.com/fr/login`
+         * ne demande que l'e-mail, `?allow_password=1` affiche bien les deux
+         * champs (`open.spotify.com/login`, lui, répond 404).
+         */
+        const val LOGIN_URL = "https://accounts.spotify.com/fr/login?allow_password=1"
+        private const val LOGIN_ORIGIN = "https://accounts.spotify.com"
 
         /** Les hôtes dont on sauvegarde les cookies : le lecteur et la connexion. */
         private val COOKIE_URLS = listOf(
             "https://open.spotify.com",
             "https://accounts.spotify.com",
             "https://api.spotify.com"
+        )
+
+        /** Les adresses dont la session compte : le lecteur et la connexion. */
+        private val SPOTIFY_SESSION_HOST = Regex("open\\.spotify\\.com|accounts\\.spotify\\.com")
+
+        /** Les domaines qui peuvent refuser une autorisation dans une WebView. */
+        private val REFUSING_HOST = Regex("google\\.com|apple\\.com|facebook\\.com", RegexOption.IGNORE_CASE)
+
+        /** Les mots d'un refus d'autorisation, dans les deux langues servies. */
+        private val REFUSAL = Regex(
+            "disallowed_useragent|doesn't comply|does not comply|not permitted to make|" +
+                "Accès bloqué|Access blocked|ne respecte pas|n'est pas conforme",
+            RegexOption.IGNORE_CASE
         )
         private const val KEY_UI_MODE_CHOSEN = "ui_mode_chosen"
         private const val KEY_UI_MODE_REV = "ui_mode_rev"
