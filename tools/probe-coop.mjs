@@ -182,7 +182,7 @@ async function main() {
   const { readFileSync } = await import("node:fs");
   const identity = readFileSync("src/original/spotiduck-identity.js", "utf8");
   const bundle = readFileSync("dist/spotiduck-ui.js", "utf8");
-  note("Fichiers", `identité ${(identity.length / 1024).toFixed(1)} Ko · coque ${(bundle.length / 1024).toFixed(1)} Ko`);
+  console.log(`[Sonde coque] fichiers : identité ${(identity.length / 1024).toFixed(1)} Ko · coque ${(bundle.length / 1024).toFixed(1)} Ko`);
 
   const candidates = [
     process.env.CHROME_PATH,
@@ -200,7 +200,7 @@ async function main() {
         headless: true,
         args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--lang=fr-FR", "--window-size=412,915"],
       });
-      note("Chrome", `pilote ouvert avec ${executablePath}`);
+      console.log(`[Sonde coque] pilote Chrome : ${executablePath}`);
       break;
     } catch (error) {
       launchErrors.push(`${executablePath} : ${String((error && error.message) || error).slice(0, 160)}`);
@@ -286,9 +286,9 @@ async function main() {
          sont pas joignables ici) : l'écran réduit, JPEG qualité 35. */
       const miniature = async (name) => {
         try {
-          await page.setViewport({ width: 412, height: 915, deviceScaleFactor: 0.5, isMobile: false, hasTouch: true });
+          await page.setViewport({ width: 412, height: 915, deviceScaleFactor: 0.32, isMobile: false, hasTouch: true });
           await sleep(400);
-          const buffer = await page.screenshot({ type: "jpeg", quality: 22 });
+          const buffer = await page.screenshot({ type: "jpeg", quality: 20 });
           shots.push(`SHOT:${target.label}-${name}:${buffer.toString("base64")}`);
           await page.setViewport({ width: 412, height: 915, deviceScaleFactor: 2, isMobile: false, hasTouch: true });
           await sleep(200);
@@ -297,7 +297,7 @@ async function main() {
         }
       };
 
-      await miniature("coque");
+      if (target.label === "accueil") await miniature("coque");
 
       /* Les trois vues de la barre du haut : état intérieur + ce que la page
          affiche, avant et après un appui réel. */
