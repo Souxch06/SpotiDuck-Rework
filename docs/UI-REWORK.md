@@ -2210,3 +2210,66 @@ valables sur tous les appareils.
 La sonde affiche désormais, pour chaque page, `conteneurs-trop-larges` — la
 réponse doit être `aucun`. Un `+28` veut dire qu'il reste du rognage, et le nom
 du conteneur dit lequel. C'est la mesure qui manquait pour arrêter de deviner.
+
+---
+
+## §36 — L'accueil de l'application (v2.10.0)
+
+Trois reprises de l'accueil du web player, trois constats : mise en page de
+bureau (quatre colonnes de pochettes de 59 px), conteneurs rognés (440 px dans
+une page de 412), et finalement la demande de l'utilisateur :
+
+> « Sinon vu que t'y arrives pas, fais une page d'accueil stylé pour
+> l'application. »
+
+C'est la bonne décision, et elle est prise **ensemble** : on ne recopie plus
+l'accueil de Spotify, on lit la page et on l'affiche avec **notre** mise en page.
+
+### Le principe
+
+`Home` (module 11e-ter) :
+
+1. **lit la page** — pour chaque `section[data-testid="component-shelf"]` (et
+   `div[data-testid="grid-container"]` en repli) : le titre, le lien « Tout
+   afficher » (texte, `aria-label` ou destination `/section/…`), puis chaque lien
+   qui porte une pochette — titre (ou `aria-label`, ou l'alternative de l'image,
+   ou le slug de l'adresse), sous-titre, image, type ;
+2. **classe** chaque carte en musique / podcast / autre, d'après l'adresse et les
+   mots du titre ;
+3. **rend** l'accueil : salutation (Bonjour/Bonsoir), trois filtres
+   (Tout · Musique · Podcasts), quatre raccourcis, puis les rangées — grille
+   `repeat(auto-fill, minmax(140px × unité, 1fr))`, pochette qui remplit sa case,
+   gouttière 12 px, rangées espacées de 16 px ;
+4. **se retire** quand il n'a rien à montrer : pas d'interrupteur, session
+   fermée, page de connexion, **sous-page ouverte** (l'onglet reste « accueil »
+   quand on ouvre une playlist), ou aucune rangée lisible. La page reprend alors
+   la main : jamais d'écran maison vide par-dessus un écran vide.
+
+### Ce qui est relié (le reproche du pass 26)
+
+| commande | ce qu'elle fait |
+| --- | --- |
+| carte | vrai `<a href>` de la page → navigation réelle (playlist, album, artiste, podcast) |
+| « Tout afficher » | vrai lien de la page, vers la section |
+| filtres | filtrent les rangées affichées ; si la catégorie est vide, l'application le dit |
+| Rechercher · Bibliothèque · Paramètres | routeur et feuille existants |
+| Titres likés | lien `/collection/tracks` de la page, repli sur la bibliothèque |
+
+Le réglage **Accueil SpotiDuck** (interrupteur, groupe « Interface ») rend
+l'accueil de Spotify à qui le préfère : le défaut reste le nôtre, mais rien
+n'est imposé.
+
+### Vérifications
+
+* banc : « l'application a son propre accueil, construit avec les données de la
+  page » — 4 cartes reprises, chacune un vrai lien, pochettes reprises, titres de
+  rangées repris, lien « Tout afficher » repris, filtre podcasts qui ne garde que
+  le podcast, filtre « Tout » qui restaure tout, 4 raccourcis boutons, aucune
+  largeur ni nombre de colonnes en dur ;
+* banc : « l'accueil ne recouvre jamais une page sans contenu » — page de
+  connexion : accueil masqué, aucune donnée ; et l'exclusion des sous-pages ;
+* audit : `78-home.css`, le module `Home`, ses filtres, son interrupteur, sa
+  vérification de la page de connexion et son exposition sont exigés ;
+* sonde : `Accueil maison` relève l'état (affiché/masqué), la zone, la position
+  par rapport aux barres, les rangées, les cartes, les filtres, les raccourcis et
+  la taille d'une pochette.

@@ -341,6 +341,29 @@ if (!contentPassSource) {
   }
 }
 
+/* **L'accueil maison.** Décidé avec l'utilisateur après trois reprises de
+   l'accueil du web player : la page ne tient pas sur un téléphone. Le calque
+   doit rester, ses filtres et ses raccourcis doivent rester reliés, et sa
+   grille doit continuer de se régler sur une largeur de carte (jamais un nombre
+   de colonnes fixe — c'est ce qui causait le rognage). */
+if (!readdirSync(join(root, "src/inject")).includes("78-home.css")) {
+  errors.push("l'accueil maison (78-home.css) a disparu : l'application retomberait sur la mise en page de bureau");
+}
+if (!/var Home = \{/.test(shellJs) || !/Home\.refresh\(/.test(shellJs)) {
+  errors.push("le module d'accueil maison a disparu de la coque");
+}
+if (!/home: Home,/.test(shellJs)) {
+  errors.push("l'accueil maison n'est plus exposé à l'extérieur (diagnostic, sonde, tests)");
+}
+for (const part of ["sd-home-grid", "sd-chip", "sd-shortcut", "homeBoard"]) {
+  if (!shellJs.includes(part) && !css.includes(part)) {
+    errors.push(`l'accueil maison a perdu « ${part} »`);
+  }
+}
+if (!/shouldShow: function/.test(shellJs) || !/isLoginPage\(\)/.test(shellJs)) {
+  errors.push("l'accueil maison ne vérifie plus s'il doit s'afficher : il pourrait recouvrir la connexion");
+}
+
 /* 2-ter-ter. Deux défauts qui ont coûté une version chacun, et qui ne se voient
    qu'à l'usage : l'écran d'accueil qui restait posé par-dessus le lecteur (il
    n'était réévalué que sur les mutations du `<body>`), et un appui d'onglet qui

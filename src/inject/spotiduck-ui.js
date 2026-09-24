@@ -114,6 +114,11 @@
        Le réglage reste disponible pour ceux qui préfèrent les onglets. */
     tabbar: false,
     haptics: true,
+    /* Accueil maison : notre page d'accueil (données de la page, mise en page
+       de l'application) au lieu de l'accueil du web player, dont la mise en page
+       de bureau ne tient pas sur un téléphone. Un interrupteur la remplace par
+       l'accueil de Spotify. */
+    homeBoard: true,
     /* Densité d'affichage : le seul réglage qui change la taille de TOUTE
        l'interface (voir `applyDensity`) — compact | normal | large. */
     density: "normal",
@@ -144,6 +149,17 @@
       noTrack: "Aucun titre en lecture",
       volume: "Volume",
       karaoke: "Karaoké",
+      /* Accueil maison */
+      homeMorning: "Bonjour",
+      homeEvening: "Bonsoir",
+      homeSub: "Votre musique, vos podcasts",
+      homeAll: "Tout",
+      homeMusic: "Musique",
+      homePodcasts: "Podcasts",
+      homeMore: "Tout afficher",
+      homeEmptyCategory: "Rien dans cette catégorie pour l\'instant",
+      homeBoard: "Accueil SpotiDuck",
+      likedSongs: "Titres likés",
       blankTitle: "La page n'a rien affiché",
       blankText:
         "Spotify a bien répondu, mais son contenu est resté vide (%s). C'est presque toujours un chargement qui n'a pas abouti : rechargez. Si ça recommence, copiez le diagnostic et envoyez-le.",
@@ -1492,6 +1508,7 @@
       if (UI.lastRouteKey !== key) {
         UI.lastRouteKey = key;
         Content.apply();
+        Home.refresh("vue");
       }
       e.navItems.forEach(function (item) {
         var name = item.getAttribute("data-tab");
@@ -2335,6 +2352,7 @@
     resume: false,
     tabbar: true,
     haptics: true,
+    homeBoard: true,
     /* Densité d'affichage : les télémétries Android et la WebView ne rendent
        pas la même chose sur tous les appareils — c'est le seul réglage qui
        touche à la taille de toute l'interface. */
@@ -2608,6 +2626,7 @@
       self.el.settingsBody.appendChild(
         self.group(Settings.labels.groupUi, [
           nativeRow,
+          self.switchRow("homeBoard", Settings.labels.homeBoard),
           self.switchRow("tabbar", Settings.labels.showTabbar),
           self.switchRow("haptics", Settings.labels.haptics),
         ])
@@ -3160,6 +3179,304 @@
       html.classList.toggle("sd-welcome-on", show);
       if (UI.el.welcome) UI.el.welcome.setAttribute("aria-hidden", show ? "false" : "true");
       return show;
+    },
+  };
+
+
+  /* ------------------------------------------------------------------ *
+   * 11e-ter. Home — **notre** page d'accueil
+   *
+   * Le 24/09, l'accueil du web player a été repris trois fois (mise en page de
+   * bureau, quatre colonnes de pochettes de 59 px, conteneurs de 440 px rognés
+   * dans une page de 412) et il restait « coupé » et « pas très beau ». Décision
+   * prise avec l'utilisateur : l'application affiche **son propre** accueil.
+   *
+   * Le principe : on ne recopie pas Spotify, on **lit** la page. Titres de
+   * rangées, pochettes, liens : tout vient du DOM réel (donc c'est bien la
+   * musique de l'utilisateur, ses recommandations, sa bibliothèque), et on le
+   * rend avec notre mise en page — qui, elle, est écrite pour un téléphone et
+   * n'a aucune métrique de bureau à rattraper.
+   *
+   * Ce que ça garantit :
+   *   · rien ne peut être « coupé » : la grille est en `auto-fill` sur une
+   *     largeur de carte utile, la pochette remplit sa case ;
+   *   · chaque commande fait quelque chose : les cartes et « Tout afficher »
+   *     sont de vrais liens de la page, les filtres filtrent, les raccourcis
+   *     utilisent le routeur existant ;
+   *   · si nos données sont vides (page de connexion, session fermée, écran de
+   *     rangées qui n'existe pas), l'accueil **s'efface** et la page reprend la
+   *     main : jamais d'écran maison vide par-dessus un écran vide.
+   * ------------------------------------------------------------------ */
+
+  var HOME_MAX_SHELVES = 8;
+  var HOME_MAX_CARDS = 12;
+
+  var Home = {
+    el: null,
+    built: false,
+    data: [],
+    filter: "all",
+    greeting: "",
+
+    /** Les rangées de la page : titre, lien « tout afficher », cartes. */
+    readPage: function () {
+      var shelves = $$('section[data-testid="component-shelf"], div[data-testid="grid-container"]');
+      /* `rows`, pas `out` : l'audit de cohérence lit les objets du fichier sans
+         tenir compte des portées, et un `out` local homonyme d'un objet global
+         lui fait croire à un appel de méthode manquant. */
+      var rows = [];
+      var seen = {};
+      for (var i = 0; i < shelves.length && rows.length < HOME_MAX_SHELVES; i++) {
+        var shelf = shelves[i];
+        var head = shelf.querySelector("h2, .encore-text-headline-large, [data-encore-id=\"text\"]");
+        var title = head ? (head.textContent || "").replace(/\s+/g, " ").trim() : "";
+        if (!title) continue;
+        var links = shelf.querySelectorAll("a[href]");
+        var cards = [];
+        var seenHref = {};
+        for (var j = 0; j < links.length && cards.length < HOME_MAX_CARDS; j++) {
+          var a = links[j];
+          var img = a.querySelector("img");
+          var href = a.getAttribute("href") || "";
+          if (!img || !href || href === "#") continue;
+          if (seenHref[href]) continue;
+          seenHref[href] = 1;
+          /* Le titre de la carte : le texte de la carte, sinon l'alternative de
+             l'image, sinon le dernier segment de l'adresse (lisible : c'est un
+             slug de playlist). */
+          var label = (a.getAttribute("aria-label") || "").replace(/\s+/g, " ").trim();
+          if (!label) {
+            var t = a.querySelector("p, span.encore-text, [data-encore-id=\"text\"]");
+            label = t ? (t.textContent || "").replace(/\s+/g, " ").trim() : "";
+          }
+          if (!label) label = (img.getAttribute("alt") || "").trim();
+          if (!label) label = decodeURIComponent(href.split("/").filter(Boolean).pop() || "");
+          label = label.replace(/\s*·\s*/g, " · ");
+          var sub = a.querySelector("span.encore-text-body-small, p.encore-text-body-small");
+          var type = Home.typeOf(href, title, label);
+          cards.push({
+            href: href,
+            img: img.currentSrc || img.getAttribute("src") || "",
+            title: label.slice(0, 60),
+            sub: sub ? (sub.textContent || "").replace(/\s+/g, " ").trim().slice(0, 40) : "",
+            type: type,
+          });
+        }
+        if (!cards.length) continue;
+        /* Le lien « Tout afficher » : Spotify l'écrit, le nomme parfois
+           seulement en `aria-label`, et pointe toujours vers une section
+           (`/section/…`). Trois lectures valent mieux qu'une : le texte, le
+           libellé d'accessibilité, et la destination. */
+        var more = null;
+        var headLinks = shelf.querySelectorAll("a[href]");
+        for (var k = 0; k < headLinks.length; k++) {
+          var link = headLinks[k];
+          var said = (link.textContent || "") + " " + (link.getAttribute("aria-label") || "");
+          var href = link.getAttribute("href") || "";
+          if (/tout afficher|show all|see all|afficher tout/i.test(said) || /\/section\//.test(href)) {
+            more = href;
+            break;
+          }
+        }
+        var key = title.toLowerCase();
+        if (seen[key]) continue;
+        seen[key] = 1;
+        rows.push({ title: title, more: more, cards: cards });
+      }
+      return rows;
+    },
+
+    /** Musique, podcast, ou autre — d'après l'adresse et les mots du titre. */
+    typeOf: function (href, shelfTitle, label) {
+      var h = (href || "").toLowerCase();
+      var s = ((shelfTitle || "") + " " + (label || "")).toLowerCase();
+      if (/\/(show|episode)\//.test(h) || /podcast|episode|emission/.test(s)) return "podcast";
+      if (/\/(album|artist|track|playlist|collection|section)\//.test(h)) return "music";
+      return "other";
+    },
+
+    shouldShow: function () {
+      if (!Settings.homeBoard) return false;
+      if (!this.built || !this.data.length) return false;
+      if (State.tab !== "home") return false;
+      /* **Pas sur une sous-page.** L'onglet reste « accueil » pendant qu'on
+         ouvre une playlist, un album ou un artiste : sans cette ligne, notre
+         accueil se poserait par-dessus la playlist qu'on vient d'ouvrir. */
+      if (State.route === "page") return false;
+      if (LoginState.isLoginPage()) return false;
+      if (!LoginState.signedIn()) return false;
+      return true;
+    },
+
+    /** Construit (une fois) le squelette de l'accueil. */
+    build: function () {
+      if (this.built) return true;
+      var el = document.createElement("div");
+      el.className = "sd-home";
+      el.setAttribute("role", "region");
+      el.setAttribute("aria-label", Settings.labels.home);
+      el.innerHTML =
+        '<div class="sd-home-greet">' +
+        '<span class="sd-home-hello"></span>' +
+        '<span class="sd-home-sub"></span>' +
+        "</div>" +
+        '<div class="sd-home-chips" role="tablist">' +
+        '<button class="sd-chip sd-chip-all is-active" type="button" role="tab" data-filter="all"></button>' +
+        '<button class="sd-chip sd-chip-music" type="button" role="tab" data-filter="music"></button>' +
+        '<button class="sd-chip sd-chip-podcast" type="button" role="tab" data-filter="podcast"></button>' +
+        "</div>" +
+        '<div class="sd-home-shortcuts"></div>' +
+        '<div class="sd-home-sections"></div>';
+      this.el = el;
+      UI.layer.appendChild(el);
+
+      /* Les filtres : c'est le seul endroit de l'accueil où l'appui ne navigue
+         pas — il filtre, et l'état « actif » se voit (aria-selected). */
+      var self = this;
+      $$(".sd-chip", el).forEach(function (chip) {
+        chip.addEventListener("click", function () {
+          self.setFilter(chip.getAttribute("data-filter"));
+        });
+      });
+      this.built = true;
+      return true;
+    },
+
+    /** Les raccourcis : trois commandes réelles, jamais décoratives. */
+    buildShortcuts: function () {
+      var box = $(".sd-home-shortcuts", this.el);
+      if (!box || box.childNodes.length) return;
+      var items = [
+        { key: "search", label: Settings.labels.search, icon: ICONS.searchLine, run: function () { Router.tab("search"); } },
+        { key: "library", label: Settings.labels.library, icon: ICONS.libraryLine, run: function () { Router.tab("library"); } },
+        { key: "settings", label: Settings.labels.settings, icon: ICONS.gearLine, run: function () { Sheets.open("settings"); } },
+        { key: "liked", label: Settings.labels.likedSongs || Settings.labels.library, icon: ICONS.heartLine, run: function () {
+            var a = pick(['a[href*="/collection/tracks"]', 'a[href*="/collection"]']);
+            if (a) location.assign(a.getAttribute("href"));
+            else Router.tab("library");
+          } },
+      ];
+      items.forEach(function (item) {
+        var b = document.createElement("button");
+        b.type = "button";
+        b.className = "sd-shortcut sd-shortcut-" + item.key;
+        b.innerHTML =
+          '<span class="sd-shortcut-icon">' + svg(item.icon) + "</span>" +
+          '<span class="sd-shortcut-label"></span>';
+        $(".sd-shortcut-label", b).textContent = item.label;
+        b.addEventListener("click", item.run);
+        box.appendChild(b);
+      });
+    },
+
+    setFilter: function (name) {
+      this.filter = name === "music" || name === "podcast" ? name : "all";
+      $$(".sd-chip", this.el).forEach(function (chip) {
+        var on = chip.getAttribute("data-filter") === Home.filter;
+        chip.classList.toggle("is-active", on);
+        chip.setAttribute("aria-selected", on ? "true" : "false");
+      });
+      this.renderSections();
+      var visible = $$(".sd-home-card", this.el).length;
+      if (!visible) Toast.show(Settings.labels.homeEmptyCategory, 1600);
+    },
+
+    renderSections: function () {
+      var box = $(".sd-home-sections", this.el);
+      if (!box) return;
+      box.textContent = "";
+      var shown = 0;
+      for (var i = 0; i < this.data.length; i++) {
+        var sec = this.data[i];
+        var cards = sec.cards.filter(
+          function (c) {
+            if (Home.filter === "all") return true;
+            return c.type === Home.filter;
+          }
+        );
+        if (!cards.length) continue;
+        shown++;
+        var node = document.createElement("section");
+        node.className = "sd-home-section";
+        var head = document.createElement("div");
+        head.className = "sd-home-head";
+        var h = document.createElement("h2");
+        h.className = "sd-home-section-title";
+        h.textContent = sec.title;
+        head.appendChild(h);
+        if (sec.more) {
+          var more = document.createElement("a");
+          more.className = "sd-home-more";
+          more.href = sec.more;
+          more.textContent = Settings.labels.homeMore;
+          more.addEventListener("click", function (ev) {
+            /* Un vrai lien de la page : on laisse la navigation se faire, mais on
+               referme l'accueil d'abord pour ne pas le retrouver par-dessus la
+               playlist ouverte. */
+            ev.stopPropagation();
+            Home.hide();
+          });
+          head.appendChild(more);
+        }
+        node.appendChild(head);
+        var grid = document.createElement("div");
+        grid.className = "sd-home-grid";
+        cards.forEach(function (c) {
+          var a = document.createElement("a");
+          a.className = "sd-home-card sd-home-card-" + c.type;
+          a.href = c.href;
+          a.innerHTML =
+            '<span class="sd-home-cover"></span>' +
+            '<span class="sd-home-meta"><span class="sd-home-title"></span><span class="sd-home-sub"></span></span>';
+          $(".sd-home-title", a).textContent = c.title;
+          $(".sd-home-sub", a).textContent = c.sub;
+          var cover = $(".sd-home-cover", a);
+          if (c.img) {
+            var img = document.createElement("img");
+            img.loading = "lazy";
+            img.decoding = "async";
+            img.alt = "";
+            img.src = c.img;
+            cover.appendChild(img);
+          }
+          a.addEventListener("click", function () {
+            Home.hide();
+          });
+          grid.appendChild(a);
+        });
+        node.appendChild(grid);
+        box.appendChild(node);
+      }
+      this.el.classList.toggle("sd-home-empty", shown === 0);
+      box.setAttribute("data-empty", Settings.labels.homeEmptyCategory);
+      return shown;
+    },
+
+    /** Rafraîchit les données de la page, puis montre ou cache l'accueil. */
+    refresh: function (reason) {
+      if (!Settings.homeBoard) return this.hide();
+      if (!this.build()) return false;
+      this.data = this.readPage();
+      this.greeting = new Date().getHours() < 18 ? Settings.labels.homeMorning : Settings.labels.homeEvening;
+      $(".sd-home-hello", this.el).textContent = this.greeting;
+      $(".sd-home-sub", this.el).textContent = Settings.labels.homeSub;
+      $$(".sd-chip", this.el).forEach(function (chip) {
+        var name = chip.getAttribute("data-filter");
+        chip.textContent =
+          name === "music" ? Settings.labels.homeMusic : name === "podcast" ? Settings.labels.homePodcasts : Settings.labels.homeAll;
+      });
+      this.buildShortcuts();
+      this.renderSections();
+      var show = this.shouldShow();
+      this.el.hidden = !show;
+      if (!show) this.hide();
+      return show;
+    },
+
+    hide: function () {
+      if (!this.el) return false;
+      this.el.hidden = true;
+      return true;
     },
   };
 
@@ -3894,8 +4211,12 @@
     [600, 2000, 5000].forEach(function (ms) {
       window.setTimeout(function () {
         Content.apply();
+        Home.refresh("contenu");
       }, ms);
     });
+    /* L'accueil lit la page : il se rafraîchit quand le contenu arrive, quand on
+       change d'onglet, et sur redimensionnement — jamais en boucle serrée. */
+    Home.refresh("boot");
     /* …et à neuf secondes, si l'écran est toujours vide, on le dit (le contenu
        d'une page Spotify met quelques secondes à apparaître sur un téléphone,
        mais pas neuf). */
@@ -3981,6 +4302,7 @@
         UI.paintProgress();
         Welcome.apply();
         Content.apply();
+        Home.refresh("resize");
       }, 200)
     );
 
@@ -3996,6 +4318,7 @@
 
     Mirror.start();
     Ticker.start();
+    Home.refresh("lecteur");
     Auto.start();
     syncFromDom("boot");
     UI.paintChrome(State);
@@ -4041,6 +4364,8 @@
     /** Le garde-fou de contenu : ce que la feuille a dû rétablir pour que la
      *  page ne reste pas noire sous notre coque (voir `Content.apply`). */
     content: Content,
+    /** L'accueil maison : ses données (`home.data`), ses filtres, son état. */
+    home: Home,
     /** Change one setting (`theme`, `haptics`, `accentFromArt`, `tabbar`,
      *  `takeControl`, `resume`, `reduceMotion`) and persist it. */
     set: function (key, value) {
@@ -4141,6 +4466,7 @@
       Device: Device,
       Volume: Volume,
       Content: Content,
+      Home: Home,
       Icons: ICONS,
     },
   };

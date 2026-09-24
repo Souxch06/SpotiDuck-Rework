@@ -943,6 +943,125 @@ await checkAsync("the shell can never blank the page it dresses", async () => {
   return "#global-nav-bar (ancêtre du contenu) rétabli ✓";
 });
 
+await checkAsync("the app has a home screen of its own, built from the page's data", async () => {
+  /* Décision du 24/09, avec l'utilisateur : l'accueil du web player a été repris
+     trois fois (métriques de bureau, quatre colonnes de pochettes de 59 px,
+     conteneurs rognés) et restait « pas beau / coupé ». L'application affiche
+     donc **son** accueil : les données viennent de la page (titres, pochettes,
+     liens — c'est bien la musique de l'utilisateur), la mise en page est la
+     nôtre. Ce test vérifie les trois propriétés qui comptent : l'accueil
+     apparaît quand il a des données, chaque commande fait quelque chose, et il
+     disparaît quand il n'en a pas. */
+  const shelved =
+    '<section data-testid="home-page">' +
+    '<section data-testid="component-shelf"><div><h2>Vos playlists</h2>' +
+    '<a href="/playlist/aaa"><img src="https://i.scdn.co/image/aaa" alt="Mix du soir"><p>Mix du soir</p></a>' +
+    '<a href="/album/bbb"><img src="https://i.scdn.co/image/bbb" alt="Album test"><p>Album test</p></a>' +
+    '<a href="/show/ccc"><img src="https://i.scdn.co/image/ccc" alt="Podcast test"><p>Podcast test</p></a>' +
+    "</div></section>" +
+    '<section data-testid="component-shelf"><div><h2>Radio tendance</h2><a href="/section/ddd"/></div>' +
+    '<div><a href="/playlist/eee"><img src="https://i.scdn.co/image/eee" alt="Radio test"><p>Radio test</p></a></div></section>' +
+    "</section>`";
+  const dom = new JSDOM(
+    '<!doctype html><html><body><div id="main-view">' + shelved + "</div>" +
+      '<aside data-testid="now-playing-bar"></aside></body></html>',
+    { url: "https://open.spotify.com/", pretendToBeVisual: true, runScripts: "dangerously" }
+  );
+  dom.window.AndBridge = new Proxy({}, { get: () => () => undefined });
+  dom.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(250);
+
+  const api = dom.window.SpotiDuckUI;
+  assert(api && api.home, "le module d'accueil n'est pas exposé");
+  const page = dom.window.document;
+  const board = page.querySelector(".sd-home");
+  assert(board, "l'accueil maison n'est pas construit");
+  assert(board.hidden === false, "l'accueil maison reste masqué alors qu'il a des données");
+
+  /* Les données de la page sont bien reprises. */
+  const cards = [...page.querySelectorAll(".sd-home-card")];
+  assert(cards.length >= 4, `cartes attendues : au moins 4, trouvées ${cards.length}`);
+  assert(
+    cards.every((c) => c.getAttribute("href") && /^\/(playlist|album|show|section)\//.test(c.getAttribute("href"))),
+    "une carte n'est pas un vrai lien de la page"
+  );
+  assert(
+    page.querySelector(".sd-home-cover img"),
+    "les pochettes de la page ne sont pas reprises"
+  );
+  const titles = [...page.querySelectorAll(".sd-home-section-title")].map((h) => h.textContent);
+  assert(titles.includes("Vos playlists"), "les titres de rangées ne sont pas repris : " + titles.join(", "));
+  assert(page.querySelector(".sd-home-more"), "le lien « Tout afficher » n'est pas repris");
+
+  /* Les filtres filtrent pour de vrai. */
+  const chips = [...page.querySelectorAll(".sd-chip")];
+  assert(chips.length === 3, "les trois filtres ne sont pas là");
+  chips.find((c) => c.getAttribute("data-filter") === "podcast").click();
+  await tick(80);
+  const afterPodcast = [...page.querySelectorAll(".sd-home-card")];
+  assert(afterPodcast.length === 1, `filtre podcasts : 1 carte attendue, ${afterPodcast.length} trouvée(s)`);
+  assert(
+    afterPodcast[0].getAttribute("href").includes("/show/"),
+    "le filtre podcasts ne garde pas un podcast"
+  );
+  chips.find((c) => c.getAttribute("data-filter") === "all").click();
+  await tick(80);
+  assert(
+    page.querySelectorAll(".sd-home-card").length === cards.length,
+    "le filtre « Tout » ne restaure pas toutes les cartes"
+  );
+
+  /* Les raccourcis sont quatre commandes, toutes reliées. */
+  const shortcuts = [...page.querySelectorAll(".sd-shortcut")];
+  assert(shortcuts.length === 4, `raccourcis attendus : 4, trouvés ${shortcuts.length}`);
+  assert(
+    shortcuts.every((b) => b.tagName === "BUTTON" && b.type === "button"),
+    "un raccourci n'est pas un vrai bouton"
+  );
+
+  /* Aucune largeur ni colonne en dur : c'est ce qui a causé le rognage. */
+  const css = [...page.querySelectorAll("style")].map((st) => st.textContent).join("");
+  assert(
+    !/\.sd-home-grid\s*\{[^}]*repeat\(\d+,/.test(css),
+    "la grille de l'accueil fixe un nombre de colonnes en dur"
+  );
+  assert(
+    /grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(calc\(140px \* var\(--sd-u\)\)/.test(css),
+    "la grille de l'accueil ne se règle plus sur une largeur de carte utile"
+  );
+  dom.window.close();
+  return `${cards.length} cartes · 2 rangées · 3 filtres · 4 raccourcis, tous reliés ✓`;
+});
+
+await checkAsync("the home screen never covers a page that has nothing to show", async () => {
+  /* Sans données (écran de connexion, session fermée, page qui n'a pas encore
+     rendu ses rangées), l'accueil maison s'efface : la page reprend la main,
+     jamais d'écran maison vide par-dessus un écran vide. */
+  const dom = new JSDOM("<!doctype html><html><body><main></main></body></html>", {
+    url: "https://accounts.spotify.com/fr/login",
+    pretendToBeVisual: true,
+    runScripts: "dangerously",
+  });
+  dom.window.AndBridge = new Proxy({}, { get: () => () => undefined });
+  dom.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(250);
+  const board = dom.window.document.querySelector(".sd-home");
+  assert(board, "l'accueil maison n'est même pas construit");
+  assert(board.hidden === true, "l'accueil maison s'affiche sur la page de connexion");
+  assert(
+    dom.window.SpotiDuckUI.home.data.length === 0,
+    "l'accueil a trouvé des données là où il n'y en a pas"
+  );
+  /* Et une sous-page ouverte (playlist, album, artiste) ne doit jamais être
+     recouverte : l'onglet reste « accueil » pendant qu'on navigue. */
+  assert(
+    /State\.route === "page"/.test(await read("src/inject/spotiduck-ui.js")),
+    "l'accueil ne vérifie plus qu'on n'est pas sur une sous-page : il recouvrirait les playlists"
+  );
+  dom.window.close();
+  return "aucune rangée ⇒ masqué · sous-page ⇒ masqué ✓";
+});
+
 await checkAsync("a blank page says so instead of showing an empty screen", async () => {
   /* La capture du téléphone était un écran entièrement noir sous notre barre :
      impossible de savoir si la page n'avait rien affiché ou si c'était nous.

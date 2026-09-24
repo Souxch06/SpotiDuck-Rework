@@ -331,6 +331,43 @@ const MEASURE = async () => {
     return rows.join(" . ") || "aucune shelf";
   })();
 
+  /* **L'accueil maison.** Les données viennent de la page, la mise en page est
+     la nôtre : on relève donc ce qu'il affiche vraiment (rangées, cartes,
+     filtres, raccourcis) et s'il laisse les barres respirer. Sur la page du
+     téléphone, l'accueil est masqué (session fermée côté CI) — c'est attendu, et
+     il faut que ce soit écrit pour ne pas confondre « masqué exprès » et
+     « cassé ». */
+  out.home = (function () {
+    var board = document.querySelector(".sd-home");
+    if (!board) return "accueil maison absent";
+    var r = board.getBoundingClientRect();
+    var nav = document.querySelector(".sd-nav");
+    var mini = document.querySelector(".sd-mini");
+    var navR = nav ? nav.getBoundingClientRect() : null;
+    var miniR = mini ? mini.getBoundingClientRect() : null;
+    var chips = board.querySelectorAll(".sd-chip").length;
+    var cards = board.querySelectorAll(".sd-home-card").length;
+    var sections = board.querySelectorAll(".sd-home-section").length;
+    var label = function (el) {
+      var h = el ? el.querySelector(".sd-home-section-title") : null;
+      return h ? (h.textContent || "").trim().slice(0, 18) : "?";
+    };
+    var first = board.querySelector(".sd-home-section");
+    var cover = board.querySelector(".sd-home-cover");
+    var coverR = cover ? cover.getBoundingClientRect() : null;
+    return (
+      (board.hidden ? "masqué (aucune donnée ou hors accueil)" : "affiché") +
+      " zone=" + Math.round(r.width) + "x" + Math.round(r.height) +
+      " top=" + Math.round(r.top) +
+      (navR ? " nav-bas=" + Math.round(navR.bottom) : "") +
+      (miniR ? " mini-haut=" + Math.round(miniR.top) : "") +
+      " rangées=" + sections + " cartes=" + cards + " filtres=" + chips +
+      " raccourcis=" + board.querySelectorAll(".sd-shortcut").length +
+      (sections ? " 1re=" + JSON.stringify(label(first)) : "") +
+      (coverR ? " pochette=" + Math.round(coverR.width) + "x" + Math.round(coverR.height) : "")
+    );
+  })();
+
   out.tapTargets = (function () {
     var els = document.querySelectorAll(".sd-layer .sd-nav-item, .sd-layer .sd-iconbtn, .sd-layer .sd-tab");
     var min = 999;
@@ -780,6 +817,7 @@ async function main() {
       if (after && after.shelves) lines.push(`Rangées - ${target.label} : ${after.shelves}`);
       if (after && after.content) lines.push(`Contenu-te tailles - ${target.label} : ${after.content}`);
       if (after && after.rognes) lines.push(`Rognage - ${target.label} : ${after.rognes}`);
+      if (after && after.home) lines.push(`Accueil maison - ${target.label} : ${after.home}`);
       lines.push(summary);
       console.log(`[Sonde coque] ${summary}`);
       note(`Mesure — ${target.label}`, summary);
