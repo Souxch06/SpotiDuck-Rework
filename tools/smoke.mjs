@@ -1093,6 +1093,27 @@ await checkAsync("native mode: the logged-out home page offers the e-mail way to
   return "page déconnectée oui · lecteur non ✓";
 });
 
+check("native mode: a window the page opens is loaded in the page", () => {
+  /* « Continuer avec Google » passe par `window.open` chez Spotify : dans une
+     WebView qui n'ouvre pas de fenêtre, ce bouton ne fait rien. Le script doit
+     ramener la destination dans la page elle-même. */
+  const seen = [];
+  const previous = nw.__sdNavigate;
+  nw.__sdNavigate = (url) => seen.push(url);
+  nw.open("https://accounts.google.com/o/oauth2/v2/auth?client_id=x");
+  assert(seen.length === 1, "window.open did not reach the navigation shim");
+  assert(
+    seen[0].indexOf("https://accounts.google.com/") === 0,
+    "wrong destination: " + seen[0]
+  );
+  /* Une fenêtre vide (about:blank) n'est pas une destination : on n'y va pas. */
+  seen.length = 0;
+  nw.open("about:blank");
+  assert(seen.length === 0, "about:blank must not navigate");
+  nw.__sdNavigate = previous;
+  return "window.open → navigation dans la page ✓";
+});
+
 check("native mode: the notification controls press Spotify's buttons", () => {
   natClicks.length = 0;
   nSD.playPause();

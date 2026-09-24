@@ -1220,3 +1220,53 @@ portes d'entrée de Spotify : `accounts.spotify.com/fr/login`, et
 qu'un champ de mot de passe ou la barre de navigation apparaît. La session est
 enregistrée sur les deux domaines (c'est `accounts.spotify.com` qui pose le
 cookie, `open.spotify.com` qui s'en sert).
+
+## 22. « Le système de connexion Google fonctionne ? » — mesuré, puis corrigé (v2.8.1)
+
+Question posée telle quelle. Réponse en deux temps : ce qui se mesure, et ce qui
+manquait **de notre côté**.
+
+### Ce qui se mesure
+
+Google refuse son OAuth aux navigateurs embarqués — c'est une politique, pas un
+bug. Sa décision se prend sur l'**agent annoncé**. Le workflow
+`inspect-page.yml` compare donc trois agents sur la page de connexion de Google :
+un vrai agent de WebView (`; wv`), l'agent du mode mobile (Chrome Android, sans
+`wv` — c'est celui de l'application), et un agent de bureau. Résultat :
+
+| Agent | Réponse de Google |
+| --- | --- |
+| vrai agent de WebView (`; wv`) | page de connexion normale · **aucun blocage** |
+| agent du mode mobile (celui de l'application) | page de connexion normale · **aucun blocage** |
+| agent de bureau | page de connexion normale · **aucun blocage** |
+
+Autrement dit : la page d'entrée n'est pas refusée. Cela ne garantit pas que
+**toute** la suite du parcours passe (Google vérifie peut-être plus loin, et
+certaines étapes dépendent du compte), mais le refus systématique qu'on lit
+partout n'apparaît pas ici.
+
+### Ce qui manquait de notre côté, en revanche
+
+`setSupportMultipleWindows(false)` était réglé pour garder les `target="_blank"`
+dans l'application. Conséquence non voulue : **`window.open` ne faisait rien du
+tout**. Or « Continuer avec Google » passe souvent par là chez Spotify — d'où un
+bouton qui semblait mort, indépendamment de Google.
+
+Deux corrections, qui se complètent :
+
+* `MainActivity` : `setSupportMultipleWindows(true)` et un `onCreateWindow` qui
+  charge la destination **dans la vue courante**. L'utilisateur ne quitte pas
+  l'application, la session et les cookies restent les mêmes, et le retour de
+  connexion retombe au bon endroit ;
+* `native-mode.js` : `window.open(url)` ramène l'adresse dans la page
+  (`__sdNavigate`), `about:blank` excepté. Vérifié par un test.
+
+### Ce qui reste vrai
+
+* **e-mail / mot de passe** : c'est le chemin fiable, et il est maintenant
+  affiché partout où il manque (§20) ;
+* **si votre compte a été créé avec Google**, il n'a peut-être pas de mot de
+  passe : passez par « Mot de passe oublié » sur la page de connexion pour en
+  définir un — ensuite tout passe par l'application ;
+* **une seule connexion suffit** : la session est écrite sur le disque et gardée
+  en secours (§20), donc les mises à jour suivantes ne redemandent rien.

@@ -27,7 +27,9 @@
  *   5. ne pas laisser une page de connexion sans issue : si Spotify n'affiche
  *      que des boutons sociaux (qui ne marchent pas dans une WebView), un bouton
  *      « e-mail et mot de passe » mène à la page qui affiche le formulaire ;
- *   6. veiller sur les onglets de la barre du bas : si un appui ne produit rien
+ *   6. ouvrir dans la page ce que Spotify ouvrirait dans une fenêtre — sans ça,
+ *      « Continuer avec Google » ne faisait rien du tout ;
+ *   7. veiller sur les onglets de la barre du bas : si un appui ne produit rien
  *      (lien `spotify:` que la WebView ne sait pas ouvrir, routeur de Spotify
  *      inerte, page qui ne peint pas), l'application fait la navigation
  *      elle-même vers l'adresse que l'onglet désigne.
@@ -693,6 +695,37 @@
   window.setTimeout(loginTick, 1800);
   window.setTimeout(loginTick, 3500);
   window.setInterval(loginTick, 2500);
+
+  /* ------------------------------------------------------------------ *
+   * 2-ter. Les fenêtres ouvertes par la page (connexion Google, Apple…)
+   *
+   * « Continuer avec Google » n'est pas toujours un lien : chez Spotify c'est
+   * souvent `window.open(...)`. La WebView est réglée pour ne pas créer de
+   * seconde fenêtre (c'est ce qui garde les `target="_blank"` dans
+   * l'application), donc `window.open` ne faisait **rien** — le bouton semblait
+   * mort. Ici, on ouvre la destination dans la page elle-même : même écran, même
+   * session, et le retour de connexion retombe au bon endroit.
+   * ------------------------------------------------------------------ */
+  window.__sdNavigate = function (url) {
+    try {
+      window.location.assign(url);
+    } catch (e) {
+      try {
+        window.location.href = url;
+      } catch (err) {}
+    }
+  };
+
+  (function () {
+    var realOpen = window.open;
+    window.open = function (url) {
+      if (typeof url === "string" && url && url !== "about:blank") {
+        window.__sdNavigate(url);
+        return window;
+      }
+      return realOpen ? realOpen.apply(window, arguments) : null;
+    };
+  })();
 
   /* ------------------------------------------------------------------ *
    * 2-ter. Les onglets de la barre du bas

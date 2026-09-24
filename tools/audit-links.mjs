@@ -302,6 +302,15 @@ if (!/data-sd-appprompt/.test(nativeAsset) || !/APP_PROMPT_TEXT/.test(nativeAsse
 if (!/allow_password=1/.test(nativeAsset) || !/sd-login-help/.test(nativeAsset)) {
   errors.push("native-mode.js : plus rien n'offre la connexion par e-mail sur la page de connexion");
 }
+/* « Continuer avec Google » passe par `window.open` : si la WebView n'ouvre pas
+   de fenêtre **et** que le script ne ramène pas la destination dans la page, le
+   bouton ne fait rien du tout. Les deux moitiés doivent rester. */
+if (!/setSupportMultipleWindows\(true\)/.test(activity) || !/onCreateWindow/.test(activity)) {
+  errors.push("MainActivity : les fenêtres ouvertes par la page ne sont plus ramenées dans la vue");
+}
+if (!/__sdNavigate/.test(nativeAsset) || !/window\.open = function/.test(nativeAsset)) {
+  errors.push("native-mode.js : plus rien ne rattrape les fenêtres que Spotify ouvre (connexion Google)");
+}
 if (!/input\[type='password'\]/.test(nativeAsset)) {
   errors.push("native-mode.js : le lien de connexion n'est plus conditionné à l'absence du formulaire");
 }

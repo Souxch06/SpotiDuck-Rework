@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.Message
 import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
@@ -137,7 +138,13 @@ class MainActivity : AppCompatActivity() {
                 textZoom = 100 // never let the system font scale break the layout
                 cacheMode = WebSettings.LOAD_DEFAULT
                 javaScriptCanOpenWindowsAutomatically = true
-                setSupportMultipleWindows(false) // target="_blank" stays in-app
+                /* `target="_blank"` reste dans l'application : au lieu d'une
+                   seconde fenêtre, le client ci-dessous charge la destination
+                   dans la vue courante. L'option doit donc être **activée** —
+                   sans elle, `window.open` ne fait rien du tout dans une
+                   WebView, et « Continuer avec Google » (qui passe par là)
+                   semblait mort. */
+                setSupportMultipleWindows(true)
                 mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                 saveFormData = false // pas de « Enregistrer ce mot de passe ? »
                 savePassword = false
@@ -325,6 +332,40 @@ class MainActivity : AppCompatActivity() {
 
     private fun installWebChromeClient() {
         webView.webChromeClient = object : WebChromeClient() {
+
+            /**
+             * Une fenêtre demandée par la page (connexion Google, Apple…) est
+             * chargée **dans la vue courante** : l'utilisateur ne quitte pas
+             * l'application, et le retour de connexion retombe dans la même
+             * session. Le `WebView` temporaire ne sert qu'à recevoir la première
+             * adresse ; il est détruit aussitôt.
+             */
+            override fun onCreateWindow(
+                view: WebView,
+                isDialog: Boolean,
+                isUserGesture: Boolean,
+                resultMsg: Message
+            ): Boolean {
+                val transport = resultMsg.obj as? WebView.WebViewTransport ?: return false
+                val opener = WebView(this@MainActivity)
+                opener.settings.javaScriptEnabled = true
+                opener.webViewClient = object : WebViewClient() {
+                    override fun shouldOverrideUrlLoading(
+                        opened: WebView,
+                        request: WebResourceRequest
+                    ): Boolean {
+                        val target = request.url?.toString()
+                        if (!target.isNullOrBlank() && target != "about:blank") {
+                            webView.loadUrl(target)
+                        }
+                        opened.destroy()
+                        return true
+                    }
+                }
+                transport.webView = opener
+                resultMsg.sendToTarget()
+                return true
+            }
             override fun onConsoleMessage(msg: android.webkit.ConsoleMessage): Boolean {
                 Log.d("SpotiDuckJS", "${msg.message()} (${msg.sourceId()}:${msg.lineNumber()})")
                 return true
