@@ -2165,3 +2165,48 @@ décide, pas un nombre fixe.
 * sonde : `Rangées` (conteneur, mode d'affichage, colonnes, gouttières, carte,
   pochette) pour chaque rangée de l'accueil, et `Contenu-te tailles` pour la
   première — c'est ce relevé qui a nommé la cause, et il reste dans le rapport.
+
+---
+
+## §35 — « C'est encore coupé » : le rognage, mesuré pour de vrai (v2.9.13)
+
+### L'angle mort était dans la mesure
+
+`debordement` se calculait avec `scrollWidth - clientWidth`. Or notre feuille
+met `overflow-x: hidden` (sans quoi la page de bureau déborde de partout) : un
+débordement rogné n'augmente **pas** `scrollWidth`. La sonde annonçait donc
+« débordement 0 » pendant que l'utilisateur voyait « c'est encore coupé » — et
+la quatrième colonne rognée de sa capture n'était expliquée par aucune mesure.
+
+Ce que la sonde relève maintenant :
+
+    Rognage — accueil :
+      conteneurs-trop-larges: carousel-scroller 440px (+28) · div 440px (+28)
+      hors-ecran: … div 3830px depasse=3404 · div 3862px depasse=3420 (la piste)
+      coupes-par-un-parent: …
+
+C'est écrit noir sur blanc : **le conteneur d'une rangée mesurait 440 px dans une
+mise en page de 412** — 28 px rognés net par notre `overflow-x: hidden`. La piste
+de 3 830 px, elle, est normale : un carrousel défile.
+
+### Le correctif
+
+On ne rogne plus, on **borne** :
+
+* `section[data-testid="component-shelf"]`, ses enfants directs,
+  `[data-testid="carousel-scroller"]` et `div[data-testid="grid-container"]` :
+  `max-width: 100%` + `min-width: 0` + `box-sizing: border-box` ;
+* `[data-testid="carousel-scroller"]` prend la largeur de la page
+  (`width: 100%`) : la piste coulisse **à l'intérieur**, au lieu de dépasser ;
+* la page d'accueil, son premier enfant, `#main-view` et `main` sont bornés de
+  la même façon — un conteneur à `100 %` dans un parent rembourré dépasse
+  exactement du rembourrage, c'est le défaut classique des 28 px manquants.
+
+Aucune largeur en dur, aucun nombre de colonnes en dur : que des bornes, donc
+valables sur tous les appareils.
+
+### Comment on saura
+
+La sonde affiche désormais, pour chaque page, `conteneurs-trop-larges` — la
+réponse doit être `aucun`. Un `+28` veut dire qu'il reste du rognage, et le nom
+du conteneur dit lequel. C'est la mesure qui manquait pour arrêter de deviner.

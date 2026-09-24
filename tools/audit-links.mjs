@@ -327,6 +327,13 @@ if (!contentPassSource) {
   if (!/grid-template-columns:\s*repeat\(auto-fill, minmax\(calc\(150px \* var\(--sd-u\)\)/.test(contentPassSource)) {
     errors.push("la passe de contenu ne règle plus le nombre de colonnes des rangées : la grille repasserait à quatre colonnes de pochettes minuscules (la capture du 24/09)");
   }
+  /* « C'est encore coupé » : le conteneur d'une rangée mesurait 440 px dans une
+     mise en page de 412, et notre `overflow-x: hidden` le rognait net. La passe
+     doit borner les conteneurs à la largeur de la page. */
+  if (!/section\[data-testid="component-shelf"\] \[data-testid="carousel-scroller"\]/.test(contentPassSource) ||
+      !/max-width:\s*100%/.test(contentPassSource)) {
+    errors.push("la passe de contenu ne borne plus les rangées à la largeur de l'écran : le contenu serait de nouveau rogné (« c'est encore coupé »)");
+  }
   for (const needle of ["component-shelf", "carousel-scroller", "aspect-ratio", "img[width]"]) {
     if (!contentPass.includes(needle)) {
       errors.push(`la passe de contenu ne traite plus « ${needle} »`);

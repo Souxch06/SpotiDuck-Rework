@@ -175,8 +175,30 @@ const MEASURE = async () => {
         );
       }
     }
+    /* Le verdict utile : les **conteneurs** de rangée tiennent-ils dans
+       l'écran ? Une piste de carrousel plus longue que son conteneur est
+       normale (elle défile) : elle est comptée à part, et seule sa présence
+       dans un parent rogné signale un défaut. */
+    var containers = [];
+    var sels = [
+      'section[data-testid=component-shelf]',
+      '[data-testid=carousel-scroller]',
+      'div[data-testid=grid-container]',
+      '[data-testid=home-page]',
+      '#main-view',
+    ];
+    for (var k = 0; k < sels.length; k++) {
+      var list = document.querySelectorAll(sels[k]);
+      for (var l = 0; l < list.length; l++) {
+        var rr = list[l].getBoundingClientRect();
+        if (rr.width > w + 3) {
+          containers.push(sels[k] + " " + Math.round(rr.width) + "px (+" + Math.round(rr.width - w) + ")");
+        }
+      }
+    }
     return (
-      "hors-ecran: " + (out.sort.join(" . ") || "aucun") +
+      "conteneurs-trop-larges: " + (containers.join(" . ") || "aucun") +
+      " || hors-ecran: " + (out.sort.join(" . ") || "aucun") +
       " || coupes-par-un-parent: " + (out.coupes.join(" . ") || "aucun")
     );
   })();

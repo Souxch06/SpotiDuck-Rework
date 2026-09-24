@@ -874,6 +874,20 @@ await checkAsync("the content is laid out for a phone, not for a desktop", async
     !/repeat\(4,/.test(src) && !/repeat\(5,/.test(src),
     "la passe de contenu fixe un nombre de colonnes en dur : elle ne s'adapterait pas à l'appareil"
   );
+  /* « C'est encore coupé » (24/09, 21 h 53) : le conteneur d'une rangée mesurait
+     440 px dans une mise en page de 412 — 28 px rognés par notre
+     `overflow-x: hidden`. La passe doit borner ces conteneurs. */
+  assert(
+    /section\[data-testid="component-shelf"\] [\s\S]{0,400}max-width:\s*100%/.test(src),
+    "les rangées ne sont plus bornées à la largeur de l'écran : le contenu serait rogné"
+  );
+  assert(
+    /\[data-testid="carousel-scroller"\][\s\S]{0,200}width:\s*100%/.test(src),
+    "le conteneur de carrousel ne prend plus la largeur de la page"
+  );
+  for (const bad of ["width: 440px", "width: 430px", "width: 412px", "width: 100vw"]) {
+    assert(!src.includes(bad), `la passe de contenu fixe une largeur en dur (${bad})`);
+  }
   const bundle = await read("dist/spotiduck-ui.js");
   assert(
     bundle.includes("[data-testid=component-shelf]") || bundle.includes('[data-testid="component-shelf"]'),

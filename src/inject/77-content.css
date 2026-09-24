@@ -187,6 +187,49 @@ html.sd-mobile .sd-root section[data-testid="component-shelf"] > * {
   min-height: 0 !important;
 }
 
+/* --------------------------------------------------------------------------
+   5. Rien ne dépasse de l'écran — le « c'est encore coupé »
+   La sonde a nommé le défaut, et il explique exactement la quatrième colonne
+   rognée de la capture :
+
+       carousel-scroller 440px depasse=14 · div 440px depasse=14
+       div 3830px depasse=3404 · div 3862px depasse=3420 (la piste du carrousel)
+
+   Le **conteneur** de la rangée est plus large que la mise en page (440 px pour
+   412) : comme notre feuille rogne ce qui dépasse (`overflow-x: hidden`, sans
+   quoi la page déborde de partout), le trop-plein est coupé net. On ne rogne
+   plus, on **borne** : la rangée fait la largeur de la page, et la piste du
+   carrousel coulisse à l'intérieur comme elle le fait déjà.
+
+   Rien ici ne fixe un nombre de colonnes ni une largeur en dur : ce sont des
+   bornes, elles tiennent quel que soit l'appareil.
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile .sd-root section[data-testid="component-shelf"],
+html.sd-mobile .sd-root section[data-testid="component-shelf"] > *,
+html.sd-mobile .sd-root section[data-testid="component-shelf"] [data-testid="carousel-scroller"],
+html.sd-mobile .sd-root div[data-testid="grid-container"] {
+  max-width: 100% !important;
+  min-width: 0 !important;
+  box-sizing: border-box !important;
+}
+/* Le rembourrage horizontal de la page fait partie de la largeur : un conteneur
+   à `width: 100 %` dans un parent rembourré déborderait de la valeur du
+   rembourrage (c'est le cas typique des 28 px manquants). */
+html.sd-mobile .sd-root section[data-testid="home-page"],
+html.sd-mobile .sd-root section[data-testid="home-page"] > div,
+html.sd-mobile .sd-root #main-view,
+html.sd-mobile .sd-root main {
+  max-width: 100% !important;
+  box-sizing: border-box !important;
+}
+/* Une piste de carrousel plus longue que son conteneur, c'est normal : elle
+   défile. Ce qui ne doit pas arriver, c'est qu'elle rogne la page — la borne
+   est mise sur le conteneur, pas sur la piste. */
+html.sd-mobile .sd-root section[data-testid="component-shelf"] [data-testid="carousel-scroller"] {
+  width: 100% !important;
+}
+
 /* Le bas de page (publicités, pieds de page) n'a pas sa place dans
    l'application : il est déjà masqué par la feuille d'origine, on garde la
    dernière rangée collée au mini-lecteur sans bande vide. */
