@@ -217,6 +217,20 @@ if (!/MODE_ORIGINAL/.test(activity) || !/scriptFor\(/.test(activity)) {
 if (!/mode\s*==\s*MODE_NATIVE\)\s*MOBILE_UA\s*else\s*DESKTOP_UA/.test(activity.replace(/\s+/g, " "))) {
   errors.push("MainActivity : l'agent de l'interface d'origine n'est plus l'agent bureau");
 }
+/* L'empreinte de navigateur : injectée au chargement, elle décide de la mise en
+   page. Trois valeurs suffisent à la reconnaître, et l'application doit
+   l'injecter en mode d'origine. */
+const fingerprint = read("src/original/spotiduck-fingerprint.js");
+for (const m of ["return 1920;", "return 1080;", "return 978;"]) {
+  if (!fingerprint.includes(m)) errors.push(`l'empreinte d'origine a perdu « ${m} »`);
+}
+if (!/originalFingerprint/.test(activity) || !/onPageStarted/.test(activity)) {
+  errors.push("MainActivity : l'empreinte d'origine n'est plus injectée au chargement");
+}
+if (!existsSync(join(root, "android/app/src/main/assets/original-fingerprint.js"))) {
+  errors.push("assets/original-fingerprint.js est absent — relancer `npm run build`");
+}
+
 /* Les fonctions d'origine que l'application appelle réellement. */
 for (const fn of ["window.actPlayPause", "window.actSkipForward", "window.actSkipBack", "window.actSeek", "window.updMedia"]) {
   if (!originalScript.includes(fn)) errors.push(`${originalSource} : ${fn} est introuvable`);

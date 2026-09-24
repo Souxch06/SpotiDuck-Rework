@@ -30,6 +30,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p) => readFileSync(join(root, p), "utf8");
 
 const SOURCE = "src/original/spotiduck-original.js";
+const FINGERPRINT = "src/original/spotiduck-fingerprint.js";
 /* Empreintes des deux blocs d'origine — voir l'en-tête du fichier source. */
 const CSS_MD5 = "13de5546d0";
 const CSS_LENGTH = 6001;
@@ -57,6 +58,28 @@ const REQUIRED = [
 
 const problems = [];
 const original = read(SOURCE);
+
+// 0. l'empreinte de navigateur (injectée avant la page) ----------------------
+/* Elle n'a pas de « forme » reconnaissable, mais ce sont les valeurs qu'elle
+   pose qui décident de la mise en page : si elles changent, l'affichage
+   change. */
+const fingerprint = read(FINGERPRINT);
+for (const expected of [
+  'window.screen.__defineGetter__("width"',
+  'return 1920;',
+  'return 1080;',
+  'return 978;',
+  'window.__defineGetter__("devicePixelRatio"',
+  'navigator.__defineGetter__("userAgent"',
+  'getHighEntropyValues',
+]) {
+  if (!fingerprint.includes(expected)) {
+    problems.push(`empreinte d'origine incomplète : ${expected} est absent`);
+  }
+}
+if (fingerprint.length < 4_000 || fingerprint.length > 7_000) {
+  problems.push(`l'empreinte d'origine fait ${fingerprint.length} caractères (4 000 à 7 000 attendus)`);
+}
 
 // 1. la feuille de style d'origine -------------------------------------------
 const styleMatch = original.match(/textContent\s*=\s*"((?:[^"\\]|\\.)*)"/);
@@ -111,7 +134,12 @@ for (const target of ["dist/spotiduck-original.js", "android/app/src/main/assets
   mkdirSync(dirname(dir), { recursive: true });
   writeFileSync(dir, out);
 }
+const fpOut = banner + fingerprint;
+for (const target of ["dist/original-fingerprint.js", "android/app/src/main/assets/original-fingerprint.js"]) {
+  writeFileSync(join(root, target), fpOut);
+}
 const size = Buffer.byteLength(out);
 console.log(`✔ interface d'origine  (${(size / 1024).toFixed(1)} kB)`);
+console.log(`✔ empreinte d'origine  (${(fpOut.length / 1024).toFixed(1)} kB, 1920×1080 bureau)`);
 console.log(`  ${needed.size} méthodes du pont · ${REQUIRED.length} fonctions d'origine · feuille ${CSS_LENGTH} car. (md5 ${CSS_MD5})`);
 if (!existsSync(join(root, "dist/spotiduck-original.js"))) process.exit(1);

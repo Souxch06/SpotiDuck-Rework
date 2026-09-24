@@ -19,6 +19,7 @@ const assets = join(root, "android/app/src/main/assets");
 const jobs = [
   { from: join(root, "dist/spotiduck-ui.js"), to: join(assets, "spotiduck-ui.js") },
   { from: join(root, "dist/spotiduck-original.js"), to: join(assets, "spotiduck-original.js") },
+  { from: join(root, "dist/original-fingerprint.js"), to: join(assets, "original-fingerprint.js") },
   { from: join(root, "adblock_hosts.txt"), to: join(assets, "adblock_hosts.txt") },
 ];
 
@@ -61,6 +62,20 @@ if (original.length < 20_000 || originalMissing.length) {
   console.error(
     "spotiduck-original.js looks invalid — refusing to keep it (" +
       (originalMissing.join(", ") || original.length + " chars") +
+      ")"
+  );
+  process.exitCode = 1;
+}
+
+/* L'empreinte de navigateur : injectée avant la page, c'est elle qui décide de
+   la mise en page. Trois valeurs suffisent à la reconnaître. */
+const fingerprint = readFileSync(join(assets, "original-fingerprint.js"), "utf8");
+const fpMust = ["return 1920;", "return 1080;", "return 978;"];
+const fpMissing = fpMust.filter((m) => !fingerprint.includes(m));
+if (fingerprint.length < 4_000 || fpMissing.length) {
+  console.error(
+    "original-fingerprint.js looks invalid — refusing to keep it (" +
+      (fpMissing.join(", ") || fingerprint.length + " chars") +
       ")"
   );
   process.exitCode = 1;

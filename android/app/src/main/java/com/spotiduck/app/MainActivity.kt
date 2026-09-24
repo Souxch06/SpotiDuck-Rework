@@ -64,6 +64,7 @@ class MainActivity : AppCompatActivity() {
     private var uiBundle: String = ""
     private var nativeScript: String = ""
     private var originalScript: String = ""
+    private var originalFingerprint: String = ""
     private var uiMode: String = MODE_DEFAULT
     private var powerManager: PowerManager? = null
     private var wakeLock: PowerManager.WakeLock? = null
@@ -83,6 +84,7 @@ class MainActivity : AppCompatActivity() {
         adBlocker = AdBlocker(this).also { it.loadAsync() }
         uiBundle = readAsset("spotiduck-ui.js")
         originalScript = readAsset("spotiduck-original.js")
+        originalFingerprint = readAsset("original-fingerprint.js")
 
         nativeScript = runCatching { assets.open("native-mode.js").bufferedReader().use { it.readText() } }
             .getOrElse {
@@ -206,7 +208,18 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
-                if (uiMode == MODE_ORIGINAL) return // la page gère sa mise en page
+                if (uiMode == MODE_ORIGINAL) {
+                    /* L'application d'origine injecte son empreinte **ici**,
+                       avant que la page n'ait lu quoi que ce soit : c'est elle
+                       qui fait calculer à Spotify la mise en page d'un bureau
+                       1920×1080, et donc l'affichage d'origine. Injectée plus
+                       tard, elle arrive après les premières décisions de la
+                       page (et après le calcul de la mise en page). */
+                    if (originalFingerprint.isNotEmpty()) {
+                        view.evaluateJavascript(originalFingerprint, null)
+                    }
+                    return
+                }
                 injectViewportScript()
                 /* `document.head` n'existe pas encore : le script s'installe et
                    pose le meta dès qu'il le peut (la WebView recalcule alors sa

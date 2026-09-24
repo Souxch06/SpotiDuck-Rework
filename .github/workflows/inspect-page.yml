@@ -1,0 +1,70 @@
+name: Inspect the Spotify page
+
+# Diagnostic, à lancer à la main (Actions → Run workflow) ou en poussant ce
+# fichier. Il répond à une question qui décide de la mise en page de
+# l'application : que sert open.spotify.com à un agent de bureau ?
+#
+#   • une page avec ou sans <meta name="viewport"> — c'est ce qui décide si la
+#     WebView met la page en page sur la largeur du téléphone ou sur 980 px ;
+#   • la présence des repères que l'interface d'origine habille
+#     (`Desktop_LeftSidebar_Id`, `now-playing-bar`, `global-nav-bar`…).
+#
+# Sans réponse à ça, on règle l'affichage en aveugle.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/inspect-page.yml"
+
+jobs:
+  page:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Fetch the page as the app does
+        run: |
+          set -uo pipefail
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
+          for url in "https://open.spotify.com/" "https://open.spotify.com/login"; do
+            echo "=== $url ==="
+            code=$(curl -sS -o /tmp/page.html -w "%{http_code}" -A "$UA" \
+              -H "accept-language: fr-FR,fr;q=0.9" "$url" || echo "curl-failed")
+            echo "http: $code — $(wc -c < /tmp/page.html 2>/dev/null || echo 0) octets"
+            echo "--- balises viewport ---"
+            grep -o '<meta[^>]*viewport[^>]*>' /tmp/page.html || echo "(aucune balise viewport)"
+            echo "--- repères de la page bureau ---"
+            for marker in Desktop_LeftSidebar_Id now-playing-bar global-nav-bar \
+                          data-testid=\"root\" grid-container tracklist-row \
+                          WebPlayer Desktop_PanelContainer_Id; do
+              n=$(grep -o "$marker" /tmp/page.html | wc -l)
+              echo "  $marker : $n"
+            done
+            echo "--- début du <head> ---"
+            head -c 700 /tmp/page.html | tr -d '\n' | cut -c1-700
+            echo
+          done
+
+      - name: Compare with a phone user agent
+        run: |
+          set -uo pipefail
+          UA="Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Mobile Safari/537.36"
+          curl -sS -o /tmp/mobile.html -A "$UA" "https://open.spotify.com/" || true
+          echo "=== agent Android mobile — $(wc -c < /tmp/mobile.html) octets ==="
+          echo "--- balises viewport ---"
+          grep -o '<meta[^>]*viewport[^>]*>' /tmp/mobile.html || echo "(aucune balise viewport)"
+          echo "--- repères de la page bureau ---"
+          for marker in Desktop_LeftSidebar_Id now-playing-bar global-nav-bar; do
+            echo "  $marker : $(grep -o "$marker" /tmp/mobile.html | wc -l)"
+          done
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Ce que sert open.spotify.com"
+            echo ""
+            echo "Le détail est dans les deux étapes ci-dessus : présence d'un"
+            echo "« meta viewport » (largeur de mise en page) et repères de la"
+            echo "page bureau (ce que l'interface d'origine habille)."
+          } >> "$GITHUB_STEP_SUMMARY"
