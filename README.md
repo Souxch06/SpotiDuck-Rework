@@ -112,6 +112,15 @@ scenario buttons: **transfer from another device**, **logged out (welcome
 screen)**, **login page**, **offline**, open the player / the settings, and an
 A/B switch that disables the whole layer.
 
+**Viewport.** The web player declares no `<meta name="viewport">`, and a WebView
+without one lays the page out on **980 px** — every `vw` unit, `clamp()` and
+media query then targets a screen two to three times wider than the phone, so the
+interface looks huge and has to be dragged sideways. The layer pins the meta to
+`width=device-width` before applying its styles (`MainActivity` does the same as
+early as the page starts loading), and the **Affichage** line in the settings
+says so out loud (`⚠ mise en page 980px pour un écran de 393px`) when the two
+disagree — tap it to copy.
+
 The layer is styled for Android rather than for the desktop web: Roboto,
 48 dp touch targets, 16 dp gutters, Material 3 shapes and surfaces, Material
 motion curves, and an edge-to-edge layout driven by the real window insets

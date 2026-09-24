@@ -165,6 +165,22 @@ if (!/KEY_UI_MODE_CHOSEN/.test(activity)) {
   errors.push("MainActivity : le mode enregistré n'est plus distingué d'un choix explicite");
 }
 
+/* 2-quinquies. Le viewport. C'est la cause du « l'affichage n'est pas adapté à
+   mon téléphone » : sans `<meta name="viewport">`, la WebView met en page sur
+   980 px et toute la feuille de style vise un écran trois fois trop large. */
+if (!/loadWithOverviewMode\s*=\s*true/.test(activity)) {
+  errors.push("MainActivity : loadWithOverviewMode n'est plus activé");
+}
+if (!/VIEWPORT_META_JS/.test(activity) || !/device-width/.test(activity)) {
+  errors.push("MainActivity : le meta viewport n'est plus forcé");
+}
+if (!/width=device-width/.test(read("src/inject/spotiduck-ui.js"))) {
+  errors.push("la couche injectée ne pose plus le meta viewport");
+}
+if (!/width=device-width/.test(read("android/app/src/main/assets/native-mode.js"))) {
+  errors.push("le mode bêta ne pose plus le meta viewport");
+}
+
 /* 3. Ressources Kotlin + assets ------------------------------------------- */
 const strings = read("android/app/src/main/res/values/strings.xml");
 const definedStrings = new Set([...strings.matchAll(/name="([^"]+)"/g)].map((m) => m[1]));

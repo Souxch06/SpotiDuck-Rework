@@ -28,7 +28,39 @@
   var NATIVE = "native";
 
   /* ------------------------------------------------------------------ *
-   * 1. Pop-ups et bandeaux : masqués, puis retirés du DOM
+   * 1. Viewport : le meta que Spotify ne déclare pas
+   *
+   * Sans lui, la WebView se donne une largeur de mise en page de 980 px : la
+   * page est alors dessinée pour un écran trois fois plus large que le
+   * téléphone (d'où une interface énorme, coupée, qu'il faut faire glisser).
+   * ------------------------------------------------------------------ */
+  var VIEWPORT_CONTENT =
+    "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover";
+
+  function ensureViewport() {
+    var head = document.head || document.documentElement;
+    if (!head) return;
+    var metas = document.querySelectorAll("meta[name='viewport']");
+    var meta = metas[0];
+    if (!meta) {
+      meta = document.createElement("meta");
+      meta.setAttribute("name", "viewport");
+      head.appendChild(meta);
+    }
+    for (var i = 1; i < metas.length; i++) {
+      if (metas[i].parentNode) metas[i].parentNode.removeChild(metas[i]);
+    }
+    if (meta.getAttribute("content") !== VIEWPORT_CONTENT) {
+      meta.setAttribute("content", VIEWPORT_CONTENT);
+    }
+  }
+
+  ensureViewport();
+  window.setTimeout(ensureViewport, 400);
+  window.setTimeout(ensureViewport, 1500);
+
+  /* ------------------------------------------------------------------ *
+   * 2. Pop-ups et bandeaux : masqués, puis retirés du DOM
    * ------------------------------------------------------------------ */
   var POPUPS = [
     // « Installer / ouvrir l'application »

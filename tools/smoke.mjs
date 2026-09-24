@@ -617,6 +617,36 @@ check("logged-out landing page shows the native welcome screen", () => {
   return "logo + titre + bouton « Se connecter »";
 });
 
+check("the layout viewport is pinned to the device width", () => {
+  // Le web player ne déclare pas de <meta viewport> : sans lui, la WebView
+  // calcule la mise en page sur 980 px et toute l'interface vise un écran trois
+  // fois plus large que le téléphone (c'est le défaut d'affichage d'origine).
+  const metas = doc.querySelectorAll('meta[name="viewport"]');
+  assert(metas.length === 1, `expected exactly one viewport meta, got ${metas.length}`);
+  const content = metas[0].getAttribute("content");
+  assert(/width=device-width/.test(content), "width=device-width missing: " + content);
+  assert(/initial-scale=1/.test(content), "initial-scale=1 missing: " + content);
+  assert(/viewport-fit=cover/.test(content), "viewport-fit=cover missing: " + content);
+  return content.replace(/, /g, " ");
+});
+
+check("a layout viewport wider than the screen is reported", () => {
+  const vp = SD._internals.Viewport;
+  const realScreen = window.screen.width;
+  Object.defineProperty(window.screen, "width", { value: 1080, configurable: true });
+  Object.defineProperty(window.screen, "devicePixelRatio", { value: 2.75, configurable: true });
+  Object.defineProperty(window, "devicePixelRatio", { value: 2.75, configurable: true });
+  const bad = { layout: 980 };
+  Object.defineProperty(doc.documentElement, "clientWidth", { value: bad.layout, configurable: true });
+  const m = vp.measure();
+  assert(m.device === 393, "expected a 393 CSS px screen, got " + m.device);
+  assert(m.ok === false, "980 px for a 393 px screen must be flagged");
+  Object.defineProperty(doc.documentElement, "clientWidth", { value: 393, configurable: true });
+  assert(vp.measure().ok === true, "a 393 px layout on a 393 px screen must be accepted");
+  Object.defineProperty(window.screen, "width", { value: realScreen, configurable: true });
+  return "980≠393 signalé · 393=393 accepté";
+});
+
 check("native consent banner is removed and the scroll lock released", () => {
   // Le web player affiche la bannière OneTrust par-dessus notre mini-player et
   // bloque le défilement tant qu'on n'a pas cliqué « Accepter ».
@@ -704,6 +734,13 @@ check("native mode: a shim replaces the injected layer", () => {
   );
   assert(missing.length === 0, "methods the PlaybackService calls are missing: " + missing.join(", "));
   return "9 méthodes · aucune couche injectée · idempotent ✓";
+});
+
+check("native mode: the viewport meta is declared too", () => {
+  const metas = nd.querySelectorAll('meta[name="viewport"]');
+  assert(metas.length === 1, `expected exactly one viewport meta, got ${metas.length}`);
+  assert(/width=device-width/.test(metas[0].getAttribute("content")), "width=device-width missing");
+  return "width=device-width · une seule balise ✓";
 });
 
 check("native mode: browser banners are hidden, not removed", () => {

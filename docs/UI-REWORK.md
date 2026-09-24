@@ -301,6 +301,7 @@ prioritaire) plus deux changements de comportement.
 | Contrôles natifs | chevrons 16 px | boîte 48 px sur tous les boutons-icônes de Spotify |
 | Contenu du player | dimensions desktop (tuiles ~330 px sur une colonne, titres 24-32 px, hero plein écran) | **métriques de l'app mobile** : 2 colonnes de ~160 dp, ligne 56 dp, pochette 40 dp, titre de section 20 px, hero 200 dp, gouttière 16 dp (§ `60-metrics.css`) |
 | Diagnostic | aucun | ligne **Affichage** dans les paramètres (`360×640 · 2,75× · 100 %`), copiable — sert à expliquer un rendu qui diffère d'un appareil à l'autre |
+| Viewport de mise en page | non déclaré → la WebView met en page sur **980 px** | **`<meta name="viewport" content="width=device-width…">` forcé** (couche injectée, mode bêta et `MainActivity`), plus `loadWithOverviewMode = true`. Sans ce meta, media queries, unités `vw` et tailles de police visent un écran deux à trois fois plus large que le téléphone : interface énorme, coupée à droite, à faire glisser. La ligne **Affichage** prévient explicitement (`⚠ mise en page 980px pour un écran de 393px`) |
 | Taille globale | fixe | réglage **Taille de l'interface** : `--sd-u` = 0,80 / 1 / 1,12 multiplie l'échelle typographique, les cibles tactiles, la hauteur des barres et les gouttières |
 
 Deux comportements changent en plus :
@@ -480,9 +481,29 @@ Le script réagit aussi aux apparitions tardives : un `MutationObserver` ne
 relance le balayage que si le nœud ajouté ressemble à un pop-up (sinon Spotify
 redessine trop souvent pour le supporter).
 
+### Le viewport, en clair
+
+Trois causes d'un affichage « pas adapté au téléphone », toutes mesurables :
+
+1. **Le web player est un site bureau** : il ne déclare aucun
+   `<meta name="viewport">`. Une WebView qui n'en trouve pas se donne une
+   largeur de mise en page de **980 px**. Toutes nos tailles (unités `vw`,
+   `clamp()`, media queries) étaient donc calculées pour un écran de 980 px
+   affiché sur un écran de ~390 px : d'où le « c'est trop gros » et les boutons
+   à aller chercher en faisant glisser la page. Le meta est maintenant posé par
+   la couche (avant les styles), par `MainActivity` (dès le début du chargement,
+   puis revérifié dix fois pendant que la page se construit) et par le mode bêta.
+2. **La largeur de mise en page n'est pas `window.innerWidth`** : le mode bêta
+   redéfinit cette dernière pour que Spotify se croie sur bureau. Le diagnostic
+   mesure `document.documentElement.clientWidth`, et le compare à la taille de
+   l'écran en pixels CSS (`screen.width / devicePixelRatio`).
+3. **Quand ça ne concorde pas, c'est écrit.** La ligne *Affichage* affiche
+   `⚠ mise en page 980px pour un écran de 393px` : un appui la copie, donc un
+   rapport de bug tient en une ligne.
+
 ### Tests et garde-fous
 
-* `tools/smoke.mjs` — **50 tests**, dont les dix du banc « native mode » (voir §9).
+* `tools/smoke.mjs` — **53 tests**, dont les dix du banc « native mode » (voir §9).
 * `tools/audit-links.mjs` (`npm run audit`, exécuté par la CI) — vérifie que
   chaque méthode du pont appelée par la couche existe dans `Bridge.kt`, que
   chaque classe `sd-…` posée par le runtime est stylée quelque part, que chaque

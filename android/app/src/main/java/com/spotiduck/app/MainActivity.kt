@@ -98,7 +98,12 @@ class MainActivity : AppCompatActivity() {
                 databaseEnabled = true
                 mediaPlaybackRequiresUserGesture = false // playback can start on its own
                 userAgentString = if (uiMode == MODE_INJECT) DESKTOP_UA else MOBILE_UA
-                loadWithOverviewMode = false
+                /* `useWideViewPort` + un `<meta name="viewport">` forcé (voir
+                   VIEWPORT_META_JS) : la mise en page se calcule alors à la
+                   largeur réelle de l'écran. Sans ce meta, la WebView retombe sur
+                   une largeur de 980 px et l'interface paraît énorme et coupée —
+                   c'est le défaut d'affichage qui traînait depuis le début. */
+                loadWithOverviewMode = true
                 useWideViewPort = true
                 builtInZoomControls = false
                 displayZoomControls = false
@@ -179,6 +184,10 @@ class MainActivity : AppCompatActivity() {
 
             override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
                 injectViewportScript()
+                /* `document.head` n'existe pas encore : le script s'installe et
+                   pose le meta dès qu'il le peut (la WebView recalcule alors sa
+                   mise en page). */
+                view.evaluateJavascript(VIEWPORT_META_JS, null)
             }
 
             /**
@@ -189,6 +198,7 @@ class MainActivity : AppCompatActivity() {
              */
             override fun onPageFinished(view: WebView, url: String?) {
                 view.evaluateJavascript("window.__sdBridgeReady=true;", null)
+                view.evaluateJavascript(VIEWPORT_META_JS, null)
                 val script = if (uiMode == MODE_INJECT) uiBundle else nativeScript
                 if (script.isNotEmpty()) view.evaluateJavascript(script, null)
             }
@@ -511,6 +521,47 @@ class MainActivity : AppCompatActivity() {
         private const val FAKE_DESKTOP_VIEWPORT = false
         private const val IDLE_SHUTDOWN_MS = 15L * 60L * 1000L
         private const val WAKE_LOCK_TIMEOUT_MS = 6L * 60L * 60L * 1000L
+
+        /**
+         * Force un `<meta name="viewport" content="width=device-width…">`.
+         *
+         * Le web player est un site **bureau** : il n'en déclare aucun. Or une
+         * WebView qui ne trouve pas ce meta se donne une largeur de mise en page
+         * de 980 px — les media queries, les unités `vw` et les tailles de police
+         * de la couche visent alors un écran trois fois plus large que le
+         * téléphone, et tout paraît énorme et rogné. Le script pose le meta puis
+         * vérifie dix fois (la page se construit en plusieurs fois), et ne touche
+         * jamais au reste du document.
+         */
+        private const val VIEWPORT_META_JS = """
+            (function(){
+              if (window.__sdViewportMeta) return;
+              window.__sdViewportMeta = true;
+              var CONTENT = "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover";
+              function ensure(){
+                var root = document.head || document.documentElement;
+                if (!root) return false;
+                var metas = document.querySelectorAll("meta[name='viewport']");
+                var meta = metas[0];
+                if (!meta) {
+                  meta = document.createElement("meta");
+                  meta.setAttribute("name", "viewport");
+                  (document.head || document.documentElement).appendChild(meta);
+                }
+                for (var i = 1; i < metas.length; i++) {
+                  if (metas[i].parentNode) metas[i].parentNode.removeChild(metas[i]);
+                }
+                if (meta.getAttribute("content") !== CONTENT) meta.setAttribute("content", CONTENT);
+                return true;
+              }
+              ensure();
+              var n = 0;
+              var t = window.setInterval(function(){
+                ensure();
+                if (++n > 10) window.clearInterval(t);
+              }, 200);
+            })();
+        """
 
         private const val VIEWPORT_SPOOF_JS = """
             (function(){
