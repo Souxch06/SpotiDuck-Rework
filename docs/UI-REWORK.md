@@ -2273,3 +2273,71 @@ n'est imposé.
 * sonde : `Accueil maison` relève l'état (affiché/masqué), la zone, la position
   par rapport aux barres, les rangées, les cartes, les filtres, les raccourcis et
   la taille d'une pochette.
+
+---
+
+## §37 — L'accueil montre enfin quelque chose, et il parle de vous (v2.11.0)
+
+Le défaut signalé — « rien n'a changé, c'est le même écran d'accueil » — n'était
+pas un défaut d'affichage mais de **lecture** de la page. L'accueil maison se
+construit avec les rangées de Spotify ; or il ne cherchait les cartes que parmi
+les liens (`a[href]`) alors que les cartes réelles sont des `div[role=button]`.
+Résultat : zéro carte, donc « aucune donnée », donc accueil masqué — et
+l'utilisateur revoyait l'accueil de Spotify exactement comme avant.
+
+Trois corrections de fond :
+
+1. **Les cartes sont lues telles qu'elles sont** : `a[href]`,
+   `[role=button]`, `[data-testid=card-clickable]`, `[data-encore-id=card]`,
+   `[data-testid=shortcut-card]`. Une carte qui n'est pas un lien reçoit un
+   bouton, et `Home.openOriginal()` va **cliquer la carte d'origine** dans la
+   page : la navigation passe par le lecteur web, pas par une URL devinée.
+   Les doublons sont écartés par lien *et* par libellé.
+2. **La visibilité ne dépend plus de l'état du DOM de Spotify** (qui pouvait
+   nous croire « ailleurs ») : c'est le **chemin de l'URL** qui fait foi
+   (`isHomePath()` — racine, `/home`, avec la langue).
+3. **L'accueil vit avec ses seules statistiques** : si la page ne publie
+   aucune rangée, mais que l'application a des écoutes à raconter, l'écran
+   s'affiche quand même. Plus de masquage silencieux.
+
+### Les statistiques d'écoute
+
+Nouveau module `Stats`, centième pour cent local (rien ne sort du téléphone,
+aucun compte requis). Chaque écoute est datée et additionnée ; l'import
+facultatif de l'historique (`GET /me/player/recently-played?limit=50`) se fait
+avec le jeton déjà présent dans la page, au plus une fois toutes les trente
+minutes, et reste muet sans jeton.
+
+Ce que l'accueil raconte :
+
+| Bloc | Contenu |
+| --- | --- |
+| Six tuiles | Temps d'écoute total, cette semaine, aujourd'hui, titres différents, artistes différents, écoutes |
+| Sept jours | graphique en colonnes, du plus ancien à aujourd'hui, avec le compte au-dessus |
+| Top 6 artistes | classement avec nombre d'écoutes et **part en pourcentage** |
+| Top 5 titres | classement avec leur artiste |
+| Moments | nuit, matin (5–12), après-midi (12–18), soirée (18–24) + jour préféré, série de jours d'affilée, moyenne par jour |
+| Découvertes | artistes écoutés cette semaine pour la première fois (au moins deux écoutes, pour éviter le hasard) |
+| Réglage | « Statistiques d'écoute » (interrupteur, défaut activé) et « Effacer mes statistiques » |
+
+Jamais d'écran vide : sans aucune donnée, le bloc affiche une phrase d'attente
+au lieu de tuiles à zéro. Une reprise du même titre en moins de trois minutes
+n'est pas comptée deux fois ; le stockage est plafonné à 1 500 écoutes, les plus
+anciennes sortant d'abord.
+
+### Vérifications
+
+* banc : « les statistiques d'écoute sont calculées, et elles sont justes » —
+  historique écrit à la main (6 écoutes, 3 artistes, 3 jours) et comparaison de
+  **chaque chiffre** : total, titres, artistes, temps, écoutes du jour, premier
+  artiste et sa part, les sept jours, série, soirée, moment préféré, découverte,
+  format « 22 min » et « 3 h 20 », persistance, reprise non comptée deux fois,
+  interrupteur qui coupe l'enregistrement, remise à zéro qui vide le stockage ;
+* banc : « l'accueil montre les statistiques, et vit sans les rangées de
+  Spotify » — page vide : six tuiles, temps d'écoute, graphique, classement,
+  moments, et **accueil non masqué** ;
+* audit : exposition `stats: Stats`, clé `sd.stats.v1` intouchée, interrupteur
+  respecté, classes du bloc présentes dans le code **et** la feuille, mesures du
+  résumé et de la série ;
+* sonde : `Accueil maison` relève l'état (affiché/masqué) et les compteurs,
+  `Rognage` vérifie qu'aucun conteneur ne dépasse.

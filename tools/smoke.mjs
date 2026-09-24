@@ -943,6 +943,127 @@ await checkAsync("the shell can never blank the page it dresses", async () => {
   return "#global-nav-bar (ancêtre du contenu) rétabli ✓";
 });
 
+await checkAsync("listening statistics are computed, and they are correct", async () => {
+  /* « Mets les différentes statistiques d'écoutes etc sur l'utilisateur. »
+     Le banc vérifie des **chiffres exacts**, pas la présence de cases : on
+     injecte un historique connu (des heures, des jours, des artistes précis) et
+     on compare chaque résultat. */
+  const dom = new JSDOM("<!doctype html><html><body><main></main></body></html>", {
+    url: "https://open.spotify.com/",
+    pretendToBeVisual: true,
+    runScripts: "dangerously",
+  });
+  dom.window.AndBridge = new Proxy({}, { get: () => () => undefined });
+  dom.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(200);
+  const api = dom.window.SpotiDuckUI;
+  const stats = api && api.stats;
+  assert(stats, "le module de statistiques n'est pas exposé");
+
+  /* Un historique écrit à la main : 6 écoutes de 3 minutes, à des heures
+     choisies, sur 3 jours, dont 2 artistes — un seul nouveau cette semaine. */
+  const day = 24 * 60 * 60 * 1000;
+  const noon = new Date();
+  noon.setHours(20, 0, 0, 0);
+  const today = noon.getTime();
+  const yesterday = today - day;
+  const old3 = today - 3 * day;
+  const old30 = today - 30 * day;
+  const history = [
+    { name: "Titre A", artist: "Artiste Un", at: old30, sec: 180 },
+    { name: "Titre A", artist: "Artiste Un", at: old3, sec: 180 },
+    { name: "Titre B", artist: "Artiste Un", at: yesterday, sec: 180 },
+    { name: "Titre C", artist: "Artiste Deux", at: yesterday + 60 * 1000, sec: 240 },
+    { name: "Titre C", artist: "Artiste Deux", at: today, sec: 240 },
+    { name: "Titre D", artist: "Artiste Trois", at: today + 60 * 1000, sec: 300 },
+  ];
+  history.forEach((h) => stats.record(h.name, h.artist, h.sec, h.at));
+
+  const sum = stats.summary(today + 5 * 60 * 1000);
+  assert(sum.total === 6, `écoutes attendues : 6, calculées ${sum.total}`);
+  assert(sum.trackCount === 4, `titres différents attendus : 4, calculés ${sum.trackCount}`);
+  assert(sum.artistCount === 3, `artistes attendus : 3, calculés ${sum.artistCount}`);
+  assert(sum.seconds === 180 * 3 + 240 * 2 + 300, `temps total : attendu 1380, calculé ${sum.seconds}`);
+  assert(sum.playsToday === 2, `écoutes du jour : attendues 2, calculées ${sum.playsToday}`);
+  assert(sum.topArtists[0].name === "Artiste Un", "le premier artiste devrait être Artiste Un");
+  assert(sum.topArtists[0].n === 3, `Artiste Un devrait compter 3 écoutes, ${sum.topArtists[0].n}`);
+  assert(sum.topArtists[0].share === 50, `part attendue 50 %, calculée ${sum.topArtists[0].share} %`);
+  assert(sum.byDay.length === 7, "la fenêtre des sept jours doit contenir sept entrées");
+  assert(sum.byDay[6].n === 2, `aujourd'hui : 2 écoutes attendues, ${sum.byDay[6].n}`);
+  assert(sum.byDay[5].n === 2, `hier : 2 écoutes attendues, ${sum.byDay[5].n}`);
+  assert(sum.streak >= 2, `série attendue ≥ 2 jours, calculée ${sum.streak}`);
+  assert(sum.bands.evening === 6, `le soir devrait compter 6 écoutes, ${sum.bands.evening}`);
+  assert(sum.favBand === "Le soir", `moment préféré attendu « Le soir », calculé « ${sum.favBand} »`);
+  assert(sum.discovery.length === 1, `une découverte attendue, ${sum.discovery.length} trouvée(s)`);
+  assert(sum.discovery[0].name === "Artiste Deux", "la découverte devrait être Artiste Deux (2 écoutes cette semaine)");
+  /* 1 320 s = 22 min pile : l'arrondi des minutes doit être celui-là. */
+  assert(stats.human(sum.seconds) === "22 min", `affichage attendu « 22 min », calculé « ${stats.human(sum.seconds)} »`);
+  assert(stats.human(3 * 3600 + 20 * 60) === "3 h 20", "affichage des heures incorrect");
+
+  /* Persistance : les statistiques survivent au redémarrage (localStorage). */
+  const stored = JSON.parse(dom.window.localStorage.getItem("sd.stats.v1"));
+  assert(stored && stored.e && stored.e.length === 6, "les écoutes ne sont pas enregistrées");
+  /* Le même titre deux fois en trois minutes est une reprise, pas une écoute. */
+  const before = stats.summary().total;
+  stats.record("Titre D", "Artiste Trois", 300, today + 90 * 1000);
+  assert(stats.summary().total === before, "une reprise comptée comme une nouvelle écoute");
+
+  /* Le réglage coupe l'enregistrement. */
+  api.set("stats", false);
+  stats.record("Titre E", "Artiste Quatre", 200, today + 120 * 1000);
+  assert(stats.summary().total === before, "l'enregistrement continue alors qu'il est désactivé");
+  api.set("stats", true);
+
+  /* La remise à zéro vide tout, stockage compris. */
+  stats.clear();
+  assert(stats.summary().total === 0, "la remise à zéro ne vide pas les statistiques");
+  assert(JSON.parse(dom.window.localStorage.getItem("sd.stats.v1")).e.length === 0, "le stockage n'est pas vidé");
+  dom.window.close();
+  return "6 écoutes · 3 artistes · parts, série, moments et découvertes exacts ✓";
+});
+
+await checkAsync("the home screen shows the statistics, and can live without Spotify's rows", async () => {
+  /* L'accueil est **notre** écran : il doit s'afficher même quand la page ne
+     publie aucune rangée, tant qu'il a des statistiques à montrer. C'est ce qui
+     garantit que l'utilisateur voit quelque chose de neuf. */
+  const dom = new JSDOM('<!doctype html><html><body><div id="main-view"></div></body></html>', {
+    url: "https://open.spotify.com/",
+    pretendToBeVisual: true,
+    runScripts: "dangerously",
+  });
+  dom.window.AndBridge = new Proxy({}, { get: () => () => undefined });
+  dom.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(200);
+  const api = dom.window.SpotiDuckUI;
+  const day = 24 * 60 * 60 * 1000;
+  api.stats.record("Titre A", "Artiste Un", 200, Date.now() - day);
+  api.stats.record("Titre B", "Artiste Deux", 200, Date.now());
+  api.home.refresh("test");
+  await tick(120);
+
+  const page = dom.window.document;
+  const board = page.querySelector(".sd-home");
+  const statsBox = page.querySelector(".sd-home-stats");
+  assert(statsBox, "le bloc de statistiques n'est pas dans l'accueil");
+  assert(statsBox.hidden === false, "le bloc de statistiques est masqué");
+  const tiles = [...statsBox.querySelectorAll(".sd-stat-tile")];
+  assert(tiles.length === 6, `six tuiles attendues, ${tiles.length} trouvée(s)`);
+  const values = tiles.map((t) => t.querySelector(".sd-stat-value").textContent);
+  assert(
+    values.some((v) => /min|h/.test(v)),
+    "aucune tuile n'affiche un temps d'écoute : " + values.join(", ")
+  );
+  assert(statsBox.querySelector(".sd-stat-chart"), "le graphique des sept jours est absent");
+  assert(statsBox.querySelector(".sd-stat-bars"), "le classement des artistes est absent");
+  assert(statsBox.querySelector(".sd-stat-bands"), "les moments de la journée sont absents");
+  assert(
+    board.hidden === false,
+    "l'accueil reste masqué alors qu'il a des statistiques à montrer"
+  );
+  dom.window.close();
+  return "6 tuiles · 7 jours · artistes · moments, sans rangée de Spotify ✓";
+});
+
 await checkAsync("the app has a home screen of its own, built from the page's data", async () => {
   /* Décision du 24/09, avec l'utilisateur : l'accueil du web player a été repris
      trois fois (métriques de bureau, quatre colonnes de pochettes de 59 px,

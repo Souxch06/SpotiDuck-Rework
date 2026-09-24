@@ -364,6 +364,24 @@ if (!/shouldShow: function/.test(shellJs) || !/isLoginPage\(\)/.test(shellJs)) {
   errors.push("l'accueil maison ne vérifie plus s'il doit s'afficher : il pourrait recouvrir la connexion");
 }
 
+if (!/stats: Stats,/.test(shellJs)) {
+  errors.push("les statistiques d'écoute ne sont plus exposées (diagnostic, sonde, tests)");
+}
+if (!/STATS_KEY = "sd\.stats\.v1"/.test(shellJs)) {
+  errors.push("la clé de stockage des statistiques a changé : les écoutes déjà enregistrées seraient perdues");
+}
+if (!/enabled: function \(\) \{\s*return !!Settings\.stats;/.test(shellJs)) {
+  errors.push("les statistiques ne respectent plus leur interrupteur");
+}
+for (const needle of ["sd-stat-tiles", "sd-stat-chart", "sd-stat-bars", "sd-stat-bands", "sd-stat-chip"]) {
+  if (!shellJs.includes(needle) || !css.includes(needle)) {
+    errors.push(`le bloc de statistiques a perdu « ${needle} » (code ou feuille)`);
+  }
+}
+if (!/summary: function/.test(shellJs) || !/streak: 0/.test(shellJs)) {
+  errors.push("le calcul des statistiques a perdu une de ses mesures (résumé ou série)");
+}
+
 /* 2-ter-ter. Deux défauts qui ont coûté une version chacun, et qui ne se voient
    qu'à l'usage : l'écran d'accueil qui restait posé par-dessus le lecteur (il
    n'était réévalué que sur les mutations du `<body>`), et un appui d'onglet qui

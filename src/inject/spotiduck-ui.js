@@ -113,6 +113,8 @@
        navigation est celle de l'application d'origine, en HAUT (`.sd-nav`).
        Le réglage reste disponible pour ceux qui préfèrent les onglets. */
     tabbar: false,
+    /* Statistiques d'écoute : locales au téléphone, activées par défaut. */
+    stats: true,
     haptics: true,
     /* Accueil maison : notre page d'accueil (données de la page, mise en page
        de l'application) au lieu de l'accueil du web player, dont la mise en page
@@ -159,6 +161,31 @@
       homeMore: "Tout afficher",
       homeEmptyCategory: "Rien dans cette catégorie pour l\'instant",
       homeBoard: "Accueil SpotiDuck",
+      /* Statistiques d'écoute */
+      stats: "Statistiques d'écoute",
+      statsTitle: "Vos statistiques",
+      statsListened: "Temps d'écoute",
+      statsWeek: "Cette semaine",
+      statsToday: "Aujourd'hui",
+      statsTracks: "Titres différents",
+      statsArtists: "Artistes",
+      statsTopArtists: "Vos artistes du moment",
+      statsTopTracks: "Vos titres les plus écoutés",
+      statsDays: "Ces sept derniers jours",
+      statsBands: "Quand vous écoutez",
+      statsDiscovery: "Découvertes de la semaine",
+      statsStreak: "Jours d'affilée",
+      statsFavBand: "Moment préféré",
+      statsFavDay: "Jour préféré",
+      statsEmpty: "Écoutez un titre : vos statistiques commenceront ici",
+      statsClear: "Effacer mes statistiques",
+      statsCleared: "Statistiques effacées",
+      bandNight: "La nuit",
+      bandMorning: "Le matin",
+      bandAfternoon: "L'après-midi",
+      bandEvening: "Le soir",
+      weekdays: ["Dimanche", "Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"],
+      weekdaysShort: ["D", "L", "M", "M", "J", "V", "S"],
       likedSongs: "Titres likés",
       blankTitle: "La page n'a rien affiché",
       blankText:
@@ -1335,6 +1362,14 @@
       var e = this.el;
 
 
+      /* **Vos statistiques s'alimentent ici** : un titre détecté pendant la
+         lecture est une écoute. L'horodatage est celui du moment, la durée
+         celle que la page annonce (sinon une durée moyenne). */
+      if (s.hasTrack && s.title && s.title !== UI.lastStatTitle) {
+        UI.lastStatTitle = s.title;
+        Stats.record(s.title, s.artist, s.duration);
+      }
+
       /* titles — sans titre, le mini-lecteur dit où il en est plutôt que de
          rester vide (il reste affiché, c'est le lecteur de l'application). */
       var miniTitle = s.title || Settings.labels.noTrack;
@@ -2296,6 +2331,16 @@
    * ------------------------------------------------------------------ */
   var MENU = {
     queue: { icon: ICONS.queueLine, label: Settings.labels.queue, run: function () { Queue.openSheet(); } },
+    /* Remise à zéro des statistiques : elles sont locales et à nous, mais elles
+       restent les siennes — un appui doit suffire à les effacer. */
+    "stats-clear": {
+      icon: ICONS.refreshLine,
+      label: Settings.labels.statsClear,
+      run: function () {
+        Stats.clear();
+        Toast.show(Settings.labels.statsCleared, 1800);
+      },
+    },
     lyrics: {
       icon: ICONS.lyricsLine,
       label: Settings.labels.lyrics,
@@ -2351,6 +2396,7 @@
     takeControl: true,
     resume: false,
     tabbar: true,
+    stats: true,
     haptics: true,
     homeBoard: true,
     /* Densité d'affichage : les télémétries Android et la WebView ne rendent
@@ -2627,6 +2673,8 @@
         self.group(Settings.labels.groupUi, [
           nativeRow,
           self.switchRow("homeBoard", Settings.labels.homeBoard),
+          self.switchRow("stats", Settings.labels.stats),
+          self.actionRow("stats-clear", Settings.labels.statsClear, ICONS.refreshLine),
           self.switchRow("tabbar", Settings.labels.showTabbar),
           self.switchRow("haptics", Settings.labels.haptics),
         ])
@@ -3231,35 +3279,53 @@
         var head = shelf.querySelector("h2, .encore-text-headline-large, [data-encore-id=\"text\"]");
         var title = head ? (head.textContent || "").replace(/\s+/g, " ").trim() : "";
         if (!title) continue;
-        var links = shelf.querySelectorAll("a[href]");
+        /* **Une carte n'est pas forcément un lien.** Sur la vraie page, les
+           cartes de l'accueil sont des `div[role=button]` (la mesure du 24/09 :
+           `CARTE div.OniARfz…`), et la première version de ce lecteur ne
+           cherchait que des `a[href]` : elle ne trouvait rien, l'accueil se
+           masquait, et l'utilisateur revoyait exactement l'écran de Spotify
+           (« rien n'a changé »). On accepte donc les deux formes, et quand il
+           n'y a pas d'adresse, on **clique la carte d'origine** au moment de
+           l'appui (voir `openOriginal`). */
+        var CARD_SEL =
+          'a[href], [role="button"], [data-testid="card-clickable"], div[data-encore-id="card"], [data-testid="shortcut-card"]';
+        var candidates = shelf.querySelectorAll(CARD_SEL);
         var cards = [];
         var seenHref = {};
-        for (var j = 0; j < links.length && cards.length < HOME_MAX_CARDS; j++) {
-          var a = links[j];
-          var img = a.querySelector("img");
-          var href = a.getAttribute("href") || "";
-          if (!img || !href || href === "#") continue;
-          if (seenHref[href]) continue;
-          seenHref[href] = 1;
-          /* Le titre de la carte : le texte de la carte, sinon l'alternative de
-             l'image, sinon le dernier segment de l'adresse (lisible : c'est un
-             slug de playlist). */
-          var label = (a.getAttribute("aria-label") || "").replace(/\s+/g, " ").trim();
+        var seenLabel = {};
+        for (var j = 0; j < candidates.length && cards.length < HOME_MAX_CARDS; j++) {
+          var node = candidates[j];
+          var img = node.querySelector("img");
+          if (!img) continue;
+          /* L'adresse : celle de la carte, ou celle d'un lien qu'elle contient. */
+          var inner = node.querySelector("a[href]");
+          var href = node.getAttribute("href") || (inner ? inner.getAttribute("href") : "") || "";
+          if (href === "#") href = "";
+          /* Le libellé : nom accessible, puis texte de la carte, puis l'image. */
+          var label = (node.getAttribute("aria-label") || "").replace(/\s+/g, " ").trim();
           if (!label) {
-            var t = a.querySelector("p, span.encore-text, [data-encore-id=\"text\"]");
+            var t = node.querySelector("p, span.encore-text, [data-encore-id=\"text\"]");
             label = t ? (t.textContent || "").replace(/\s+/g, " ").trim() : "";
           }
           if (!label) label = (img.getAttribute("alt") || "").trim();
-          if (!label) label = decodeURIComponent(href.split("/").filter(Boolean).pop() || "");
-          label = label.replace(/\s*·\s*/g, " · ");
-          var sub = a.querySelector("span.encore-text-body-small, p.encore-text-body-small");
-          var type = Home.typeOf(href, title, label);
+          if (!label && href) label = decodeURIComponent(href.split("/").filter(Boolean).pop() || "");
+          label = label.replace(/\s*·\s*/g, " · ").slice(0, 60);
+          if (!label || label.length < 2) continue;
+          var dedupe = href || label.toLowerCase();
+          if (seenHref[dedupe] || seenLabel[label.toLowerCase()]) continue;
+          seenHref[dedupe] = 1;
+          seenLabel[label.toLowerCase()] = 1;
+          var sub = node.querySelector("span.encore-text-body-small, p.encore-text-body-small");
           cards.push({
             href: href,
             img: img.currentSrc || img.getAttribute("src") || "",
-            title: label.slice(0, 60),
+            title: label,
             sub: sub ? (sub.textContent || "").replace(/\s+/g, " ").trim().slice(0, 40) : "",
-            type: type,
+            type: Home.typeOf(href, title, label),
+            /* Pour retrouver la carte d'origine : le rang de la rangée et celui de
+               la carte dans cette rangée. */
+            shelf: i,
+            card: j,
           });
         }
         if (!cards.length) continue;
@@ -3286,6 +3352,31 @@
       return rows;
     },
 
+    /** Clique la carte **d'origine** de la page (quand elle n'est pas un lien).
+        Les cartes sont relues au moment de l'appui : entre l'affichage et le
+        clic, Spotify a pu reconstruire ses rangées. */
+    openOriginal: function (shelfIndex, cardIndex) {
+      var shelves = $$('section[data-testid="component-shelf"], div[data-testid="grid-container"]');
+      var shelf = shelves[shelfIndex];
+      if (!shelf) return false;
+      var CARD_SEL =
+        'a[href], [role="button"], [data-testid="card-clickable"], div[data-encore-id="card"], [data-testid="shortcut-card"]';
+      var candidates = [];
+      var all = shelf.querySelectorAll(CARD_SEL);
+      for (var i = 0; i < all.length; i++) {
+        if (all[i].querySelector("img")) candidates.push(all[i]);
+      }
+      var node = candidates[cardIndex];
+      if (!node) return false;
+      var link = node.tagName === "A" && node.getAttribute("href") ? node : node.querySelector("a[href]");
+      if (link && link.getAttribute("href")) {
+        location.assign(link.getAttribute("href"));
+        return true;
+      }
+      node.click();
+      return true;
+    },
+
     /** Musique, podcast, ou autre — d'après l'adresse et les mots du titre. */
     typeOf: function (href, shelfTitle, label) {
       var h = (href || "").toLowerCase();
@@ -3295,14 +3386,25 @@
       return "other";
     },
 
+    /** **Le chemin fait foi.** La détection de vue (`State.route`) dépend du DOM
+        de Spotify : quand elle se trompait, l'accueil se croyait « ailleurs » et
+        ne s'affichait jamais — c'est l'autre moitié du « rien n'a changé ».
+        L'adresse, elle, ne se trompe pas : la racine du web player est
+        l'accueil, tout le reste (playlist, album, artiste, recherche) est une
+        autre page. */
+    isHomePath: function () {
+      var path = (location.pathname || "/").replace(/\/+$/, "") || "";
+      if (path === "" || path === "/" || path === "/home") return true;
+      return /^\/(?:[a-z]{2}(?:-[a-z]{2})?)$/.test(path); /* /fr, /fr-FR, /en… */
+    },
+
     shouldShow: function () {
       if (!Settings.homeBoard) return false;
-      if (!this.built || !this.data.length) return false;
-      if (State.tab !== "home") return false;
-      /* **Pas sur une sous-page.** L'onglet reste « accueil » pendant qu'on
-         ouvre une playlist, un album ou un artiste : sans cette ligne, notre
-         accueil se poserait par-dessus la playlist qu'on vient d'ouvrir. */
-      if (State.route === "page") return false;
+      if (!this.built) return false;
+      /* Les statistiques suffisent : l'accueil est **notre** écran, il n'a pas
+         besoin que Spotify publie des rangées pour exister. */
+      if (!this.data.length && !Stats.hasData()) return false;
+      if (!this.isHomePath()) return false;
       if (LoginState.isLoginPage()) return false;
       if (!LoginState.signedIn()) return false;
       return true;
@@ -3325,6 +3427,7 @@
         '<button class="sd-chip sd-chip-music" type="button" role="tab" data-filter="music"></button>' +
         '<button class="sd-chip sd-chip-podcast" type="button" role="tab" data-filter="podcast"></button>' +
         "</div>" +
+        '<div class="sd-home-stats"></div>' +
         '<div class="sd-home-shortcuts"></div>' +
         '<div class="sd-home-sections"></div>';
       this.el = el;
@@ -3381,6 +3484,235 @@
       if (!visible) Toast.show(Settings.labels.homeEmptyCategory, 1600);
     },
 
+    /* ---------------- statistiques ---------------- */
+
+    /** Le bloc « Vos statistiques » : tuiles, classements, sept derniers jours,
+        moments de la journée, découvertes. Tout vient de `Stats.summary()`. */
+    renderStats: function () {
+      var box = $(".sd-home-stats", this.el);
+      if (!box) return false;
+      var sum = Stats.summary();
+      box.textContent = "";
+      box.hidden = false;
+
+      var head = document.createElement("div");
+      head.className = "sd-home-head";
+      var h = document.createElement("h2");
+      h.className = "sd-home-section-title";
+      h.textContent = Settings.labels.statsTitle;
+      head.appendChild(h);
+      var reset = document.createElement("button");
+      reset.type = "button";
+      reset.className = "sd-stat-reset";
+      reset.textContent = Settings.labels.statsClear;
+      reset.addEventListener("click", function () {
+        Stats.clear();
+        Toast.show(Settings.labels.statsCleared, 1600);
+      });
+      head.appendChild(reset);
+      box.appendChild(head);
+
+      if (!sum.total) {
+        var empty = document.createElement("p");
+        empty.className = "sd-stat-empty";
+        empty.textContent = Settings.labels.statsEmpty;
+        box.appendChild(empty);
+        return true;
+      }
+
+      /* Tuiles : temps d'écoute total, cette semaine, aujourd'hui, volumes. */
+      var tiles = document.createElement("div");
+      tiles.className = "sd-stat-tiles";
+      [
+        [Settings.labels.statsListened, Stats.human(sum.seconds)],
+        [Settings.labels.statsWeek, Stats.human(sum.secondsWeek)],
+        [Settings.labels.statsToday, String(sum.playsToday)],
+        [Settings.labels.statsTracks, String(sum.trackCount)],
+        [Settings.labels.statsArtists, String(sum.artistCount)],
+        [Settings.labels.statsStreak, String(sum.streak)],
+      ].forEach(function (pair) {
+        var tile = document.createElement("div");
+        tile.className = "sd-stat-tile";
+        var value = document.createElement("span");
+        value.className = "sd-stat-value";
+        value.textContent = pair[1];
+        var label = document.createElement("span");
+        label.className = "sd-stat-label";
+        label.textContent = pair[0];
+        tile.appendChild(value);
+        tile.appendChild(label);
+        tiles.appendChild(tile);
+      });
+      box.appendChild(tiles);
+
+      /* Sept derniers jours : barres proportionnelles, jour du jour marqué. */
+      var week = document.createElement("div");
+      week.className = "sd-stat-card";
+      week.appendChild(this.statTitle(Settings.labels.statsDays));
+      var max = 1;
+      sum.byDay.forEach(function (d) {
+        if (d.n > max) max = d.n;
+      });
+      var chart = document.createElement("div");
+      chart.className = "sd-stat-chart";
+      var todayIndex = sum.byDay.length - 1;
+      sum.byDay.forEach(function (d, index) {
+        var col = document.createElement("div");
+        col.className = "sd-stat-col" + (index === todayIndex ? " is-today" : "");
+        var bar = document.createElement("span");
+        bar.className = "sd-stat-bar";
+        bar.style.height = Math.round((d.n / max) * 100) + "%";
+        bar.setAttribute("title", d.n + " × " + Stats.weekdayLabel(d.day));
+        var count = document.createElement("span");
+        count.className = "sd-stat-count";
+        count.textContent = d.n ? String(d.n) : "";
+        var label = document.createElement("span");
+        label.className = "sd-stat-day";
+        label.textContent = Stats.weekdayLabel(d.day);
+        col.appendChild(count);
+        col.appendChild(bar);
+        col.appendChild(label);
+        chart.appendChild(col);
+      });
+      week.appendChild(chart);
+      box.appendChild(week);
+
+      /* Vos artistes du moment : le classement, avec la part de chaque artiste. */
+      if (sum.topArtists.length) {
+        var artists = document.createElement("div");
+        artists.className = "sd-stat-card";
+        artists.appendChild(this.statTitle(Settings.labels.statsTopArtists));
+        var list = document.createElement("div");
+        list.className = "sd-stat-bars";
+        var top = sum.topArtists[0].n || 1;
+        sum.topArtists.forEach(function (artist) {
+          var row = document.createElement("div");
+          row.className = "sd-stat-bar-row";
+          var name = document.createElement("span");
+          name.className = "sd-stat-bar-label";
+          name.textContent = artist.name;
+          var track = document.createElement("span");
+          track.className = "sd-stat-bar-track";
+          var fill = document.createElement("i");
+          fill.style.width = Math.max(4, Math.round((artist.n / top) * 100)) + "%";
+          track.appendChild(fill);
+          var value = document.createElement("span");
+          value.className = "sd-stat-bar-value";
+          value.textContent = artist.n + " × · " + artist.share + " %";
+          row.appendChild(name);
+          row.appendChild(track);
+          row.appendChild(value);
+          list.appendChild(row);
+        });
+        artists.appendChild(list);
+        box.appendChild(artists);
+      }
+
+      /* Titres les plus écoutés, quand l'information existe. */
+      if (sum.topTracks.length) {
+        var tracks = document.createElement("div");
+        tracks.className = "sd-stat-card";
+        tracks.appendChild(this.statTitle(Settings.labels.statsTopTracks));
+        var tlist = document.createElement("div");
+        tlist.className = "sd-stat-bars";
+        var topTrack = sum.topTracks[0].n || 1;
+        sum.topTracks.forEach(function (item) {
+          var row = document.createElement("div");
+          row.className = "sd-stat-bar-row";
+          var name = document.createElement("span");
+          name.className = "sd-stat-bar-label";
+          name.textContent = item.title;
+          var track = document.createElement("span");
+          track.className = "sd-stat-bar-track";
+          var fill = document.createElement("i");
+          fill.style.width = Math.max(4, Math.round((item.n / topTrack) * 100)) + "%";
+          track.appendChild(fill);
+          var value = document.createElement("span");
+          value.className = "sd-stat-bar-value";
+          value.textContent = item.n + " ×";
+          row.appendChild(name);
+          row.appendChild(track);
+          row.appendChild(value);
+          tlist.appendChild(row);
+        });
+        tracks.appendChild(tlist);
+        box.appendChild(tracks);
+      }
+
+      /* Quand vous écoutez : les quatre moments, et les préférences. */
+      var bands = document.createElement("div");
+      bands.className = "sd-stat-card";
+      bands.appendChild(this.statTitle(Settings.labels.statsBands));
+      var bandBox = document.createElement("div");
+      bandBox.className = "sd-stat-bands";
+      var bandMax = 1;
+      ["morning", "afternoon", "evening", "night"].forEach(function (key) {
+        if (sum.bands[key] > bandMax) bandMax = sum.bands[key];
+      });
+      ["morning", "afternoon", "evening", "night"].forEach(function (key) {
+        var row = document.createElement("div");
+        row.className = "sd-stat-band" + (Stats.bandLabel(key) === sum.favBand ? " is-fav" : "");
+        var name = document.createElement("span");
+        name.className = "sd-stat-band-name";
+        name.textContent = Stats.bandLabel(key);
+        var track = document.createElement("span");
+        track.className = "sd-stat-bar-track";
+        var fill = document.createElement("i");
+        fill.style.width = Math.max(3, Math.round((sum.bands[key] / bandMax) * 100)) + "%";
+        track.appendChild(fill);
+        var value = document.createElement("span");
+        value.className = "sd-stat-bar-value";
+        value.textContent = String(sum.bands[key]);
+        row.appendChild(name);
+        row.appendChild(track);
+        row.appendChild(value);
+        bandBox.appendChild(row);
+      });
+      bands.appendChild(bandBox);
+      var facts = document.createElement("div");
+      facts.className = "sd-stat-facts";
+      [
+        [Settings.labels.statsFavBand, sum.favBand],
+        [Settings.labels.statsFavDay, sum.favDay],
+        [Settings.labels.statsToday, Stats.human(sum.secondsToday)],
+      ].forEach(function (pair) {
+        if (!pair[1]) return;
+        var fact = document.createElement("span");
+        fact.className = "sd-stat-fact";
+        fact.innerHTML = '<b></b><span></span>';
+        $("b", fact).textContent = pair[1];
+        $("span", fact).textContent = pair[0];
+        facts.appendChild(fact);
+      });
+      bands.appendChild(facts);
+      box.appendChild(bands);
+
+      /* Découvertes de la semaine : les artistes entendus pour la première fois. */
+      if (sum.discovery.length) {
+        var disc = document.createElement("div");
+        disc.className = "sd-stat-card";
+        disc.appendChild(this.statTitle(Settings.labels.statsDiscovery));
+        var chips = document.createElement("div");
+        chips.className = "sd-stat-chips";
+        sum.discovery.forEach(function (artist) {
+          var chip = document.createElement("span");
+          chip.className = "sd-stat-chip";
+          chip.textContent = artist.name;
+          chips.appendChild(chip);
+        });
+        disc.appendChild(chips);
+        box.appendChild(disc);
+      }
+      return true;
+    },
+
+    statTitle: function (text) {
+      var h = document.createElement("h3");
+      h.className = "sd-stat-card-title";
+      h.textContent = text;
+      return h;
+    },
+
     renderSections: function () {
       var box = $(".sd-home-sections", this.el);
       if (!box) return;
@@ -3422,9 +3754,13 @@
         var grid = document.createElement("div");
         grid.className = "sd-home-grid";
         cards.forEach(function (c) {
-          var a = document.createElement("a");
+          /* Avec une adresse : un lien réel (menu contextuel, copie, partage).
+             Sans adresse : un bouton qui clique la carte d'origine — « chaque
+             commande reliée à quelque chose ». */
+          var a = document.createElement(c.href ? "a" : "button");
+          if (c.href) a.href = c.href;
+          else a.type = "button";
           a.className = "sd-home-card sd-home-card-" + c.type;
-          a.href = c.href;
           a.innerHTML =
             '<span class="sd-home-cover"></span>' +
             '<span class="sd-home-meta"><span class="sd-home-title"></span><span class="sd-home-sub"></span></span>';
@@ -3439,8 +3775,12 @@
             img.src = c.img;
             cover.appendChild(img);
           }
-          a.addEventListener("click", function () {
+          a.addEventListener("click", function (ev) {
             Home.hide();
+            if (!c.href) {
+              ev.preventDefault();
+              Home.openOriginal(c.shelf, c.card);
+            }
           });
           grid.appendChild(a);
         });
@@ -3466,6 +3806,7 @@
           name === "music" ? Settings.labels.homeMusic : name === "podcast" ? Settings.labels.homePodcasts : Settings.labels.homeAll;
       });
       this.buildShortcuts();
+      this.renderStats();
       this.renderSections();
       var show = this.shouldShow();
       this.el.hidden = !show;
@@ -3477,6 +3818,307 @@
       if (!this.el) return false;
       this.el.hidden = true;
       return true;
+    },
+  };
+
+  /* ------------------------------------------------------------------ *
+   * 11e-quater. Stats — vos statistiques d'écoute
+   *
+   * Demande de l'utilisateur (24/09) : « mets les différentes statistiques
+   * d'écoutes etc sur l'utilisateur, ajoute plein de données intéressantes ».
+   *
+   * Principe : l'application **note ce qu'elle voit jouer**. Chaque titre
+   * détecté (changement de morceau pendant la lecture) ajoute une ligne
+   * horodatée : ça ne dépend d'aucune permission et fonctionne dès la première
+   * écoute. En complément, quand la session de la page expose un jeton
+   * utilisable, l'historique récent de Spotify (50 derniers titres, avec leur
+   * date réelle) est importé — les statistiques ne commencent donc pas à zéro.
+   *
+   * Tout est **local** (localStorage, 1 500 écoutes maximum) ; rien ne sort du
+   * téléphone. Le réglage « Statistiques d'écoute » arrête l'enregistrement.
+   *
+   * Ce qui est calculé, et vérifié par le banc :
+   *   temps d'écoute total / des sept derniers jours / du jour · titres et
+   *   artistes différents · classement des artistes et des titres (avec parts) ·
+   *   sept derniers jours · moments de la journée (nuit, matin, après-midi,
+   *   soir) · jour préféré · série de jours d'affilée · artistes découverts
+   *   cette semaine · écoutes du jour
+   * ------------------------------------------------------------------ */
+
+  var STATS_KEY = "sd.stats.v1";
+  var STATS_MAX = 1500;
+  var STATS_DEFAULT_SEC = 210; /* durée moyenne, quand la page ne l'annonce pas */
+
+  var Stats = {
+    entries: [],
+    loaded: false,
+    lastSync: 0,
+
+    enabled: function () {
+      return !!Settings.stats;
+    },
+
+    load: function () {
+      if (this.loaded) return this.entries;
+      this.loaded = true;
+      try {
+        var raw = window.localStorage.getItem(STATS_KEY);
+        if (!raw) return this.entries;
+        var parsed = JSON.parse(raw);
+        var list = (parsed && parsed.e) || [];
+        this.entries = list.filter(function (e) {
+          return e && typeof e.t === "string" && e.t && typeof e.ts === "number";
+        });
+      } catch (e) {
+        this.entries = [];
+      }
+      return this.entries;
+    },
+
+    save: function () {
+      try {
+        window.localStorage.setItem(STATS_KEY, JSON.stringify({ v: 1, e: this.entries }));
+      } catch (e) {
+        /* stockage refusé ou plein : les statistiques restent en mémoire */
+      }
+    },
+
+    hasData: function () {
+      return this.load().length > 0;
+    },
+
+    /** Note une écoute. `at` (ms) permet d'importer un historique daté. */
+    record: function (title, artist, durationSec, at) {
+      if (!this.enabled()) return false;
+      title = (title || "").trim();
+      if (title.length < 2) return false;
+      this.load();
+      var key = (title + "\\u0000" + (artist || "")).toLowerCase();
+      var when = typeof at === "number" && at > 0 ? at : Date.now();
+      /* Le même titre deux fois en trois minutes est une reprise, pas une
+         nouvelle écoute (le web player annonce parfois le même morceau deux
+         fois au chargement). */
+      var last = this.entries.length ? this.entries[this.entries.length - 1] : null;
+      if (last && last.k === key && Math.abs(when - last.ts) < 3 * 60 * 1000) return false;
+      this.entries.push({
+        k: key,
+        t: title.slice(0, 80),
+        a: (artist || "").slice(0, 80),
+        ts: when,
+        d: durationSec > 0 ? Math.round(durationSec) : 0,
+      });
+      /* Chronologique : l'import d'un historique insère des écoutes passées. */
+      this.entries.sort(function (a, b) {
+        return a.ts - b.ts;
+      });
+      if (this.entries.length > STATS_MAX) this.entries = this.entries.slice(-STATS_MAX);
+      this.save();
+      return true;
+    },
+
+    /** Importe l'historique récent de Spotify (`/me/player/recently-played`). */
+    importRecent: function (items) {
+      if (!this.enabled() || !items || !items.length) return 0;
+      this.load();
+      var added = 0;
+      for (var i = items.length - 1; i >= 0; i--) {
+        var item = items[i];
+        var track = (item && item.track) || {};
+        var name = track.name || "";
+        if (!name) continue;
+        var artist = "";
+        if (track.artists && track.artists.length) artist = track.artists[0].name || "";
+        var at = Date.parse(item.played_at || "") || 0;
+        if (this.record(name, artist, Math.round((track.duration_ms || 0) / 1000), at)) added++;
+      }
+      return added;
+    },
+
+    /** Récupère l'historique par l'API, avec le jeton que la page utilise déjà.
+        Silencieux en cas d'échec : les statistiques locales continuent seules. */
+    syncFromApi: function (force) {
+      if (!this.enabled() || !window.fetch || !Api.authToken) return false;
+      var now = Date.now();
+      if (!force && now - this.lastSync < 30 * 60 * 1000) return false;
+      this.lastSync = now;
+      try {
+        window
+          .fetch("https://api.spotify.com/v1/me/player/recently-played?limit=50", {
+            headers: { Authorization: Api.authToken },
+          })
+          .then(function (r) {
+            return r && r.ok ? r.json() : null;
+          })
+          .then(function (data) {
+            if (!data || !data.items) return;
+            if (Stats.importRecent(data.items) && Home.built) Home.refresh("stats-api");
+          })
+          .catch(function () {
+            /* pas de jeton utilisable : on garde les statistiques locales */
+          });
+        return true;
+      } catch (e) {
+        return false;
+      }
+    },
+
+    clear: function () {
+      this.entries = [];
+      this.save();
+      if (Home.built) Home.refresh("stats-clear");
+      return true;
+    },
+
+    /* ---------------- calculs ---------------- */
+
+    summary: function (nowMs) {
+      this.load();
+      var now = nowMs || Date.now();
+      var day = 24 * 60 * 60 * 1000;
+      var startToday = new Date(now);
+      startToday.setHours(0, 0, 0, 0);
+      var t0 = startToday.getTime();
+      var sum = {
+        total: this.entries.length,
+        seconds: 0,
+        secondsWeek: 0,
+        secondsToday: 0,
+        playsToday: 0,
+        playsWeek: 0,
+        tracks: {},
+        artists: {},
+        byDay: [],
+        bands: { night: 0, morning: 0, afternoon: 0, evening: 0 },
+        weekdays: [0, 0, 0, 0, 0, 0, 0],
+        streak: 0,
+        discovery: [],
+      };
+      var i, e, sec, when, hour;
+      for (i = 0; i < this.entries.length; i++) {
+        e = this.entries[i];
+        sec = e.d > 0 ? e.d : STATS_DEFAULT_SEC;
+        sum.seconds += sec;
+        when = new Date(e.ts);
+        if (e.ts >= now - 7 * day) {
+          sum.secondsWeek += sec;
+          sum.playsWeek++;
+        }
+        if (e.ts >= t0) {
+          sum.secondsToday += sec;
+          sum.playsToday++;
+        }
+        sum.tracks[e.k] = sum.tracks[e.k] || { title: e.t, artist: e.a, n: 0, sec: 0 };
+        sum.tracks[e.k].n++;
+        sum.tracks[e.k].sec += sec;
+        if (e.a) {
+          sum.artists[e.a] = sum.artists[e.a] || { name: e.a, n: 0, sec: 0, first: e.ts };
+          sum.artists[e.a].n++;
+          sum.artists[e.a].sec += sec;
+          if (e.ts < sum.artists[e.a].first) sum.artists[e.a].first = e.ts;
+        }
+        hour = when.getHours();
+        if (hour >= 5 && hour < 12) sum.bands.morning++;
+        else if (hour >= 12 && hour < 18) sum.bands.afternoon++;
+        else if (hour >= 18 && hour < 24) sum.bands.evening++;
+        else sum.bands.night++;
+        sum.weekdays[when.getDay()]++;
+      }
+      /* Les sept derniers jours, du plus ancien à aujourd'hui. */
+      for (i = 6; i >= 0; i--) {
+        var from = t0 - i * day;
+        var to = from + day;
+        var count = 0;
+        for (var j = 0; j < this.entries.length; j++) {
+          if (this.entries[j].ts >= from && this.entries[j].ts < to) count++;
+        }
+        sum.byDay.push({ day: new Date(from).getDay(), date: from, n: count });
+      }
+      /* Série de jours d'affilée (aujourd'hui, sinon hier si rien aujourd'hui). */
+      var cursor = t0;
+      var guard = 0;
+      var firstDay = true;
+      while (guard++ < 400) {
+        var hit = 0;
+        for (i = 0; i < this.entries.length && !hit; i++) {
+          if (this.entries[i].ts >= cursor && this.entries[i].ts < cursor + day) hit = 1;
+        }
+        if (hit) {
+          sum.streak++;
+          cursor -= day;
+          firstDay = false;
+        } else if (firstDay) {
+          cursor -= day; /* la série peut encore courir depuis hier */
+          firstDay = false;
+        } else break;
+      }
+      sum.topArtists = this.rank(sum.artists, 6);
+      sum.topTracks = this.rank(sum.tracks, 5);
+      sum.artistCount = Object.keys(sum.artists).length;
+      sum.trackCount = Object.keys(sum.tracks).length;
+      for (var name in sum.artists) {
+        if (sum.artists[name].first >= now - 7 * day && sum.artists[name].n >= 2) {
+          sum.discovery.push(sum.artists[name]);
+        }
+      }
+      sum.discovery.sort(function (a, b) {
+        return b.n - a.n;
+      });
+      sum.discovery = sum.discovery.slice(0, 8);
+      var favBand = "";
+      var best = -1;
+      for (var band in sum.bands) {
+        if (sum.bands[band] > best) {
+          best = sum.bands[band];
+          favBand = band;
+        }
+      }
+      sum.favBand = best > 0 ? Stats.bandLabel(favBand) : "";
+      var favDay = -1;
+      for (i = 0; i < 7; i++) {
+        if (favDay === -1 || sum.weekdays[i] > sum.weekdays[favDay]) favDay = i;
+      }
+      sum.favDay = sum.total ? Stats.weekdayLabel(favDay, true) : "";
+      return sum;
+    },
+
+    rank: function (map, limit) {
+      var list = [];
+      for (var k in map) list.push(map[k]);
+      list.sort(function (a, b) {
+        return b.n - a.n || b.sec - a.sec;
+      });
+      var total = 0;
+      for (var i = 0; i < list.length; i++) total += list[i].n;
+      for (var j = 0; j < list.length; j++) {
+        list[j].share = total ? Math.round((list[j].n / total) * 100) : 0;
+      }
+      return list.slice(0, limit);
+    },
+
+    /** « 3 h 20 », « 45 min » — la forme que lit un humain. */
+    human: function (seconds) {
+      var sec = Math.max(0, Math.round(seconds || 0));
+      var h = Math.floor(sec / 3600);
+      var min = Math.round((sec % 3600) / 60);
+      if (h && min) return h + " h " + min;
+      if (h) return h + " h";
+      return min + " min";
+    },
+
+    bandLabel: function (band) {
+      return (
+        {
+          night: Settings.labels.bandNight,
+          morning: Settings.labels.bandMorning,
+          afternoon: Settings.labels.bandAfternoon,
+          evening: Settings.labels.bandEvening,
+        }[band] || ""
+      );
+    },
+
+    weekdayLabel: function (index, long) {
+      var list = long ? Settings.labels.weekdays : Settings.labels.weekdaysShort;
+      return (list || [])[index] || "";
     },
   };
 
@@ -4217,6 +4859,11 @@
     /* L'accueil lit la page : il se rafraîchit quand le contenu arrive, quand on
        change d'onglet, et sur redimensionnement — jamais en boucle serrée. */
     Home.refresh("boot");
+    /* L'historique récent de Spotify, quand le jeton de la page le permet : les
+       statistiques ne commencent pas à zéro. Silencieux sinon. */
+    window.setTimeout(function () {
+      Stats.syncFromApi();
+    }, 4000);
     /* …et à neuf secondes, si l'écran est toujours vide, on le dit (le contenu
        d'une page Spotify met quelques secondes à apparaître sur un téléphone,
        mais pas neuf). */
@@ -4366,6 +5013,8 @@
     content: Content,
     /** L'accueil maison : ses données (`home.data`), ses filtres, son état. */
     home: Home,
+    /** Vos statistiques d'écoute : `summary()`, `record()`, `clear()`. */
+    stats: Stats,
     /** Change one setting (`theme`, `haptics`, `accentFromArt`, `tabbar`,
      *  `takeControl`, `resume`, `reduceMotion`) and persist it. */
     set: function (key, value) {
@@ -4467,6 +5116,7 @@
       Volume: Volume,
       Content: Content,
       Home: Home,
+      Stats: Stats,
       Icons: ICONS,
     },
   };
