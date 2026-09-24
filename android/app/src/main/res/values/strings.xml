@@ -11,13 +11,18 @@
     <string name="msg_unlock">Lecture débloquée</string>
     <string name="msg_reload">Session expirée — rechargement…</string>
     <string name="ui_mode_title">Interface de l\'application</string>
-    <!-- Le mode « natif » sert la page web mobile de Spotify : ce n'est pas
-         l'application mobile (pas de barre d'onglets) et la connexion
-         e-mail/mot de passe y est refusée. Il reste proposé, en bêta. -->
-    <string name="ui_mode_inject">Interface SpotiDuck (recommandé)</string>
-    <string name="ui_mode_inject_short">Interface SpotiDuck</string>
+    <!-- Trois interfaces :
+         · « original » = le code de l'application d'origine, repris tel quel
+           (c'est celle-ci qui est livrée par défaut) ;
+         · « native » = la page web mobile de Spotify (bêta) ;
+         · « inject » = la couche SpotiDuck, habillage maison. -->
+    <string name="ui_mode_original">Interface d\'origine de SpotiDuck</string>
+    <string name="ui_mode_original_short">Interface d\'origine</string>
+    <string name="ui_mode_original_toast">Interface d\'origine — rechargement…</string>
+    <string name="ui_mode_inject">Habillage SpotiDuck (maison)</string>
+    <string name="ui_mode_inject_short">Habillage SpotiDuck</string>
     <string name="ui_mode_native">Page web mobile de Spotify (bêta)</string>
     <string name="ui_mode_native_short">Page web Spotify (bêta)</string>
     <string name="ui_mode_native_toast">Page web Spotify — connexion et lecture limitées</string>
-    <string name="ui_mode_inject_toast">Interface SpotiDuck — rechargement…</string>
+    <string name="ui_mode_inject_toast">Habillage SpotiDuck — rechargement…</string>
 </resources>

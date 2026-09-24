@@ -22,6 +22,7 @@ import { parse } from "acorn";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p) => readFileSync(join(root, p), "utf8");
@@ -40,6 +41,11 @@ for (const m of runtime.matchAll(/Bridge\.call\(\s*"(\w+)"/g)) usedBridgeNames.a
 /* Les raccourcis (`mediaStatus`, `sleepLock`…) appellent `call("<nom>")` : on
    récupère aussi les noms passés à l'intérieur de l'objet Bridge. */
 for (const m of runtime.matchAll(/this\.call\(\s*"(\w+)"/g)) usedBridgeNames.add(m[1]);
+/* L'interface d'origine appelle le pont directement (`AndBridge.nFetch(...)`),
+   sans passer par le module Bridge : ses appels comptent aussi, sinon
+   l'audit réclamerait la suppression de méthodes bien utilisées. */
+const originalCalls = read("src/original/spotiduck-original.js");
+for (const m of originalCalls.matchAll(/AndBridge\.(\w+)\s*\(/g)) usedBridgeNames.add(m[1]);
 
 for (const name of usedBridgeNames) {
   if (!kotlinMethods.has(name)) errors.push(`Bridge.kt n'expose pas « ${name} » (appelé par la couche injectée)`);
@@ -154,15 +160,63 @@ for (const sel of CORE_SELECTORS) {
 
 /* 2-quater. Le mode livré par défaut. Ce n'est pas une broutille : le 2.6.0 a
    expédié la page web mobile de Spotify comme interface par défaut, sans
-   connexion utilisable, et il a fallu une version entière pour revenir en
-   arrière. Le choix reste donc sous surveillance. */
+   connexion utilisable, et il a fallu deux versions entières pour revenir à
+   l'affichage voulu. Le choix reste donc sous surveillance. */
 const activity = read("android/app/src/main/java/com/spotiduck/app/MainActivity.kt");
-if (!/MODE_DEFAULT\s*=\s*MODE_INJECT/.test(activity)) {
-  errors.push("MainActivity : le mode par défaut n'est plus l'interface injectée");
+if (!/MODE_DEFAULT\s*=\s*MODE_ORIGINAL/.test(activity)) {
+  errors.push("MainActivity : le mode par défaut n'est plus l'interface d'origine");
 }
 /* Le mode « natif » ne doit être retenu que s'il a été choisi explicitement. */
 if (!/KEY_UI_MODE_CHOSEN/.test(activity)) {
   errors.push("MainActivity : le mode enregistré n'est plus distingué d'un choix explicite");
+}
+/* …et un ancien choix enregistré (par une version dont le défaut était autre)
+   ne doit pas être confondu avec un choix volontaire : c'est ce que fait le
+   compteur de révision. */
+if (!/KEY_UI_MODE_REV/.test(activity) || !/UI_MODE_REV\s*=\s*\d+/.test(activity)) {
+  errors.push("MainActivity : la révision du mode par défaut n'est plus enregistrée");
+}
+
+/* 2-quater-bis. L'interface d'origine est **le code d'origine**, pas une
+   réécriture : le script livré doit venir de `src/original/`, être injecté en
+   mode « original », porter l'interface intacte et être servi à un agent
+   bureau (c'est la page desktop de Spotify qu'il habille). Un écrasement par
+   une version maison, ou une interface servie à un agent mobile, rendrait
+   l'affichage au mieux bancal, au pire vide — sans aucun message. */
+const originalSource = "src/original/spotiduck-original.js";
+const originalScript = read(originalSource);
+const originalAsset = read("android/app/src/main/assets/spotiduck-original.js");
+if (!originalAsset.includes("window.firstFuck") || !originalAsset.includes("window.actPlayPause")) {
+  errors.push("l'interface d'origine livrée ne contient plus le script d'origine");
+}
+if (!originalAsset.includes(originalScript.trimStart().slice(0, 200))) {
+  errors.push(`assets/spotiduck-original.js ne vient pas de ${originalSource} — relancer \`npm run build\``);
+}
+/* La feuille d'origine est *la* définition de l'affichage : 6 001 caractères,
+   md5 `13de5546d0…`. Si elle change, l'affichage change. */
+const origCssRaw = (originalScript.match(/textContent\s*=\s*"((?:[^"\\]|\\.)*)"/) || ["", ""])[1];
+let origCss = "";
+try {
+  origCss = JSON.parse('"' + origCssRaw + '"');
+} catch {
+  errors.push(`${originalSource} : la feuille de style d'origine est illisible`);
+}
+const cssMd5 = createHash("md5").update(origCss).digest("hex");
+if (origCss.length !== 6001 || !cssMd5.startsWith("13de5546d0")) {
+  errors.push(
+    `l'affichage d'origine a changé : feuille de ${origCss.length} car. (md5 ${cssMd5.slice(0, 10)}), ` +
+      "attendu 6001 car. (md5 13de5546d0)"
+  );
+}
+if (!/MODE_ORIGINAL/.test(activity) || !/scriptFor\(/.test(activity)) {
+  errors.push("MainActivity : le script d'origine n'est plus chargé selon le mode choisi");
+}
+if (!/mode\s*==\s*MODE_NATIVE\)\s*MOBILE_UA\s*else\s*DESKTOP_UA/.test(activity.replace(/\s+/g, " "))) {
+  errors.push("MainActivity : l'agent de l'interface d'origine n'est plus l'agent bureau");
+}
+/* Les fonctions d'origine que l'application appelle réellement. */
+for (const fn of ["window.actPlayPause", "window.actSkipForward", "window.actSkipBack", "window.actSeek", "window.updMedia"]) {
+  if (!originalScript.includes(fn)) errors.push(`${originalSource} : ${fn} est introuvable`);
 }
 
 /* 2-quinquies. Le viewport. C'est la cause du « l'affichage n'est pas adapté à
@@ -206,6 +260,22 @@ for (const m of kotlinSources.matchAll(/assets\.open\(\s*"([^"]+)"/g)) {
   if (!existsSync(join(root, "android/app/src/main/assets", m[1]))) {
     errors.push(`assets/${m[1]} est ouvert par le code mais n'existe pas`);
   }
+}
+/* Les scripts sont maintenant lus par un helper (`readAsset("…")`) : un nom
+   mal orthographié donnerait un script vide, donc une page sans interface. */
+for (const m of kotlinSources.matchAll(/readAsset\(\s*"([^"]+)"\)/g)) {
+  if (!existsSync(join(root, "android/app/src/main/assets", m[1]))) {
+    errors.push(`assets/${m[1]} est chargé par le code mais n'existe pas`);
+  }
+}
+/* Les trois interfaces doivent être injectées selon le mode choisi. */
+for (const mode of ["original", "native", "inject"]) {
+  if (!new RegExp(`const val MODE_${mode.toUpperCase()}`).test(activity)) {
+    errors.push(`MainActivity : la constante MODE_${mode.toUpperCase()} a disparu`);
+  }
+}
+if (!/MODE_ORIGINAL\s*->\s*originalScript/.test(activity.replace(/\s+/g, " "))) {
+  errors.push("MainActivity : le mode d'origine n'injecte plus le script d'origine");
 }
 /* Les fichiers déclarés dans le manifeste doivent exister aussi. */
 const manifest = read("android/app/src/main/AndroidManifest.xml");

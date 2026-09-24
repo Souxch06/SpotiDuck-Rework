@@ -552,3 +552,73 @@ complet (six contrôles + deux temps + rail `role="slider"`), commandes du
 mini-lecteur réellement transmises au web player (lecture, aléatoire,
 répétition), et **le cas inverse** du clavier : une zone visible qui rétrécit
 sans champ focalisé ne masque plus rien.
+
+---
+
+## 12. L'affichage d'origine, repris tel quel (v2.7.0)
+
+Les sections 4 à 11 décrivent une couche d'habillage **réécrite** en CSS/JS.
+Elle est restée insuffisante : la référence n'était pas d'imiter l'affichage
+d'origine, mais **de le reprendre**. La v2.7.0 livre donc, par défaut, le script
+injecté de l'application d'origine lui-même — reconstruit depuis les chaînes
+déchiffrées de `p000/C1356q3.onPageFinished` dans la source publique
+déobfusquée `lyssadev/Spotifuck_src` — sans y toucher (voir
+`src/original/README.md`).
+
+### Ce que fait ce script
+
+C'est lui qui donnait à SpotiDuck son affichage : la page **bureau** de Spotify,
+habillée par une feuille de 6 001 caractères chargée au même moment.
+
+| Élément | Comment |
+| --- | --- |
+| Barre du haut | celle de Spotify (accueil · bibliothèque · recherche · logo · notifications · amis · profil), restylée par la feuille d'origine |
+| Accueil | rangées compactes : `grid-container` sans gouttières, accueil limité aux **six premières** rangées, `contentSpacing` à zéro |
+| Bibliothèque | bouton de l'en-tête détourné : elle s'ouvre **en plein écran** (`position:fixed;width:100%;height:92%`) et se referme |
+| Mini-lecteur | `aside[data-testid=now-playing-bar]` passé en colonne, avec le dégradé rouge (`#770000 → #330000`), plus un bouton de lecture maison (`.npbtn`) collé à celui des paroles |
+| Listes | lignes de 40 px, grilles de pistes recalculées selon `aria-colcount` (2 à 5 colonnes) |
+| Bandeaux | pub, « Installer l'application », plein écran, pied de page : masqués |
+
+### Comment c'est branché
+
+* `src/original/spotiduck-original.js` — le code d'origine + le rapporteur
+  `updMedia` (lui aussi d'origine, injecté à part par l'application) + un
+  adaptateur `window.SpotiDuckUI` balisé, seule ligne ajoutée, pour que la
+  notification Android commande les fonctions d'origine.
+* `npm run build` construit les deux interfaces ; `npm run sync:android` copie
+  `dist/spotiduck-original.js` dans `assets/` comme l'autre.
+* `MainActivity` sert le script du mode choisi. Le mode **`original` devient le
+  défaut**, avec les réglages WebView de l'application d'origine
+  (`useWideViewPort`, `loadWithOverviewMode`, `setInitialScale(100)`, zoom
+  autorisé, **aucun** `<meta name="viewport">` forcé : la page décide).
+* Le pont expose maintenant `nFetch` : le script d'origine fait ses requêtes de
+  lecture lui-même (l'implémentation est reprise de `WebService.nFetch`, mêmes
+  en-têtes, mêmes cookies).
+* L'interface choisie avant cette version n'était pas un choix (le défaut a
+  changé deux fois) : un compteur de révision (`ui_mode_rev`) la remet une fois
+  sur le mode d'origine, puis respecte les choix explicites.
+* Le mode d'origine n'ayant pas d'écran de réglages, l'**appui long** sur la
+  page ouvre le choix de l'interface.
+
+### Tests
+
+`npm run smoke` — **67 tests** (58 → 67). Les neuf nouveaux chargent le script
+d'origine sur une page qui imite la page bureau de Spotify :
+
+1. le script est complet (21 fonctions d'origine) et démarre sans erreur ;
+2. la feuille d'origine est posée **telle quelle** (6 001 caractères, dégradé
+   rouge du lecteur, barre de navigation, accueil limité à six rangées) ;
+3. le bouton de lecture d'origine (`.npbtn`) est inséré dans la barre, à côté
+   des paroles ;
+4. la bibliothèque s'ouvre en plein écran ;
+5. le script prévient Android (`cssInjected`, veille, arrêt auto) ;
+6. toutes les méthodes de `AndBridge` qu'il appelle existent dans `Bridge.kt` ;
+7. l'adaptateur du service relaie les fonctions d'origine, en convertissant les
+   millisecondes en secondes pour le déplacement ;
+8. l'état de lecture (titre, artiste) part vers la notification ;
+9. aucune erreur d'exécution.
+
+`npm run audit` surveille désormais : le mode livré par défaut, la révision du
+choix, l'origine de l'asset (`src/original/`), la feuille d'origine
+(md5 `13de5546d0`), l'agent bureau du mode d'origine et les scripts chargés par
+`readAsset`.

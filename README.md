@@ -58,33 +58,35 @@ By wrapping the Spotify Web Player in a highly optimized Android WebView, SpotiD
 </p>
 
 > [!NOTE]
-> The screenshots above show the **previous** injected UI. The new mobile shell
-> (bottom tab bar, mini player, full-screen player, mobile library) is being
-> built in `src/inject/` — see **[docs/UI-REWORK.md](./docs/UI-REWORK.md)** for
-> the full list of interface bugs it fixes.
+> Those screenshots are the interface shipped **by default**: the project's
+> original display, restored as-is in `src/original/`. The tweaked shell that
+> was being written in `src/inject/` is still there, as a secondary interface —
+> see **[docs/UI-REWORK.md](./docs/UI-REWORK.md)**.
 
 ---
 
-## 🧩 The interface: ours by default, Spotify's web page as a beta
+## 🧩 The interface: the project's original one, restored as-is
 
-The shell uses the **project's original layout**: navigation at the top
-(home · library · search · logo · notifications · friends · profile), and a
-**complete mini player** at the bottom — cover, title, artist, like, then
-shuffle · previous · play · next · repeat, then elapsed time, a draggable
-progress bar and duration. The bottom tab bar still exists but is off by
-default (`Paramètres → barre d'onglets`).
+The app ships the interface it started with, **unedited**: the original injected
+script (navigation at the top — home · library · search · logo · notifications ·
+friends · profile — compact home rows, library opening full screen, and a
+complete player at the bottom with a red gradient), taken from the decompiled
+`Spotifuck` source and rebuilt in `src/original/`. Nothing was written by hand;
+see **[src/original/README.md](./src/original/README.md)** for the exact
+provenance and the fingerprints that guard it.
 
-SpotiDuck ships **two interfaces**, switchable at runtime:
+Three interfaces, switchable at runtime (**long-press anywhere** → the chooser,
+or *Settings → Interface* in our own shell):
 
-| | **SpotiDuck** (injected layer, default) | **“Native”** (beta) |
-| --- | --- | --- |
-| What you see | Our shell on top of the **desktop** web player: bottom tab bar, mini player, queue sheet, settings, offline banner, interface-size setting. It drives the desktop player, so **e-mail/password sign-in and full playback work**. | The **mobile web page** Spotify serves when the app pretends to be Chrome on Android. It is not the mobile app (no tab bar), its sign-in goes through the social buttons (which WebViews reject), and Spotify may still hand it the desktop layout — hence *beta*. |
-| Switch to it | default | **long-press anywhere for 3 s** → the chooser, or *Settings → Interface* |
-| Notification | drives the layer's playback API | clicks Spotify's real buttons (play/pause, next, previous, like, seek) and mirrors title/artist/cover |
+| | **Original** (default) | **Our shell** | **“Native”** (beta) |
+| --- | --- | --- | --- |
+| What you see | The project's original display: the **desktop** web player arranged by the original stylesheet | Our own mobile shell on the same desktop player: bottom/top navigation, sheets, settings, density setting | The **mobile web page** Spotify serves when the app pretends to be Chrome on Android |
+| Sign-in | e-mail/password works (desktop player) | e-mail/password works | social buttons only (WebViews often reject them) |
+| Notification | the original script reports the track to Android; the shim relays play/pause/next/previous/like/seek | the layer's playback API | clicks Spotify's real buttons and mirrors title/artist/cover |
 
-Either way the nuisance windows are removed: cookie/consent banners, “open in the
-app” prompts, promo banners, tooltips, browser long-press menus and scrollbars.
-The choice is stored in `SharedPreferences` and survives restarts.
+Either way the nuisance windows are removed: cookie/consent banners, “open in
+the app” prompts, promo banners, tooltips, browser long-press menus and
+scrollbars. The choice is stored in `SharedPreferences` and survives restarts.
 
 ## 🧩 The injected layer (development)
 
@@ -93,6 +95,10 @@ the native mobile layout lives in this repository and is built into a single
 injectable file:
 
 ```
+src/original/spotiduck-original.js
+                            the default interface: the original injected script,
+                            its stylesheet and a labelled shim — see the README
+                            in that folder
 src/inject/10-base.css      design tokens, viewport, web-player takeover
 src/inject/20-shell.css     tab bar, mini player, full-screen player, queue sheet
 src/inject/30-sheets.css    options & settings sheets, login page, offline banner
@@ -102,7 +108,8 @@ src/inject/70-original.css the shell's own layout: top navigation bar, full mini
                             player (shuffle/prev/play/next/repeat + progress),
                             2-column home shortcuts
 src/inject/spotiduck-ui.js  runtime (reads the player, drives playback, gestures)
-dist/spotiduck-ui.js        ← built bundle, this is what the app injects in this mode
+dist/spotiduck-ui.js        ← built bundle of our shell (mode “inject”)
+dist/spotiduck-original.js  ← built bundle of the original interface (default)
 demo/                       mock Spotify web player + phone-frame preview
 android/                    the APK: WebView wrapper around the built layer
 android/app/src/main/assets/native-mode.js
@@ -111,8 +118,9 @@ android/app/src/main/assets/native-mode.js
 ```
 
 ```bash
-npm run build          # rebuild dist/spotiduck-ui.js
-npm run smoke          # 47 behaviour tests (bundle + native mode)
+npm run build          # rebuild both dist/ bundles (original + our shell)
+npm run build:original # the original interface only, with its fingerprints checked
+npm run smoke          # 67 behaviour tests (bundle + original + native mode)
 npm run demo           # http://localhost:5173 — preview in a phone frame
 npm run android        # build + copy the bundle into android/app/src/main/assets
 ```
@@ -122,12 +130,14 @@ scenario buttons: **transfer from another device**, **logged out (welcome
 screen)**, **login page**, **offline**, open the player / the settings, and an
 A/B switch that disables the whole layer.
 
-**Viewport.** The web player declares no `<meta name="viewport">`, and a WebView
-without one lays the page out on **980 px** — every `vw` unit, `clamp()` and
-media query then targets a screen two to three times wider than the phone, so the
-interface looks huge and has to be dragged sideways. The layer pins the meta to
-`width=device-width` before applying its styles (`MainActivity` does the same as
-early as the page starts loading), and the **Affichage** line in the settings
+**Viewport.** A WebView without a `<meta name="viewport">` lays the page out on
+**980 px** — every `vw` unit, `clamp()` and media query then targets a screen two
+to three times wider than the phone. Our shell is written in dp, so it pins the
+meta to `width=device-width` before applying its styles (`MainActivity` does the
+same as early as the page starts loading); the **original** interface does the
+opposite — it keeps the original app's WebView settings (`useWideViewPort`,
+`loadWithOverviewMode`, `setInitialScale(100)`, zoom allowed) and lets Spotify's
+page decide its own layout. The **Affichage** line in the settings
 says so out loud (`⚠ mise en page 980px pour un écran de 393px`) when the two
 disagree — tap it to copy.
 
@@ -173,15 +183,24 @@ android/app/src/main/java/com/spotiduck/app/
     PlaybackService.kt     media notification + lock screen / headset controls
     AdBlocker.kt           host-list blocking (assets/adblock_hosts.txt)
 android/app/src/main/assets/
+    spotiduck-original.js  ← copy of dist/spotiduck-original.js (the default UI)
     spotiduck-ui.js        ← copy of dist/spotiduck-ui.js (npm run sync:android)
     native-mode.js         ← the native mode (script injected when ui_mode=native)
     adblock_hosts.txt      ← copy of the repository list
 ```
 
-`MainActivity` picks the user-agent and the script from the stored mode
-(`native` by default · `inject`): Chrome-Android + `native-mode.js`, or desktop +
-the injected bundle. `Bridge` exposes `uiMode()`, `setUiMode(mode)` and
-`showUiChooser()`; the runtime calls the latter when it receives a long press.
+`MainActivity` picks the user-agent, the layout settings and the script from the
+stored mode:
+
+| Mode | User agent | Layout | Script |
+| --- | --- | --- | --- |
+| `original` (default) | desktop Chrome | the original app's settings, no viewport meta forced | `spotiduck-original.js` |
+| `inject` | desktop Chrome | meta pinned to `width=device-width` | `spotiduck-ui.js` |
+| `native` (beta) | Chrome Android | meta pinned by the script | `native-mode.js` |
+
+`Bridge` exposes `uiMode()`, `setUiMode(mode)` and `showUiChooser()`; the runtime
+calls the latter when it receives a long press, and `MainActivity` does the same
+on a long press in the original mode (which has no settings screen of its own).
 
 **Build it**
 

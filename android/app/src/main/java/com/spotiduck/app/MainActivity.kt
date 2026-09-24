@@ -57,6 +57,7 @@ class MainActivity : AppCompatActivity() {
 
     private var uiBundle: String = ""
     private var nativeScript: String = ""
+    private var originalScript: String = ""
     private var uiMode: String = MODE_DEFAULT
     private var powerManager: PowerManager? = null
     private var wakeLock: PowerManager.WakeLock? = null
@@ -74,11 +75,8 @@ class MainActivity : AppCompatActivity() {
         uiMode = storedUiMode()
         powerManager = getSystemService(POWER_SERVICE) as? PowerManager
         adBlocker = AdBlocker(this).also { it.loadAsync() }
-        uiBundle = runCatching { assets.open("spotiduck-ui.js").bufferedReader().use { it.readText() } }
-            .getOrElse {
-                Log.e(TAG, "assets/spotiduck-ui.js missing — run `node tools/build.mjs`", it)
-                ""
-            }
+        uiBundle = readAsset("spotiduck-ui.js")
+        originalScript = readAsset("spotiduck-original.js")
 
         nativeScript = runCatching { assets.open("native-mode.js").bufferedReader().use { it.readText() } }
             .getOrElse {
@@ -97,17 +95,27 @@ class MainActivity : AppCompatActivity() {
                 domStorageEnabled = true
                 databaseEnabled = true
                 mediaPlaybackRequiresUserGesture = false // playback can start on its own
-                userAgentString = if (uiMode == MODE_INJECT) DESKTOP_UA else MOBILE_UA
-                /* `useWideViewPort` + un `<meta name="viewport">` forcé (voir
-                   VIEWPORT_META_JS) : la mise en page se calcule alors à la
-                   largeur réelle de l'écran. Sans ce meta, la WebView retombe sur
-                   une largeur de 980 px et l'interface paraît énorme et coupée —
-                   c'est le défaut d'affichage qui traînait depuis le début. */
+                userAgentString = userAgentFor(uiMode)
+                /* Mise en page : exactement les réglages de l'application
+                   d'origine (`useWideViewPort`, `loadWithOverviewMode`,
+                   `initialScale = 100`), pour que l'affichage d'origine soit
+                   reproduit tel quel — largeur de mise en page calculée par la
+                   page elle-même.
+
+                   La couche SpotiDuck, elle, est écrite en dp et a besoin d'un
+                   `<meta name="viewport">` : elle le pose pour son propre compte
+                   (voir VIEWPORT_META_JS, uniquement dans ce mode-là). Sans ce
+                   meta, elle se retrouvait mise en page sur 980 px et paraissait
+                   énorme et rognée. */
                 loadWithOverviewMode = true
                 useWideViewPort = true
                 builtInZoomControls = false
                 displayZoomControls = false
-                setSupportZoom(false)
+                /* L'application d'origine acceptait le zoom (son interface était
+                   mise en page par la page) : on garde ce comportement dans le
+                   mode d'origine seulement. */
+                setSupportZoom(uiMode == MODE_ORIGINAL)
+                if (uiMode == MODE_ORIGINAL) setInitialScale(100)
                 textZoom = 100 // never let the system font scale break the layout
                 cacheMode = WebSettings.LOAD_DEFAULT
                 javaScriptCanOpenWindowsAutomatically = true
@@ -119,8 +127,17 @@ class MainActivity : AppCompatActivity() {
             /* Un appui long sur du texte ou une pochette ouvre le menu du
                navigateur (sélection, « Enregistrer l'image », « Copier ») : dans
                une application, c'est un pop-up de trop. Le geste est avalé ici,
-               le script de la page continue de recevoir ses évènements. */
-            setOnLongClickListener { true }
+               le script de la page continue de recevoir ses évènements.
+
+               Dans le mode d'origine, il ouvre le choix de l'interface : ce
+               mode n'a pas d'écran de réglages (l'application d'origine en
+               avait un, séparé), et sans cela il n'y aurait plus aucun moyen
+               d'en changer. Les deux autres interfaces gèrent leur propre
+               geste. */
+            setOnLongClickListener {
+                if (uiMode == MODE_ORIGINAL) showUiChooser()
+                true
+            }
             overScrollMode = View.OVER_SCROLL_NEVER // pas de halo bleu en bout de liste
         }
         webView.addJavascriptInterface(bridge, "AndBridge")
@@ -183,6 +200,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
+                if (uiMode == MODE_ORIGINAL) return // la page gère sa mise en page
                 injectViewportScript()
                 /* `document.head` n'existe pas encore : le script s'installe et
                    pose le meta dès qu'il le peut (la WebView recalcule alors sa
@@ -198,9 +216,13 @@ class MainActivity : AppCompatActivity() {
              */
             override fun onPageFinished(view: WebView, url: String?) {
                 view.evaluateJavascript("window.__sdBridgeReady=true;", null)
-                view.evaluateJavascript(VIEWPORT_META_JS, null)
-                val script = if (uiMode == MODE_INJECT) uiBundle else nativeScript
-                if (script.isNotEmpty()) view.evaluateJavascript(script, null)
+                if (uiMode != MODE_ORIGINAL) view.evaluateJavascript(VIEWPORT_META_JS, null)
+                val script = scriptFor(uiMode)
+                if (script.isEmpty()) {
+                    Log.e(TAG, "no script for mode $uiMode")
+                } else {
+                    view.evaluateJavascript(script, null)
+                }
             }
 
             override fun onReceivedError(
@@ -279,6 +301,23 @@ class MainActivity : AppCompatActivity() {
     fun currentUiMode(): String = uiMode
 
     /**
+     * L'interface d'origine a besoin du même agent que l'application d'origine :
+     * c'est la page **bureau** de Spotify qu'elle habille (l'ancien script en
+     * dépendait totalement : sélecteurs `#Desktop_LeftSidebar_Id`,
+     * `data-testid=tracklist-row`, barre de lecture `aside`). La page web mobile
+     * est le seul mode qui demande un agent Chrome Android.
+     */
+    private fun userAgentFor(mode: String): String =
+        if (mode == MODE_NATIVE) MOBILE_UA else DESKTOP_UA
+
+    /** Le script injecté selon le mode choisi. */
+    private fun scriptFor(mode: String): String = when (mode) {
+        MODE_ORIGINAL -> originalScript
+        MODE_INJECT -> uiBundle
+        else -> nativeScript
+    }
+
+    /**
      * Mode enregistré… **s'il a été choisi**. La 2.6.0 écrivait `native` pour
      * tout le monde au premier lancement : les installations mises à jour
      * restaient donc bloquées sur la page web mobile de Spotify (qui n'est pas
@@ -288,7 +327,17 @@ class MainActivity : AppCompatActivity() {
     private fun storedUiMode(): String {
         val p = prefs()
         if (!p.getBoolean(KEY_UI_MODE_CHOSEN, false)) return MODE_DEFAULT
-        return if (p.getString(KEY_UI_MODE, MODE_DEFAULT) == MODE_NATIVE) MODE_NATIVE else MODE_INJECT
+        /* Le mode livré par défaut a changé deux fois (2.6.0 puis 2.6.1). Les
+           choix enregistrés avant cette révision-ci ne sont donc plus des
+           choix : on les oublie une fois, et on repart de l'interface
+           d'origine. Au-delà de cette révision, un choix explicite est
+           respecté. */
+        if (p.getInt(KEY_UI_MODE_REV, 0) < UI_MODE_REV) return MODE_DEFAULT
+        return when (p.getString(KEY_UI_MODE, MODE_DEFAULT)) {
+            MODE_INJECT -> MODE_INJECT
+            MODE_NATIVE -> MODE_NATIVE
+            else -> MODE_ORIGINAL
+        }
     }
 
     /**
@@ -298,23 +347,31 @@ class MainActivity : AppCompatActivity() {
      * instantané pour l'utilisateur.
      */
     fun switchUiMode(mode: String) {
-        val clean = if (mode == MODE_INJECT) MODE_INJECT else MODE_NATIVE
-        prefs().edit().putString(KEY_UI_MODE, clean).putBoolean(KEY_UI_MODE_CHOSEN, true).apply()
+        val clean = when (mode) {
+            MODE_INJECT -> MODE_INJECT
+            MODE_NATIVE -> MODE_NATIVE
+            else -> MODE_ORIGINAL
+        }
+        prefs().edit()
+            .putString(KEY_UI_MODE, clean)
+            .putBoolean(KEY_UI_MODE_CHOSEN, true)
+            .putInt(KEY_UI_MODE_REV, UI_MODE_REV)
+            .apply()
         if (clean == uiMode) return
         uiMode = clean
-        webView.settings.userAgentString = if (clean == MODE_INJECT) DESKTOP_UA else MOBILE_UA
+        webView.settings.userAgentString = userAgentFor(clean)
         webView.reload()
-        Toast.makeText(
-            this,
-            if (clean == MODE_INJECT) R.string.ui_mode_inject_toast else R.string.ui_mode_native_toast,
-            Toast.LENGTH_SHORT
-        ).show()
+        Toast.makeText(this, toastFor(clean), Toast.LENGTH_SHORT).show()
     }
 
     /** Sélecteur : appui long de 3 s (n'importe où) ou rangée des paramètres. */
     fun showUiChooser() {
-        val labels = arrayOf(getString(R.string.ui_mode_inject), getString(R.string.ui_mode_native))
-        val modes = arrayOf(MODE_INJECT, MODE_NATIVE)
+        val labels = arrayOf(
+            getString(R.string.ui_mode_original),
+            getString(R.string.ui_mode_native),
+            getString(R.string.ui_mode_inject)
+        )
+        val modes = arrayOf(MODE_ORIGINAL, MODE_NATIVE, MODE_INJECT)
         val checked = modes.indexOf(uiMode).coerceAtLeast(0)
         AlertDialog.Builder(this)
             .setTitle(getString(R.string.ui_mode_title))
@@ -341,6 +398,19 @@ class MainActivity : AppCompatActivity() {
             parts[0] in WEB_KINDS -> "https://open.spotify.com/${parts[0]}/${parts[1]}"
             else -> null
         }
+    }
+
+    private fun readAsset(name: String): String =
+        runCatching { assets.open(name).bufferedReader().use { it.readText() } }
+            .getOrElse {
+                Log.e(TAG, "assets/$name missing — run `npm run build`", it)
+                ""
+            }
+
+    private fun toastFor(mode: String): Int = when (mode) {
+        MODE_INJECT -> R.string.ui_mode_inject_toast
+        MODE_NATIVE -> R.string.ui_mode_native_toast
+        else -> R.string.ui_mode_original_toast
     }
 
     private fun prefs() = getSharedPreferences(PREFS, MODE_PRIVATE)
@@ -483,6 +553,7 @@ class MainActivity : AppCompatActivity() {
         const val START_URL = "https://open.spotify.com/"
 
         /** Interfaces proposées à l'utilisateur (voir `switchUiMode`). */
+        const val MODE_ORIGINAL = "original"
         const val MODE_NATIVE = "native"
         const val MODE_INJECT = "inject"
 
@@ -494,7 +565,10 @@ class MainActivity : AppCompatActivity() {
          * c'est une page web : ni la disposition de l'application, ni la
          * connexion classique.
          */
-        const val MODE_DEFAULT = MODE_INJECT
+        const val MODE_DEFAULT = MODE_ORIGINAL
+
+        /** Incrémenter à chaque fois que `MODE_DEFAULT` change. */
+        const val UI_MODE_REV = 3
 
         /** Types d'URL `spotify:` convertibles en lien web. */
         private val WEB_KINDS = setOf(
@@ -504,6 +578,7 @@ class MainActivity : AppCompatActivity() {
         private const val PREFS = "spotiduck"
         private const val KEY_UI_MODE = "ui_mode"
         private const val KEY_UI_MODE_CHOSEN = "ui_mode_chosen"
+        private const val KEY_UI_MODE_REV = "ui_mode_rev"
 
         /** Chrome on Windows: what open.spotify.com checks to serve the desktop app. */
         private const val DESKTOP_UA =

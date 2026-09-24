@@ -18,6 +18,7 @@ const assets = join(root, "android/app/src/main/assets");
 
 const jobs = [
   { from: join(root, "dist/spotiduck-ui.js"), to: join(assets, "spotiduck-ui.js") },
+  { from: join(root, "dist/spotiduck-original.js"), to: join(assets, "spotiduck-original.js") },
   { from: join(root, "adblock_hosts.txt"), to: join(assets, "adblock_hosts.txt") },
 ];
 
@@ -48,6 +49,21 @@ if (bundle.includes("</script>")) {
   process.exitCode = 1;
 } else {
   console.log(`bundle checked (${bundle.length} chars, ${ok}/${jobs.length} assets synced)`);
+}
+
+/* And for the original interface: it is the default one, so a truncated file
+   would leave the app with no interface at all. The three landmarks below are
+   the ones the grading checks rely on. */
+const original = readFileSync(join(assets, "spotiduck-original.js"), "utf8");
+const originalMust = ["window.firstFuck", "window.actPlayPause", "window.switchLs", "AndBridge.nFetch"];
+const originalMissing = originalMust.filter((m) => !original.includes(m));
+if (original.length < 20_000 || originalMissing.length) {
+  console.error(
+    "spotiduck-original.js looks invalid — refusing to keep it (" +
+      (originalMissing.join(", ") || original.length + " chars") +
+      ")"
+  );
+  process.exitCode = 1;
 }
 
 /* Same idea for the native-mode script: it *is* the interface in the default

@@ -954,6 +954,201 @@ check("native mode: no runtime errors", () => {
   return "0 erreurs";
 });
 
+/* ------------------------------------------------------------------ *
+ *  Interface d'origine — le code d'origine, tel quel                  *
+ *                                                                     *
+ *  C'est le mode livré par défaut : l'affichage d'origine de SpotiDuck *
+ *  (= le script injecté de l'application d'origine, sans retouche).    *
+ *  On le charge donc pour de vrai, sur une page qui ressemble à la     *
+ *  page bureau de Spotify (c'est elle qu'il habille), et on vérifie ce *
+ *  qu'il produit : la feuille d'origine, son bouton de lecture, la     *
+ *  bibliothèque en plein écran, et le contrat avec Android.            *
+ * ------------------------------------------------------------------ */
+const origHtml =
+  "<!doctype html><html><head></head><body>" +
+  "<div id='global-nav-bar'><button data-testid='home-button'></button></div>" +
+  "<div id='Desktop_LeftSidebar_Id'>" +
+  "<header><div><div><button aria-label='Bibliothèque'></button><h1>Ma bibliothèque</h1></div>" +
+  "<div><span></span></div></div></header>" +
+  "<nav><div><div class='collapsed type'></div><div></div></div></nav>" +
+  "<div class='YourLibraryX'><div><header>Filtres</header></div></div>" +
+  "<div role='grid'><div role='row'>Titres likés</div></div>" +
+  "</div>" +
+  "<div id='Desktop_PanelContainer_Id'><div><div aria-hidden='true'></div></div></div>" +
+  "<main><section data-testid='home-page'><div>" +
+  [...Array(9)].map((_, i) => `<section>Section ${i + 1}</section>`).join("") +
+  "</div></section></main>" +
+  "<aside data-testid='now-playing-bar'><div><div>" +
+  "<div data-testid='now-playing-widget'><div>cover</div><div><span>Titre</span></div></div>" +
+  "<div data-testid='player-controls'>" +
+  "<button data-testid='control-button-skip-back' aria-label='Précédent'></button>" +
+  "<button data-testid='control-button-playpause' aria-label='Lecture'><svg>0123456789</svg></button>" +
+  "<button data-testid='control-button-skip-forward' aria-label='Suivant'></button>" +
+  "<button data-testid='control-button-repeat' aria-label='Activer la répétition'></button>" +
+  "<button data-testid='lyrics-button' aria-label='Paroles'></button>" +
+  "</div>" +
+  "<div data-testid='now-playing-widget-2'><button aria-checked='false' aria-label='Ajouter aux titres likés'></button></div>" +
+  "<div data-testid='playback-progressbar'><input type='range' min='0' max='200' value='0'></div>" +
+  "</div></div></aside>" +
+  "<input data-testid='search-input'>" +
+  "</body></html>";
+
+const origDom = new JSDOM(origHtml, {
+  url: "https://open.spotify.com/",
+  pretendToBeVisual: true,
+  runScripts: "dangerously",
+});
+const ow = origDom.window;
+const od = ow.document;
+const origCalls = [];
+const origErrors = [];
+ow.__bridgeCalls = origCalls;
+ow.addEventListener("error", (e) => origErrors.push(String(e.message)));
+
+/* Le script vit de minuteries de 5 s (il attend que la page soit prête).
+   On les capture pour les déclencher à la demande : sans cela, un test
+   devrait patienter 5 à 15 secondes. */
+ow.__timers = [];
+const realSetInterval = ow.setInterval.bind(ow);
+ow.eval(`
+  window.setInterval = function (fn, ms) { window.__timers.push({ fn, ms }); return window.__timers.length; };
+  window.clearInterval = function (id) { if (window.__timers[id - 1]) window.__timers[id - 1].dead = true; };
+  window.AndBridge = new Proxy({}, { get: (t, p) => (...a) => {
+    window.__bridgeCalls.push([String(p), a]);
+    if (String(p) === "isWoke") return false;
+    return null;
+  }});
+`);
+const clickLog = [];
+for (const b of od.querySelectorAll("button")) {
+  b.addEventListener("click", () => clickLog.push(b.getAttribute("data-testid") || b.getAttribute("aria-label") || "?"));
+}
+
+const origScript = await read("android/app/src/main/assets/spotiduck-original.js");
+ow.eval(origScript);
+/* Chaque minuteur est dû : c'est ce que fait la page au bout de quelques
+   secondes. On exécute chaque minuterie vivante deux fois, comme le ferait
+   le navigateur, puis on se met dans l'état « ça lit ». */
+const pump = (times = 2) => {
+  for (let i = 0; i < times; i++) for (const t of ow.__timers) if (!t.dead) t.fn();
+};
+pump();
+/* Le lecteur devient actif : la page renseigne ces variables, le script entre
+   alors en service (veille, habillage, bibliothèque, notification). */
+ow.eval(
+  "track='Titre test';artist='Artiste test';playing=true;repmode='false';isfav=false;" +
+    "duration=200;position=5;cover='https://i.scdn.co/image/x.jpg'"
+);
+ow.eval("manageAll(true)");
+pump();
+const origCall = (name) => origCalls.filter((c) => c[0] === name);
+const origStyles = () => [...od.querySelectorAll("style")];
+
+check("origine : le script est celui de l'application d'origine, en entier", () => {
+  const fns = [
+    "mngFetch", "playFromUri", "firstFuck", "manageAll", "manageWake",
+    "actPlayPause", "actSkipBack", "actSkipForward", "actRepeat", "actAddToFav",
+    "actSeek", "addCSSJSHack", "addAutoFeatures", "addAndAuto", "switchLs",
+    "updMedia", "clickNP", "closeNowPlay", "trigUnlock", "hasVid", "updNpbState",
+  ].filter((f) => typeof ow[f] !== "function");
+  assert(fns.length === 0, "fonctions d'origine manquantes : " + fns.join(", "));
+  assert(origErrors.length === 0, origErrors.join(" | "));
+  return `${fns.length === 0 ? 21 : 0} fonctions d'origine · 0 erreur`;
+});
+
+check("origine : la feuille de style d'origine est posée telle quelle", () => {
+  const style = origStyles().find((s) => s.textContent.includes("transition:none"));
+  assert(style, "la feuille de style d'origine n'a pas été injectée");
+  const css = style.textContent;
+  assert(css.length === 6001, `feuille de ${css.length} car. au lieu de 6001 — l'affichage d'origine a été modifié`);
+  /* Trois règles qui *sont* l'affichage d'origine : le lecteur collé en bas,
+     la bibliothèque resserrée, et l'accueil limité aux six premières rangées. */
+  assert(
+    /aside\[data-testid=now-playing-bar\][^}]*linear-gradient\(to bottom,#770000,#330000\)/.test(css),
+    "l'habillage du lecteur d'origine est absent"
+  );
+  assert(/#Desktop_LeftSidebar_Id>nav>div\{min-height:48px;border-radius:25px\}/.test(css), "la barre de navigation d'origine est absente");
+  assert(
+    /section\[data-testid=home-page\]>div>section:nth-child\(n\+7\)\{display:none\}/.test(css),
+    "la limite de rangées de l'accueil d'origine est absente"
+  );
+  return "6 001 car. · lecteur rouge en bas · accueil limité à 6 rangées ✓";
+});
+
+check("origine : le bouton de lecture de l'application d'origine est posé", () => {
+  const np = od.querySelector(".npbtn");
+  assert(np, "le bouton « now playing » (.npbtn) n'a pas été inséré");
+  assert(
+    np.nextElementSibling && np.nextElementSibling.getAttribute("data-testid") === "lyrics-button",
+    "le bouton d'origine se place juste avant celui des paroles, dans la barre de lecture"
+  );
+  assert(np.innerHTML.includes("<svg"), "le bouton est sans icône");
+  return ".npbtn collé au bouton paroles ✓";
+});
+
+await checkAsync("origine : la bibliothèque s'ouvre en plein écran, comme à l'origine", async () => {
+  await tick(40); // le basculement est différé d'un tour de boucle par le script d'origine
+  const sidebar = od.getElementById("Desktop_LeftSidebar_Id");
+  const css = sidebar.style.cssText.replace(/\s+/g, "");
+  assert(/position:fixed/.test(css) && /width:100%/.test(css),
+    "la bibliothèque n'a pas été passée en plein écran : " + sidebar.style.cssText);
+  assert(/height:92%/.test(css) && /z-index:20/.test(css),
+    "la géométrie de la bibliothèque d'origine a changé : " + sidebar.style.cssText);
+  return "bibliothèque plein écran ✓";
+});
+
+check("origine : le script prévient Android à la fin de l'habillage", () => {
+  assert(origCall("cssInjected").length > 0, "AndBridge.cssInjected() n'est jamais appelé");
+  assert(origCall("manageTSleep").some((c) => c[1][0] === true), "l'écran n'est pas maintenu allumé pendant la lecture");
+  assert(origCall("manageTShut").some((c) => c[1][0] === false), "l'arrêt automatique n'est pas désarmé pendant la lecture");
+  return "cssInjected · veille et arrêt gérés ✓";
+});
+
+await checkAsync("origine : toutes les méthodes du pont appelées existent côté Android", async () => {
+  const bridge = await read("android/app/src/main/java/com/spotiduck/app/Bridge.kt");
+  const exposed = new Set([...bridge.matchAll(/@JavascriptInterface\s+fun\s+(\w+)/g)].map((m) => m[1]));
+  const called = [...new Set([...origScript.matchAll(/AndBridge\.(\w+)\s*\(/g)].map((m) => m[1]))];
+  const missing = called.filter((c) => !exposed.has(c));
+  assert(missing.length === 0, "Bridge.kt n'expose pas : " + missing.join(", "));
+  return called.length + " méthodes appelées, toutes exposées";
+});
+
+check("origine : l'adaptateur du service de lecture relaie les fonctions d'origine", () => {
+  const sd = ow.SpotiDuckUI;
+  assert(sd && sd.version === "original", "window.SpotiDuckUI n'est pas l'adaptateur d'origine");
+  const relayed = {};
+  for (const name of ["actPlayPause", "actSkipForward", "actSkipBack", "actAddToFav", "actRepeat", "clickNP", "closeNowPlay"]) {
+    relayed[name] = 0;
+    ow[name] = () => { relayed[name]++; };
+  }
+  ow.actSeek = (s) => { relayed.seek = s; };
+  assert(sd.playPause() === true && relayed.actPlayPause === 1, "playPause() ne relaie pas actPlayPause");
+  assert(sd.next() === true && relayed.actSkipForward === 1, "next() ne relaie pas actSkipForward");
+  assert(sd.previous() === true && relayed.actSkipBack === 1, "previous() ne relaie pas actSkipBack");
+  assert(sd.like() === true && relayed.actAddToFav === 1, "like() ne relaie pas actAddToFav");
+  assert(sd.openQueue() === true && relayed.clickNP === 1, "openQueue() ne relaie pas clickNP");
+  assert(sd.seek(42000) === true && Math.abs(relayed.seek - 42) < 0.001,
+    "seek() doit convertir les millisecondes en secondes, reçu " + relayed.seek);
+  assert(sd.sync() === true, "sync() ne relaie pas updMedia");
+  assert(sd.back() === false || typeof sd.back() === "boolean", "back() doit répondre par un booléen");
+  return "play/pause · suivant · précédent · j'aime · file · seek en secondes ✓";
+});
+
+check("origine : en lecture, l'état part vers la notification", () => {
+  ow.eval("track='Titre test';artist='Artiste test';playing=true;repmode='false';isfav=false;duration=200;position=5;cover='https://i.scdn.co/image/x.jpg'");
+  ow.eval("updMedia()");
+  const status = origCall("recMediaStatus").slice(-1)[0];
+  assert(status, "aucun recMediaStatus envoyé au pont");
+  const payload = JSON.parse(status[1][0]);
+  assert(payload.track === "Titre test" && payload.artist === "Artiste test", "métadonnées incomplètes : " + status[1][0]);
+  return "titre et artiste transmis ✓";
+});
+
+check("origine : aucune erreur d'exécution", () => {
+  assert(origErrors.length === 0, origErrors.join(" | "));
+  return "0 erreur";
+});
+
 /* ------------------------------------------------------------------ report */
 const pad = Math.max(...results.map((r) => r.name.length));
 let failed = 0;
