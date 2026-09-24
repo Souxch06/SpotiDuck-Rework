@@ -657,3 +657,82 @@ l'interruption), sans désactiver quoi que ce soit.
 
 Le README détaille les deux écrans, les trois contournements et la seule voie
 vers un verdict de confiance (publication Play, ou recours Play Protect).
+
+## 14. L'empreinte du navigateur d'origine (v2.7.2)
+
+### Le constat
+
+« L'affichage est moche. » Le pass 13 avait pourtant repris l'interface
+d'origine *verbatim*. Il manquait une pièce, et une seule : **le navigateur que
+la page voit**.
+
+En mode d'origine, la WebView se présente comme une WebView Android. Spotify
+sert alors une page mise en page **pour un téléphone** — et cette mise en page
+n'est pas établie dans le HTML : les repères de la page bureau
+(`Desktop_LeftSidebar_Id`, `now-playing-bar`, `global-nav-bar`, `grid-container`,
+`tracklist-row`) sont absents du document servi, mesuré en CI. Tout est monté
+par le JavaScript de Spotify, **d'après ce que le navigateur lui raconte**.
+
+La feuille d'origine (`_player_full_classic.js`, 6 001 caractères, md5
+`13de5546d0`), elle, a été écrite pour la page **bureau**. Elle habille des
+sélecteurs qui, sur une page mobile, n'existent pas — et là où ils existent, la
+disposition n'est pas celle sur laquelle elle s'appuie. Aucun réglage de la
+couche ne pouvait le résoudre : la page n'était pas seulement mal habillée,
+elle était *l'autre page*.
+
+### La pièce manquante
+
+`C1356q3.java` l'appelle dans `onPageStarted` — donc avant que la page n'ait
+exécuté quoi que ce soit. Son JS (`C1356q3__01__0ed798ac.deobfuscated.js`) fait
+passer le navigateur pour un Chrome de bureau sur un écran 1920×1080 :
+
+| Ce qui est remplacé | Valeur annoncée |
+| --- | --- |
+| `screen.width` / `screen.height` / `screen.availHeight` | 1920 / 1080 / 1040 |
+| `window.innerHeight` | 978 |
+| `window.devicePixelRatio` | 1 |
+| `navigator.userAgent` | Chrome 150, Windows |
+| `navigator.vendor` / `platform` | Google Inc. / Win32 |
+| `navigator.plugins` / `mimeTypes` | les cinq greffons PDF de Chrome |
+| `navigator.userAgentData` + `getHighEntropyValues` | client hints Windows |
+| WebGL `UNMASKED_VENDOR/RENDERER_WEBGL` | ANGLE, Intel |
+
+C'est `src/original/spotiduck-fingerprint.js` : le corps du script d'origine
+**verbatim** (aucune ligne réécrite), avec un en-tête de provenance et son
+empreinte SHA-256. `tools/build-original.mjs` le copie vers
+`dist/original-fingerprint.js` et vers l'asset, `tools/sync-android.mjs` refuse
+un fichier qui ne contient plus 1920, 1080 et 978, et `tools/audit-links.mjs`
+vérifie que `MainActivity` l'injecte bien dans `onPageStarted` — jamais plus
+tard, comme dans l'application d'origine : une page qui s'est déjà mise en page
+pour un téléphone ne se recompose pas parce qu'on ment sur `screen.width` après
+coup.
+
+### Le diagnostic embarqué
+
+Un affichage ne se corrige pas à l'aveugle, et l'aperçu navigateur n'est pas le
+téléphone. Le sélecteur d'interface (appui long) a un bouton **Diagnostic** qui
+affiche, sur place :
+
+* la largeur et la hauteur de mise en page en pixels CSS, la fenêtre, la
+  densité, l'écran — la comparaison entre ces trois lignes dit immédiatement si
+  l'empreinte est passée ;
+* le nombre de feuilles de style posées ;
+* la présence de la barre haute, du lecteur bas, de l'accueil, des rangées, des
+  lignes de piste et de la navigation ;
+* si l'interface d'origine est chargée (`window.firstFuck`) ;
+* le chemin de la page.
+
+Sept lignes, un bouton **Copier**. C'est le seul instrument qui regarde le
+téléphone : tant que l'affichage est en cause, c'est ce que je demande en
+retour.
+
+### Ce qui n'était pas la cause
+
+Le pass 8 avait forcé un `<meta name="viewport" content="width=device-width…">`
+en supposant que le web player n'en déclarait aucun. `inspect-page.yml`
+(nouveau workflow de diagnostic, `curl` avec agent bureau puis agent Android)
+montre le contraire : la page actuelle déclare bien `width=device-width,
+initial-scale=1, maximum-scale=1` pour l'agent bureau, et `width=device-width,
+initial-scale=1` pour l'agent Android. Le commentaire de `MainActivity` qui
+affirmait l'inverse a été corrigé ; le meta forcé reste, comme filet, hors du
+mode d'origine.
