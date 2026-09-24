@@ -2108,3 +2108,60 @@ c'est précisément le problème.
   redeviendrait sans issue ;
 * la compilation Kotlin est faite par la CI (gradle) à chaque envoi, et le
   contrôle des ressources (`aapt2 compile`) est passé ici.
+
+---
+
+## §34 — L'accueil ne ressemble plus à un bureau (v2.9.12)
+
+La capture du 24/09 à 21 h 47 montre enfin la page **affichée** — et son défaut
+n'est plus l'affichage mais la **mise en page du contenu** : pochettes de ~59 px
+en **quatre colonnes**, ~36 px de vide entre elles, ~85 px entre deux rangées,
+des titres de la taille d'un paragraphe. Autrement dit : la feuille de
+l'application d'origine fait *tenir* la page dans l'écran (§28) ; elle ne la met
+pas en page pour un téléphone.
+
+### Ce que la sonde a nommé, sur la vraie page
+
+    #1 360×130  cont=carousel-scroller flex gap=12px  carte=3862×66  image=122×122
+    #2 360×130  cont=carousel-scroller flex gap=12px  carte=1965×66  image=122×122
+    …
+    #5 197×286  cont=carousel-scroller flex gap=12px  carte=32×222    image=0×0
+
+Deux enseignements :
+
+* les carrousels sont sains (pochettes de 122 px pour une rangée de 360), donc
+  la capture ne vient **pas** d'eux ;
+* la capture vient des rangées en **grille** (`div[data-testid=grid-container]`),
+  dont le nombre de colonnes est calculé pour un bureau : quatre colonnes, où la
+  pochette (59 px) flotte au milieu d'une case de 95 px.
+
+### La passe `77-content.css`
+
+Elle est **appliquée à tous les appareils** — la leçon est payée : la première
+version était réservée aux écrans étroits, donc elle ne faisait rien sur
+l'appareil de la capture.
+
+| ce qui décide          | avant (bureau)      | après (téléphone) |
+| ---------------------- | ------------------- | ----------------- |
+| nombre de colonnes     | 4 fixes             | `repeat(auto-fill, minmax(150px × unité, 1fr))` ⇒ 2 sur un 412, 3 sur un 480 |
+| pochette dans sa case  | 59 px au milieu     | toute la largeur de la case, carrée |
+| gouttières             | ~36 px (grille), 12 px (carrousel) | 12 px × unité partout |
+| espacement des rangées | ~85 px              | 14 px × unité |
+| titres de rangée       | taille d'un paragraphe | 17 px × unité |
+| « Tout afficher »      | titre               | lien (12 px) |
+| hauteurs réservées     | `25vh` par rangée   | `auto` |
+
+Sur un écran large, la densité suit la place (`minmax(170px × unité, 1fr)`), mais
+les pochettes ne redeviennent jamais des timbres : c'est la largeur de carte qui
+décide, pas un nombre fixe.
+
+### Vérifications
+
+* banc : « le contenu est mis en page pour un téléphone, pas pour un bureau »
+  (passe présente, appliquée à tous les appareils, densité réglée par la largeur
+  de carte, aucun nombre de colonnes en dur, aucune forme écrasée) ;
+* audit : mêmes exigences, plus le garde-fou qui refuse un nombre de colonnes
+  fixe ;
+* sonde : `Rangées` (conteneur, mode d'affichage, colonnes, gouttières, carte,
+  pochette) pour chaque rangée de l'accueil, et `Contenu-te tailles` pour la
+  première — c'est ce relevé qui a nommé la cause, et il reste dans le rapport.

@@ -324,6 +324,9 @@ if (!contentPassSource) {
   if (!/html\.sd-mobile \.sd-root section\[data-testid="component-shelf"\]/.test(contentPass)) {
     errors.push("la passe de contenu ne s'applique plus à tous les appareils (elle était réservée aux écrans étroits, ce qui n'a rien changé sur l'appareil de l'utilisateur)");
   }
+  if (!/grid-template-columns:\s*repeat\(auto-fill, minmax\(calc\(150px \* var\(--sd-u\)\)/.test(contentPassSource)) {
+    errors.push("la passe de contenu ne règle plus le nombre de colonnes des rangées : la grille repasserait à quatre colonnes de pochettes minuscules (la capture du 24/09)");
+  }
   for (const needle of ["component-shelf", "carousel-scroller", "aspect-ratio", "img[width]"]) {
     if (!contentPass.includes(needle)) {
       errors.push(`la passe de contenu ne traite plus « ${needle} »`);

@@ -864,6 +864,16 @@ await checkAsync("the content is laid out for a phone, not for a desktop", async
   for (const need of ["component-shelf", "carousel-scroller", "aspect-ratio: 1 / 1", "img[width]"]) {
     assert(src.includes(need), `la passe de contenu ne traite plus « ${need} »`);
   }
+  /* Le nombre de colonnes : la capture montrait quatre colonnes de pochettes de
+     59 px — une grille de bureau. La largeur de carte décide désormais. */
+  assert(
+    /grid-template-columns:\s*repeat\(auto-fill, minmax\(calc\(150px \* var\(--sd-u\)\)/.test(src),
+    "la densité des rangées n'est plus réglée par la largeur de carte"
+  );
+  assert(
+    !/repeat\(4,/.test(src) && !/repeat\(5,/.test(src),
+    "la passe de contenu fixe un nombre de colonnes en dur : elle ne s'adapterait pas à l'appareil"
+  );
   const bundle = await read("dist/spotiduck-ui.js");
   assert(
     bundle.includes("[data-testid=component-shelf]") || bundle.includes('[data-testid="component-shelf"]'),

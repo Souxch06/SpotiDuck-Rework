@@ -98,6 +98,24 @@ html.sd-mobile .sd-root div[data-testid="grid-container"] {
   grid-gap: calc(12px * var(--sd-u)) !important;
   margin-inline: 0 !important;
 }
+
+/* **Le nombre de colonnes.** C'est le vrai responsable de la capture du 24/09
+   à 21 h 47 : quatre colonnes de pochettes de 59 px, séparées par 36 px de vide,
+   soit une grille calculée pour un bureau. Sur un téléphone, l'application en
+   montre deux (les grandes cartes des raccourcis) : on laisse donc la grille
+   décider du nombre de colonnes à partir d'une **largeur de carte utile** —
+   150 px × unité ⇒ deux colonnes sur un 412, trois sur un 480, et sur un écran
+   large autant que la place le permet (des cartes larges, jamais des timbres).
+
+   La sonde mesure ces rangées : `cols=4` avant, deux ou trois après, avec des
+   pochettes qui remplissent leur case au lieu d'y flotter. */
+html.sd-mobile .sd-root section[data-testid="component-shelf"] div[data-testid="grid-container"] {
+  grid-template-columns: repeat(auto-fill, minmax(calc(150px * var(--sd-u)), 1fr)) !important;
+  grid-auto-flow: row !important;
+}
+html.sd-mobile.sd-size-wide .sd-root section[data-testid="component-shelf"] div[data-testid="grid-container"] {
+  grid-template-columns: repeat(auto-fill, minmax(calc(170px * var(--sd-u)), 1fr)) !important;
+}
 /* Les carrousels : la même gouttière, sur tous les appareils. La piste de la
    sonde mesurait 3830 px pour une rangée de 360 — c'est ce qui met les cartes
    à l'étroit et les pochettes au milieu d'un vide. */
