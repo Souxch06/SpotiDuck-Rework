@@ -183,6 +183,7 @@ async function main() {
   ];
 
   const corpus = [];
+  const pageLines = [];
 
   for (const agent of agents) {
     let page;
@@ -192,13 +193,11 @@ async function main() {
       warn(`Page ${agent.label} : injoignable`, error && error.message);
       continue;
     }
-    note(`Page ${agent.label} (${page.status}, ${page.body.length} o)`, page.url);
     corpus.push({ label: `page-${agent.label}`, url: page.url, body: page.body });
 
     /* Les scripts de l'application web : c'est là que vivent le message et sa
        condition. On borne (nombre et taille) pour rester sous la minute. */
     const urls = scriptUrls(page.body, page.url).slice(0, 30);
-    note(`Scripts ${agent.label}`, `${urls.length} référence(s) — ${urls.slice(0, 6).join(" ")}`);
     let bytes = 0;
     for (const url of urls) {
       if (bytes > 40 * 1024 * 1024) break;
@@ -211,8 +210,15 @@ async function main() {
         report.files.push({ label: `script-${agent.label}`, url, error: String(error && error.message) });
       }
     }
-    note(`Volume ${agent.label}`, `${(bytes / 1024).toFixed(0)} Ko de scripts analysés`);
+    /* Le paquet qui décide de tout : `mobile-web-player` ou `web-player`. */
+    const bundle = urls.find((u) => /build\/(mobile-)?web-player/.test(u)) || "paquet inconnu";
+    pageLines.push(
+      `${agent.label} : ${page.status}, ${page.body.length} o, ${urls.length} scripts, ` +
+        `${(bytes / 1024).toFixed(0)} Ko — ${bundle.replace("https://open.spotifycdn.com/cdn/build/", "")}`
+    );
   }
+
+  if (pageLines.length) note("Page servie", pageLines.join("  ||  "));
 
   /* Le message exact, où qu'il soit : page, script, ou table de traduction. */
   const wanted = [
@@ -247,8 +253,10 @@ async function main() {
       const key = hit.name + item.label;
       if (seen.has(key)) continue;
       seen.add(key);
-      if (patternLines.length < 3) {
-        note(`${hit.name} (${item.label})`, `${hit.total} occurrence(s) — …${clean(hit.contexts[0], 420)}…`);
+      if (patternLines.length === 0) {
+        /* Le contexte de la toute première trouvaille est le plus parlant, et
+           il part dans l'annotation regroupée un peu plus bas. */
+        console.log(`[Sonde lecture] ${hit.name} (${item.label}) — …${clean(hit.contexts[0], 420)}…`);
       }
       patternLines.push(`${hit.name}@${item.label}=${hit.total}`);
     }
