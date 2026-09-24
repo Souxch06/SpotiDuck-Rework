@@ -181,6 +181,17 @@ if (!/width=device-width/.test(read("android/app/src/main/assets/native-mode.js"
   errors.push("le mode bêta ne pose plus le meta viewport");
 }
 
+/* 2-sexies. La disposition « application mobile » : les étagères de l'accueil
+   défilent horizontalement (deux tuiles visibles), elles ne forment pas une
+   grille verticale. C'était le dernier écart visible avec l'application. */
+const metrics = read("src/inject/60-metrics.css");
+if (!/--m-tile:\s*calc\(/.test(metrics)) {
+  errors.push("60-metrics.css : plus de variable de largeur de tuile (--m-tile)");
+}
+if (!/component-shelf"\]\s*\[data-testid="grid-container"\][\s\S]{0,400}overflow-x:\s*auto/.test(metrics)) {
+  errors.push("60-metrics.css : les étagères ne défilent plus horizontalement");
+}
+
 /* 3. Ressources Kotlin + assets ------------------------------------------- */
 const strings = read("android/app/src/main/res/values/strings.xml");
 const definedStrings = new Set([...strings.matchAll(/name="([^"]+)"/g)].map((m) => m[1]));

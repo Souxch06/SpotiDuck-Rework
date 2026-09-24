@@ -126,9 +126,12 @@ The layer is styled for Android rather than for the desktop web: Roboto,
 motion curves, and an edge-to-edge layout driven by the real window insets
 (the app forwards them to `--sd-safe-*-override`).
 
-The web player itself is reflowed to the **mobile app metrics** (2 cards per
-row at ~160 dp, 56 dp rows, 20 px section titles, 200 dp hero art, 16 dp page
-gutters) — otherwise it keeps its desktop dimensions squeezed into a phone.
+The web player itself is reflowed to the **mobile app layout**: each home
+section is a **row that scrolls horizontally** (tiles ~148 dp, a bit more than
+two visible) instead of a vertical grid, list rows are 56 dp (64 dp in the
+library) with 40/48 dp covers, section titles 20 px, hero art 200 dp, page
+gutters 16 dp — otherwise it keeps its desktop dimensions squeezed into a phone.
+The desktop column header of tracklists is removed, the way the app has none.
 
 Renderers differ from one Android device to the next, so the size of the whole
 interface is a setting: **Paramètres → Taille de l'interface** (Compacte 80 %,

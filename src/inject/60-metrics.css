@@ -35,6 +35,9 @@ html.sd-mobile {
   --m-art: calc(40px * var(--sd-u));
   --m-art-lg: calc(48px * var(--sd-u));
   --m-card: calc(160px * var(--sd-u));
+  /* Largeur d'une tuile dans une rangée qui défile (application mobile) :
+     ~148 dp, soit un peu plus de deux tuiles visibles sur un écran de 360 dp. */
+  --m-tile: calc(148px * var(--sd-u));
   --m-hero: calc(200px * var(--sd-u));
   --m-fs-1: calc(16px * var(--sd-u));
   --m-fs-2: calc(14px * var(--sd-u));
@@ -93,10 +96,66 @@ html.sd-mobile .sd-root [data-testid$="-page"] h2 {
    3. Grilles de cartes : 2 par ligne, comme l'application
    -------------------------------------------------------------------------- */
 
+/* Pages de résultats (« tout afficher », recherche, albums d'un artiste) :
+   deux colonnes, comme l'application. */
 html.sd-mobile .sd-root [data-testid="grid-container"] {
   display: grid !important;
   grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
   gap: var(--m-gap) !important;
+}
+
+/* --------------------------------------------------------------------------
+   3-bis. Les étagères défilent horizontalement
+
+   C'est la disposition de l'application mobile, et pas celle du site : une
+   rangée par section, ~2 tuiles visibles, on fait glisser le doigt pour voir
+   la suite. Le site, lui, présente soit une grille, soit une rangée à flèches
+   avec des cartes de 180 px. On ne garde donc la grille que pour les pages de
+   résultats ci-dessus.
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile .sd-root [data-testid="component-shelf"] {
+  margin-bottom: calc(18px * var(--sd-u)) !important;
+}
+
+html.sd-mobile .sd-root [data-testid="component-shelf"] [data-testid="grid-container"],
+html.sd-mobile .sd-root [data-testid="component-shelf"] [role="grid"],
+html.sd-mobile .sd-root [data-testid="component-shelf"] [data-testid="carousel"] {
+  display: flex !important;
+  flex-wrap: nowrap !important;
+  align-items: flex-start !important;
+  gap: var(--m-gap) !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  scroll-snap-type: x proximity;
+  scroll-padding-inline: var(--m-pad);
+  padding-inline: var(--m-pad) !important;
+  padding-block: 2px var(--m-gap-sm) !important;
+  margin-inline: calc(-1 * var(--m-pad)) !important;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+html.sd-mobile .sd-root [data-testid="component-shelf"] [data-testid="card"] {
+  flex: 0 0 auto !important;
+  width: var(--m-tile) !important;
+  max-width: var(--m-tile) !important;
+  scroll-snap-align: start;
+}
+
+/* Les flèches de défilement du site n'ont aucun sens au doigt. */
+html.sd-mobile .sd-root [data-testid="component-shelf"] button[aria-label*="uivant"],
+html.sd-mobile .sd-root [data-testid="component-shelf"] button[aria-label*="récédent"],
+html.sd-mobile .sd-root [data-testid="component-shelf"] button[aria-label*="Next"],
+html.sd-mobile .sd-root [data-testid="component-shelf"] button[aria-label*="Previous"] {
+  display: none !important;
+}
+
+/* En-tête de section : titre et, quand le site en propose un, « tout
+   afficher » sur la même ligne, avec un écart serré comme dans l'application. */
+html.sd-mobile .sd-root [data-testid="component-shelf"] > div:first-child {
+  margin-bottom: var(--m-gap-sm) !important;
+  min-height: 0 !important;
 }
 
 html.sd-mobile .sd-root [data-testid="card"] {
@@ -114,11 +173,24 @@ html.sd-mobile .sd-root [data-testid="card-click-handler"] img {
   max-height: var(--m-card) !important;
   border-radius: var(--m-radius) !important;
 }
+html.sd-mobile .sd-root [data-testid="component-shelf"] [data-testid="card-image"],
+html.sd-mobile .sd-root [data-testid="component-shelf"] [data-testid="card-image"] img {
+  width: 100% !important;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+}
 
 html.sd-mobile .sd-root [data-testid="card-title"] {
   font-size: var(--m-fs-2) !important;
-  line-height: 1.35 !important;
+  line-height: 1.3 !important;
   margin-top: var(--m-gap-sm) !important;
+  font-weight: 600 !important;
+  /* Deux lignes, puis coupé : l'application ne laisse jamais un titre pousser
+     les tuiles de la rangée sur trois lignes. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 html.sd-mobile .sd-root [data-testid="card-subtitle"] {
   font-size: var(--m-fs-3) !important;
@@ -247,6 +319,48 @@ html.sd-mobile .sd-root [data-testid="add-button"],
 html.sd-mobile .sd-root [data-testid="more-button"] {
   width: calc(40px * var(--sd-u)) !important;
   height: calc(40px * var(--sd-u)) !important;
+}
+
+/* --------------------------------------------------------------------------
+   10. Détails de liste : ce que l'application ne montre pas
+
+   Le site affiche une ligne d'en-tête de colonnes (« #  Titre  Album  Ajouté
+   le  Durée ») que l'application n'a pas, et des lignes plus hautes. On garde
+   les informations, on retire la mise en page de tableau.
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile .sd-root [data-testid="tracklist-header"] {
+  display: none !important;
+}
+
+html.sd-mobile .sd-root [data-testid="tracklist-row"] {
+  padding-block: 0 !important;
+  align-items: center !important;
+}
+
+/* La colonne d'index de l'application est étroite et alignée. */
+html.sd-mobile .sd-root [data-testid="tracklist-row"] > *:first-child {
+  min-width: calc(24px * var(--sd-u)) !important;
+  font-size: var(--m-fs-3) !important;
+  text-align: right !important;
+}
+
+/* La durée reste alignée à droite, chiffres de même largeur. */
+html.sd-mobile .sd-root [data-testid="tracklist-row"] > *:last-child {
+  font-variant-numeric: tabular-nums;
+  font-size: var(--m-fs-3) !important;
+}
+
+/* Bibliothèque : 64 dp de haut et pochette de 48 dp, comme l'application. */
+html.sd-mobile .sd-root .YourLibraryX [role="row"],
+html.sd-mobile .sd-root .YourLibraryX [role="listitem"],
+html.sd-mobile .sd-root [data-testid="library-page"] [role="row"] {
+  min-height: calc(64px * var(--sd-u)) !important;
+}
+
+/* Bas de page : l'application laisse respirer sous la dernière ligne. */
+html.sd-mobile .sd-root [data-testid$="-page"] {
+  padding-bottom: calc(24px * var(--sd-u)) !important;
 }
 
 /* --------------------------------------------------------------------------
