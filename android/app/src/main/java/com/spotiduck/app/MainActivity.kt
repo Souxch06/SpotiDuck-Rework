@@ -766,7 +766,7 @@ class MainActivity : AppCompatActivity() {
                blocage qui aurait touché autre chose que de la publicité. */
             /* Où en est la session : le cookie `sp_dc` est celui qui porte la
                connexion. S'il est là, la mise à jour suivante ne demandera rien ;
-               s'il manque alors qu'une copie existe, c'est `restoreCookies` qui
+               s'il manque alors qu'une copie existe, c'est `restoreSession` qui
                travaille. */
             val names = cookieNames(WEB_BASE)
             val savedAt = prefs().getLong(KEY_SESSION_AT, 0L)
