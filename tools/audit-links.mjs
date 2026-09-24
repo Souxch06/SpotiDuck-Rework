@@ -198,6 +198,20 @@ if (!/uiMode == MODE_NATIVE[\s\S]{0,400}root\.setPadding\(bars\.left, bars\.top/
 if (!/data-sd-appprompt/.test(nativeAsset) || !/APP_PROMPT_TEXT/.test(nativeAsset)) {
   errors.push("native-mode.js : le bandeau « ouvrir dans l'application » n'est plus traqué");
 }
+/* …et les invitations à l'abonnement, encarts **et** bouton de la barre du bas. */
+if (!/data-sd-premium/.test(nativeAsset) || !/PREMIUM_TEXT/.test(nativeAsset)) {
+  errors.push("native-mode.js : les invitations à l'abonnement ne sont plus traquées");
+}
+/* Garde-fou payé une fois : un onglet de la barre du bas ne doit **jamais**
+   disparaître parce que son lien est un `spotify:` (la barre en est pleine :
+   `spotify:collection` est l'onglet Bibliothèque). Un lien `spotify:` ne compte
+   comme invite que si ce qui l'entoure le dit. */
+if (!/ancestorInvite/.test(nativeAsset) || /APP_PROMPT_LINK = \/\^\(spotify:/.test(nativeAsset)) {
+  errors.push("native-mode.js : un lien `spotify:` suffit de nouveau à masquer un élément");
+}
+if (!/function inBar/.test(nativeAsset)) {
+  errors.push("native-mode.js : les barres de navigation ne sont plus protégées");
+}
 /* Le mode « natif » ne doit être retenu que s'il a été choisi explicitement. */
 if (!/KEY_UI_MODE_CHOSEN/.test(activity)) {
   errors.push("MainActivity : le mode enregistré n'est plus distingué d'un choix explicite");

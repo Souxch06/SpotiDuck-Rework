@@ -835,6 +835,15 @@ const natHtml =
      survivre — seule l'invite disparaît. */
   '<header id="top-bar" role="banner"><a href="/search">Rechercher</a>' +
   '<a href="/me">Profil</a><a href="spotify://open">Ouvrir dans l\'application</a></header>' +
+  /* La barre du bas : ses onglets sont des liens `spotify:` (Spotify s'en sert
+     pour renvoyer vers son application). Aucun ne doit être touché — c'est
+     exactement ce qui cassait le bouton Bibliothèque. */
+  '<nav id="bottom-nav"><a href="/">Accueil</a><a href="/search">Rechercher</a>' +
+  '<a id="lib-tab" href="spotify:collection">Bibliothèque</a>' +
+  '<a id="premium-tab" href="/premium">Premium</a></nav>' +
+  /* Et l'encart d'abonnement, en fenêtre. */
+  '<div id="premium-dialog" role="dialog"><p>Passez à Premium</p>' +
+  '<button>Essai gratuit</button></div>' +
   '<div data-testid="now-playing-widget">' +
   '<a data-testid="context-item-link" href="/track/1">Titre test</a>' +
   '<div data-testid="context-item-info-artist">Artiste test</div>' +
@@ -918,6 +927,40 @@ check("native mode: the open-in-app banner is hunted down by its text", () => {
   const track = nd.querySelector("a[data-testid='context-item-link']");
   assert(track && !track.hasAttribute("data-sd-appprompt"), "a track link must not be hidden");
   return "bandeau dédié entier · barre du haut épargnée · liens de la page épargnés ✓";
+});
+
+check("native mode: a nav tab with a spotify: link is never touched", () => {
+  const lib = nd.querySelector("#lib-tab");
+  assert(lib, "the test page no longer has the library tab");
+  assert(
+    !lib.hasAttribute("data-sd-appprompt"),
+    "the library tab was mistaken for an « open in the app » invite"
+  );
+  const nav = nd.querySelector("#bottom-nav");
+  assert(nav && !nav.hasAttribute("data-sd-appprompt"), "the bottom bar must never be hidden");
+  const accueil = nav.querySelector("a[href='/']");
+  assert(accueil && !accueil.hasAttribute("data-sd-appprompt"), "the home tab must survive");
+  return "onglets préservés (dont un lien spotify:) ✓";
+});
+
+check("native mode: the subscription upsell and its tab are removed", () => {
+  const dialog = nd.querySelector("#premium-dialog");
+  assert(
+    dialog && dialog.getAttribute("data-sd-premium") === "1",
+    "the premium dialog was not recognised"
+  );
+  const tab = nd.querySelector("#premium-tab");
+  assert(tab && tab.getAttribute("data-sd-premium") === "1", "the premium tab must go");
+  const nav = nd.querySelector("#bottom-nav");
+  assert(!nav.hasAttribute("data-sd-premium"), "the bottom bar itself must survive");
+  const css = nd.querySelector("style[data-sd='native-mode']");
+  assert(
+    /\[data-sd-premium='1'\]\s*\{[^}]*display:none/.test(css.textContent),
+    "nothing hides what the sweep marked"
+  );
+  const track = nd.querySelector("a[data-testid='context-item-link']");
+  assert(track && !track.hasAttribute("data-sd-premium"), "a track link must not be hidden");
+  return "encart entier · onglet seul · barre préservée ✓";
 });
 
 check("native mode: the notification controls press Spotify's buttons", () => {
