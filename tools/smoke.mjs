@@ -762,6 +762,31 @@ check("the welcome CTA is handed to the app, not just a link", () => {
   return "appui → AndBridge.openLogin ✓";
 });
 
+check("the original app's fit-to-screen sheet is carried over", () => {
+  /* Mesuré sans elle, dans les conditions de la WebView : `contenu=800×731`
+     dans un écran de 412 px, `débordement=388`. C'est elle qui fait tenir la
+     page bureau sur un téléphone — et c'est ce qui manquait. */
+  const sheet = [...doc.querySelectorAll("style")]
+    .map((el) => el.textContent || "")
+    .join("\n");
+  /* Les règles sont recopiées telles quelles de la feuille d'origine, donc
+     écrites sans espaces autour des combinateurs (`#main-view+div`). */
+  for (const rule of [
+    "#main-view+div",
+    "width:auto",
+    "--panel-gap:0!important",
+    "width:100vw!important",
+    "grid-container",
+  ]) {
+    assert(sheet.includes(rule), `la feuille « tenir dans l'écran » a perdu « ${rule} »`);
+  }
+  assert(
+    sheet.includes("html.sd-mobile .sd-root #main-view+div"),
+    "la feuille d'origine n'est plus portée sous notre coque : elle frapperait aussi nos propres nœuds"
+  );
+  return "les règles qui font tenir la page bureau sont là ✓";
+});
+
 check("navigation is at the top, like the original app", () => {
   const nav = doc.querySelector(".sd-nav");
   assert(nav, "the top navigation bar was not built");

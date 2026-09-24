@@ -221,6 +221,27 @@ if (!/function spotifyLoginLink\(\)/.test(shellJs) || !/spotifyLoginLink\(\)/.te
   errors.push("le lien de connexion de Spotify n'est plus distingué des nôtres : l'écran d'accueil peut se rendre vrai tout seul");
 }
 
+/* 2-ter-quater. La feuille « tenir dans l'écran » : sans elle, mesuré dans les
+   conditions de la WebView, la page fait 800 px de large dans un écran de 412
+   (`débordement=388`) — texte rogné, page à faire glisser de côté. */
+const fitCss = read("src/inject/05-original-fit.css");
+if (!/^\s*\/\* =+\n\s+05 — Tenir dans l'écran/m.test(fitCss)) {
+  errors.push("src/inject/05-original-fit.css : en-tête de provenance absent");
+}
+for (const rule of ["#main-view+div", "width:100vw!important", "--panel-gap:0!important"]) {
+  if (!fitCss.includes(rule)) {
+    errors.push(`la feuille « tenir dans l'écran » a perdu « ${rule} » : la page débordera de nouveau`);
+  }
+}
+if (!/html\.sd-mobile \.sd-root /.test(fitCss) || /^\s*\*/m.test(fitCss)) {
+  errors.push("la feuille d'origine n'est plus portée sous notre coque (elle viserait nos propres nœuds)");
+}
+/* Elle est **générée** depuis la feuille d'origine : le dit-elle, et la
+   source est-elle intacte ? */
+if (!/build-original-fit\.mjs/.test(fitCss)) {
+  errors.push("la feuille « tenir dans l'écran » ne déclare plus son outil de génération");
+}
+
 /* 2-quater. Le mode livré par défaut. C'est une décision surveillée, et elle a
    changé de sens une fois, pour une raison **mesurée** (sonde `probe-playback`,
    run 36028586893) : le message « Lecture désactivée » — « Spotify ne
