@@ -339,7 +339,10 @@ async function main() {
         }
       };
 
-      await miniature(target.mode === "original" ? "origine" : "coque");
+      /* Une seule capture, sur la page choisie : les places d'annotation sont
+         comptées (GitHub en garde une poignée), et l'image coûte à elle seule
+         plusieurs morceaux. */
+      if (target.label === (process.env.PROBE_SHOT || "origine")) await miniature(target.label);
 
       /* Les trois vues de la barre du haut : état intérieur + ce que la page
          affiche, avant et après un appui réel. (L'interface d'origine a sa
@@ -356,23 +359,35 @@ async function main() {
            d'annotation, et GitHub n'en garde qu'une poignée) */
       }
 
-      lines.push(
-        `${target.label} → coque=${after && after.layer ? "construite" : after && after.erreur ? `mesure impossible (${after.erreur})` : "ABSENTE"} / ` +
-          `styles=${after && after.cssBytes ? after.cssBytes : "?"} car. / ` +
-          `CONTRÔLES : ${after && after.controls ? Object.entries(after.controls).map(([k, v]) => `${k}=${v}`).join(" · ") : "?"} | ` +
-          `RESTE DE SPOTIFY : ${after && after.spotifyChrome ? Object.entries(after.spotifyChrome).map(([k, v]) => `${k}=${v}`).join(" · ") : "?"} | ` +
-          `LES TROIS VUES : ${navEffects
-            .map(
-              (e) =>
-                `${e.name}→ tab=${e.after && e.after.stateTab} chemin=${e.after && e.after.path} ` +
-                `barreLatérale=${e.after && e.after.sidebarDisplay}/${e.after && e.after.sidebarBox} ` +
-                `recherche=${e.after && e.after.recherche ? "oui" : "non"} accueil=${e.after && e.after.accueil ? "oui" : "non"}` +
-                (e.after && e.after.navigation ? " (la page a navigué)" : "") +
-                (e.after && e.after.erreurs && e.after.erreurs.length ? ` ERREURS=${JSON.stringify(e.after.erreurs)}` : "")
-            )
-            .join("  ·  ")}`
-      );
-      console.log(`[Sonde coque] ${lines[lines.length - 1]}`);
+      /* Un résumé court par page : le détail complet va dans le rapport et
+         dans la console, l'annotation ne portant que ce qui décide. */
+      const visible = (sel) => {
+        const entry = after && after.controls ? after.controls[sel] : null;
+        return entry ? (entry.indexOf("visible") === 0 ? "visible" : "masqué") : "?";
+      };
+      const summary =
+        `${target.label} → ` +
+        (target.mode === "original"
+          ? `interface d'origine : firstFuck=${after && after.originalUi ? after.originalUi.firstFuck : "?"} ` +
+            `actPlayPause=${after && after.originalUi ? after.originalUi.actPlayPause : "?"} ` +
+            `mini-lecteur=${after && after.originalUi && after.originalUi.miniPlayer ? "posé" : "absent"} ` +
+            `feuille=${after && after.originalUi && after.originalUi.feuilleOrigine ? "posée" : "absente"} ` +
+            `styles=${after && after.cssBytes ? after.cssBytes : "?"} car.`
+          : `coque=${after && after.layer ? "construite" : "ABSENTE"} / ` +
+            `haut=${visible("barre du haut (.sd-nav)")} bas=${visible("barre du bas (.sd-tabbar)")} ` +
+            `mini=${visible("mini-lecteur (.sd-mini)")} en-tête=${visible("en-tête (.sd-topbar)")} ` +
+            `spotify-restant=${after && after.spotifyChrome
+              ? Object.entries(after.spotifyChrome)
+                  .filter(([, v]) => v.indexOf("visible") === 0)
+                  .map(([k]) => k)
+                  .join("+") || "rien"
+              : "?"}`) +
+        ` / appuis : ${navEffects
+          .map((e) => `${e.name}→${e.after && e.after.stateTab ? e.after.stateTab : e.after && e.after.navigation ? "navigue" : "rien"}`)
+          .join(", ")}`;
+      lines.push(summary);
+      console.log(`[Sonde coque] ${summary}`);
+      note(`Mesure — ${target.label}`, summary);
 
       report.pages.push({ label: target.label, url: target.url, before, after, navEffects, errors });
       if (errors.length) warn(`Erreurs — ${target.label}`, errors.slice(0, 5).join("  ||  "));
