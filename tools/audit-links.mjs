@@ -87,7 +87,16 @@ for (const m of runtime.matchAll(/"sd-[a-z0-9-]+"/gi)) {
   if (name !== "sd-layer" && name !== "sd-root") usedClasses.add(name);
 }
 /* Quelques classes servent uniquement de marqueur pour le JS ou les tests. */
-const NOT_STYLED_ON_PURPOSE = new Set(["sd-density-normal", "sd-login-done", "sd-tap", "sd-welcome"]);
+const NOT_STYLED_ON_PURPOSE = new Set([
+  "sd-density-normal",
+  "sd-login-done",
+  "sd-tap",
+  "sd-welcome",
+  /* Marqueurs du garde-fou de contenu (l'apparence est changée en style en
+     ligne, sur les éléments concernés — pas par une règle). */
+  "sd-content-restored",
+  "sd-content-hidden",
+]);
 for (const cls of usedClasses) {
   if (cls.endsWith("-")) continue; // classe construite par concaténation (sd-density-…)
   if (!defined.has(cls) && !NOT_STYLED_ON_PURPOSE.has(cls)) {
@@ -246,6 +255,20 @@ for (const sel of [".sd-nav-item", ".sd-mini-row .sd-iconbtn", ".sd-mini-row2 .s
   }
 }
 
+
+/* **Le garde-fou de contenu.** La capture du 24/09 montrait la coque sur un
+   écran noir : une règle de notre feuille masquait un ancêtre du contenu (la
+   barre du haut de Spotify est, dans la disposition actuelle, le conteneur de
+   la page). Le garde-fou remonte la chaîne et rétablit ce qui a été masqué —
+   s'il disparaît, l'écran peut redevenir noir sans que rien ne le signale. */
+if (!/data-sd-unhidden/.test(shellJs) || !/Content\.apply\(\)/.test(shellJs)) {
+  errors.push("le garde-fou de contenu a disparu : notre feuille peut de nouveau effacer la page");
+}
+for (const anchor of ["data-testid=\"home-page\"", "#main-view", "main[data-testid]"]) {
+  if (!shellJs.includes(anchor)) {
+    errors.push(`le garde-fou de contenu ne cherche plus « ${anchor} » : il ne trouverait plus le contenu à protéger`);
+  }
+}
 
 /* 2-ter-ter. Deux défauts qui ont coûté une version chacun, et qui ne se voient
    qu'à l'usage : l'écran d'accueil qui restait posé par-dessus le lecteur (il

@@ -167,6 +167,63 @@ const MEASURE = async () => {
   })();
   /* « Adapté à l'appareil » se mesure aussi : un contrôle plus petit que 44 px
      n'est pas touchable au doigt (la cible Material minimale). */
+  /* **La structure de la page, telle qu'elle est.** Nos regles masquent la
+     barre du haut et la barre laterale de Spotify ; si l'une des deux est en
+     realite l'ancetre du contenu, l'ecran devient noir - c'est exactement ce
+     qu'une capture du telephone a montre. Ce releve nomme le coupable. */
+  out.structure = (function () {
+    var sels = [
+      "#main",
+      "#main-view",
+      "#global-nav-bar",
+      "#Desktop_LeftSidebar_Id",
+      "#Desktop_PanelContainer_Id",
+      "main",
+      "[data-testid=home-page]",
+    ];
+    var rows = [];
+    for (var i = 0; i < sels.length; i++) {
+      var el = document.querySelector(sels[i]);
+      if (!el) {
+        rows.push(sels[i] + "=absent");
+        continue;
+      }
+      var cs = window.getComputedStyle(el);
+      var r = el.getBoundingClientRect();
+      rows.push(
+        sels[i] +
+          "=" + Math.round(r.width) + "x" + Math.round(r.height) +
+          " " + cs.display + "/" + cs.visibility +
+          (el.querySelector("#main-view,[data-testid=home-page]") ? " CONTIENT-LE-CONTENU" : "") +
+          (el.getAttribute("data-sd-unhidden") ? " REAFFICHE" : "")
+      );
+    }
+    return rows.join(" . ");
+  })();
+
+  /* Le contenu du milieu de l'ecran est-il visible ? C'est la question posee
+     par « on voit rien », et elle se mesure. */
+  out.contentVisible = (function () {
+    var anchor = document.querySelector('[data-testid=home-page], #main-view, main[data-testid], main');
+    if (!anchor) return "contenu: absent";
+    var r = anchor.getBoundingClientRect();
+    var cs = window.getComputedStyle(anchor);
+    var chain = [];
+    var node = anchor;
+    while (node && node.nodeType === 1 && node !== document.body) {
+      var c = window.getComputedStyle(node);
+      if (c.display === "none" || c.visibility === "hidden") {
+        chain.push((node.id || node.tagName.toLowerCase()) + ":" + c.display + "/" + c.visibility);
+      }
+      node = node.parentNode;
+    }
+    return (
+      "contenu=" + Math.round(r.width) + "x" + Math.round(r.height) +
+      " " + cs.display +
+      (chain.length ? " . CACHE-PAR: " + chain.join(" < ") : " . aucun ancetre masque")
+    );
+  })();
+
   out.tapTargets = (function () {
     var els = document.querySelectorAll(".sd-layer .sd-nav-item, .sd-layer .sd-iconbtn, .sd-layer .sd-tab");
     var min = 999;
@@ -611,6 +668,8 @@ async function main() {
             return `${e.name}→RIEN (chemin ${e.click && e.click.pathAfter})`;
           })
           .join(", ")}`;
+      if (after && after.contentVisible) lines.push(`Contenu - ${target.label} : ${after.contentVisible}`);
+      if (after && after.structure) lines.push(`Structure - ${target.label} : ${after.structure}`);
       lines.push(summary);
       console.log(`[Sonde coque] ${summary}`);
       note(`Mesure — ${target.label}`, summary);

@@ -848,6 +848,49 @@ await checkAsync("the nav bar and the title bar never cover each other", async (
   return "navigation (accueil/recherche) · titre (bibliothèque/sous-page) ✓";
 });
 
+await checkAsync("the shell can never blank the page it dresses", async () => {
+  /* La capture du téléphone, le 24/09 : notre barre du haut, et un écran noir
+     en dessous. La cause est une règle de notre propre feuille — masquer
+     `#global-nav-bar` (la barre de bureau de Spotify que la nôtre remplace)
+     masquait aussi le contenu, parce que sur la disposition actuelle c'est un
+     de ses ancêtres. Le garde-fou remonte la chaîne du contenu et rétablit tout
+     ancêtre que notre feuille a masqué. */
+  const dom = new JSDOM(
+    "<!doctype html><html><body>" +
+      '<div id="global-nav-bar"><div id="wrap">' +
+      '<div id="main-view"><section data-testid="home-page">Accueil</section></div>' +
+      "</div></div>" +
+      "</body></html>",
+    { url: "https://open.spotify.com/", pretendToBeVisual: true, runScripts: "dangerously" }
+  );
+  dom.window.AndBridge = new Proxy({}, { get: () => () => undefined });
+  /* La règle de notre feuille, réduite à ce qui compte ici. */
+  const style = dom.window.document.createElement("style");
+  style.textContent = "#global-nav-bar{display:none !important}";
+  dom.window.document.head.appendChild(style);
+
+  dom.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(250);
+
+  const page = dom.window.document;
+  const bar = page.getElementById("global-nav-bar");
+  const root = page.documentElement;
+  assert(
+    bar.getAttribute("data-sd-unhidden") === "1",
+    "un ancêtre masqué du contenu n'a pas été rétabli"
+  );
+  assert(dom.window.getComputedStyle(bar).display !== "none", "la page reste masquée");
+  assert(root.className.includes("sd-content-restored"), "l'état rétabli n'est pas signalé");
+  const api = dom.window.SpotiDuckUI;
+  assert(api && api.content && api.content.restored.length >= 1, "le garde-fou n'est pas joignable");
+  assert(
+    /data-sd-unhidden/.test(await read("src/inject/spotiduck-ui.js")),
+    "le marqueur du garde-fou a disparu de la coque"
+  );
+  dom.window.close();
+  return "#global-nav-bar (ancêtre du contenu) rétabli ✓";
+});
+
 await checkAsync("the interface unit follows the device, not a fixed guess", async () => {
   /* « Fais en sorte que l'affichage s'adapte automatiquement à l'appareil. »
      L'unité `--sd-u` dimensionne toute la coque ; elle doit se déduire de la

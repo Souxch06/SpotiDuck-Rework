@@ -1964,3 +1964,56 @@ Mesure de la sonde après correction :
 | 480×1040   | 1,14  | 480×64        | 480×191      | 0           | ≥ 44 px           |
 | 915×412    | 0,92  | 915×42        | 640×138      | 0           | ≥ 44 px           |
 | 800×1280   | 1,15  | 800×69        | 640×211      | 0           | ≥ 44 px           |
+
+---
+
+## §31 — L'écran noir de l'accueil, et sa cause (v2.9.9)
+
+La capture du téléphone, le 24/09 à 21 h 16, est sans ambiguïté : **notre barre
+du haut s'affiche** (maison · bibliothèque · recherche · logo · notifications ·
+amis · profil) et **tout le reste est noir**. Pas de contenu, pas de mini-lecteur.
+
+### La cause
+
+Notre feuille masque les barres de bureau de Spotify — c'est voulu, la nôtre les
+remplace :
+
+```css
+html.sd-mobile.sd-tab-home #global-nav-bar, … { display: none !important; }
+html.sd-mobile #Desktop_LeftSidebar_Id             { display: none !important; }
+```
+
+Or, dans la disposition actuelle de la page, **`#global-nav-bar` est l'ancêtre
+du contenu** : masquer la barre masquait la page entière. La coque, elle, vit
+dans son propre calque (`.sd-layer`, ajouté à `body`) — donc la coque restait
+visible et le contenu, non. C'est exactement la capture : du chrome, et du noir.
+
+La leçon : une règle qui masque un élément de Spotify peut masquer **le contenu**,
+et rien dans le code ne le disait. Deviner lequel des conteneurs est l'ancêtre
+aujourd'hui serait à refaire à chaque refonte de Spotify.
+
+### Le garde-fou (`Content.apply`)
+
+À partir de l'élément de contenu (`[data-testid="home-page"]`, `#main-view`,
+`main[data-testid]`, `.Root__main-view`, `main`), la coque **remonte la chaîne
+des ancêtres** et rétablit celui que la feuille a masqué : `display` et
+`visibility` en style en ligne (prioritaires sur nos règles, mais appliqués à
+**ces seuls** éléments), avec le marqueur `data-sd-unhidden`.
+
+Ce qui reste masqué : la barre latérale de bureau, la barre du haut de Spotify,
+le panneau de droite — ils ne sont pas des ancêtres du contenu. La mesure décide,
+la règle ne décide plus.
+
+Appelé au démarrage, 0,6 s / 2 s / 5 s plus tard (le contenu arrive après la
+coque), à chaque changement de vue et à chaque redimensionnement.
+
+### Vérifications
+
+* banc : « la coque ne peut pas vider la page qu'elle habille » — un DOM où
+  `#main-view` vit **à l'intérieur** de `#global-nav-bar`, masqué par une règle
+  identique à la nôtre : l'ancêtre doit être rétabli, la classe d'état posée ;
+* audit : le marqueur `data-sd-unhidden`, l'appel `Content.apply()` et les trois
+  ancêtres de contenu sont exigés — s'ils disparaissent, l'écran peut redevenir
+  noir sans que rien ne le signale ;
+* sonde : `Structure` (quels conteneurs contiennent le contenu, lesquels ont été
+  rétablis) et `Contenu` (taille du contenu, chaîne des ancêtres masqués).
