@@ -2063,3 +2063,48 @@ lent qui arrive après le panneau l'efface de lui-même.
   revenu : panneau masqué, état retiré (99/99) ;
 * audit : le panneau, son marqueur d'état et le garde-fou de contenu sont exigés
   (0/0).
+
+---
+
+## §33 — Une page qui n'affiche rien ramène à notre coque (v2.9.11)
+
+« C'est pareil » après la capture d'un écran noir, sous une barre du haut qui
+ressemble **aux deux interfaces** (la nôtre a été dessinée d'après celle du
+projet : accueil · bibliothèque · recherche, logo au centre, notifications ·
+amis · profil). Impossible, dans ces conditions, de savoir laquelle tourne — et
+c'est précisément le problème.
+
+### Ce qui change, côté application
+
+1. **`UI_MODE_REV` : 7 → 8.** Un mode enregistré avant cette révision est oublié
+   **une fois** : l'application repart de la coque SpotiDuck (le défaut). Un
+   choix explicite fait *après* cette révision reste respecté.
+2. **Filet de sécurité (`checkContentUsable`).** Douze secondes après la fin du
+   chargement, l'application mesure le contenu de la page :
+
+       absent · etroit 132x709 · vide · ok 412x667
+
+   — c'est le relevé de la sonde (`origine` tombait à 132 px de large, `notre` à
+   412×667). Si la réponse n'est pas « ok » :
+
+   * une autre interface était active → **retour automatique à la coque
+     SpotiDuck** (le seul mode dont on sait qu'il affiche la page), annoncé par
+     un message ;
+   * c'était déjà la coque → message qui dit quoi faire (recharger ; le
+     sélecteur est juste là).
+
+   Une seule tentative par chargement : une rechargement en boucle serait pire
+   que l'écran vide.
+3. **Le sélecteur est joignable partout.** L'appui long est déjà avalé dans les
+   trois modes (pas de menu de navigateur) : il ouvre désormais le choix de
+   l'interface **dans tous les modes**, au lieu du seul mode d'origine. Dans la
+   coque, le même écran reste accessible par l'engrenage de la barre de titre
+   (onglet Bibliothèque) → « Interface ».
+
+### Vérifications
+
+* audit : `checkContentUsable`, `CONTENT_PROBE_JS` et `showUiChooser()` sont
+  exigés dans `MainActivity` — si le filet de sécurité disparaît, un écran vide
+  redeviendrait sans issue ;
+* la compilation Kotlin est faite par la CI (gradle) à chaque envoi, et le
+  contrôle des ressources (`aapt2 compile`) est passé ici.

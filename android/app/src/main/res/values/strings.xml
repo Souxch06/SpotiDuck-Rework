@@ -50,6 +50,9 @@
     <string name="ui_mode_inject_short">Coque SpotiDuck</string>
     <string name="ui_mode_native">Page web mobile (pas de lecture sans Premium)</string>
     <string name="ui_mode_native_short">Page web mobile</string>
+    <string name="ui_mode_hint">Pour changer d\'interface : appui long de 3 s n\'importe où sur la page, ouverte aussi par l\'engrenage de la barre de titre (onglet Bibliothèque).</string>
+    <string name="ui_blank_fallback">Cette interface n\'a rien affiché : retour à la coque SpotiDuck</string>
+    <string name="ui_blank_hint">La page n\'a rien affiché — rechargez ; appui long de 3 s pour changer d\'interface</string>
     <string name="ui_mode_native_toast">Page web mobile — lecture bloquée sur un compte gratuit</string>
     <string name="ui_mode_inject_toast">Coque SpotiDuck — rechargement…</string>
 </resources>

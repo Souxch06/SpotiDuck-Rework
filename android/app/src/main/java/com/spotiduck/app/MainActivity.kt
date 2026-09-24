@@ -189,7 +189,13 @@ class MainActivity : AppCompatActivity() {
                d'en changer. Les deux autres interfaces gèrent leur propre
                geste. */
             setOnLongClickListener {
-                if (uiMode == MODE_ORIGINAL) showUiChooser()
+                /* **Sortie de secours dans tous les modes.** Le geste est avalé
+                   partout (pas de menu de navigateur), donc il ne coûte rien :
+                   dans le mode d'origine c'était déjà le chemin du sélecteur,
+                   et dans les deux autres il n'y avait aucun raccourci — si la
+                   page ne s'affiche pas, rester coincé sans issue est pire que
+                   tout. */
+                showUiChooser()
                 true
             }
             overScrollMode = View.OVER_SCROLL_NEVER // pas de halo bleu en bout de liste
@@ -349,6 +355,9 @@ class MainActivity : AppCompatActivity() {
                     saveSession("fin de chargement")
                 }
                 if (uiMode != MODE_ORIGINAL) view.evaluateJavascript(VIEWPORT_META_JS, null)
+                /* Douze secondes : le temps qu'une page Spotify s'affiche sur un
+                   téléphone, pas celui d'un chargement bloqué. */
+                view.postDelayed({ checkContentUsable() }, 12000L)
                 val script = scriptFor(uiMode)
                 if (script.isEmpty()) {
                     Log.e(TAG, "no script for mode $uiMode")
@@ -932,6 +941,39 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
+     * **Filet de sécurité : une page qui n'affiche rien ramène à la coque.**
+     *
+     * La sonde montre que ce n'est pas la même chose de « la page n'a rien
+     * rendu » et de « notre feuille a tout masqué » — et, sur un téléphone
+     * qu'on n'a pas sous la main, rien ne les distinguait : la capture du 24/09
+     * était un écran noir sous la barre du haut, sans un mot d'explication.
+     *
+     * Douze secondes après la fin du chargement, l'application mesure donc le
+     * contenu (absent, vide, ou écrasé sur une bande étroite — la mise en page
+     * d'origine tombait à 132 px de large) :
+     *
+     *   · une autre interface était active → on revient à la nôtre, en le
+     *     disant : c'est le seul mode dont on sait qu'il affiche la page ;
+     *   · c'était déjà la nôtre → on le dit aussi, et l'appui long (3 s) ouvre
+     *     le choix de l'interface, donc on n'est jamais coincé.
+     */
+    private fun checkContentUsable() {
+        if (!::webView.isInitialized) return
+        webView.evaluateJavascript(CONTENT_PROBE_JS) { value ->
+            val result = (value ?: "").trim().trim('"')
+            if (result.startsWith("ok")) return@evaluateJavascript
+            Log.w(TAG, "contenu inutilisable ($result), interface=$uiMode")
+            val message =
+                if (uiMode == MODE_INJECT) getString(R.string.ui_blank_hint)
+                else getString(R.string.ui_blank_fallback)
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+            /* Une seule tentative par chargement : un rechargement en boucle
+               serait pire que l'écran vide. */
+            if (uiMode != MODE_INJECT) switchUiMode(MODE_INJECT)
+        }
+    }
+
+    /**
      * Ouvre l'écran **Play Protect** du Play Store (ou, à défaut, le réglage
      * de sécurité du téléphone).
      *
@@ -1493,13 +1535,28 @@ class MainActivity : AppCompatActivity() {
          * L'écueil déjà payé, à ne pas repayer : la 2.6.0 avait livré un défaut
          * sans aucun moyen d'en sortir.
          */
+        /**
+         * Ce que l'application mesure sur la page : le contenu est-il là, et
+         * utilisable ? « ok 412x667 » est la seule réponse rassurante ; tout le
+         * reste déclenche le filet de sécurité ci-dessus.
+         */
+        private const val CONTENT_PROBE_JS = """(function(){
+  var a = document.querySelector('[data-testid="home-page"], #main-view, main[data-testid], main');
+  if (!a) return 'absent';
+  var r = a.getBoundingClientRect();
+  var t = (a.textContent || '').replace(/\s+/g, ' ').trim();
+  if (r.width < 200 || r.height < 200) return 'etroit ' + Math.round(r.width) + 'x' + Math.round(r.height);
+  if (t.length < 40 && !a.querySelector('input,button,img,iframe,a[href]')) return 'vide';
+  return 'ok ' + Math.round(r.width) + 'x' + Math.round(r.height);
+})()"""
+
         const val MODE_DEFAULT = MODE_INJECT
 
         /* Version de la préférence enregistrée : à incrémenter quand
            `MODE_DEFAULT` change — pas à chaque changement de la coque, sinon
            le choix explicite de l'utilisateur (« interface d'origine ») serait
            écrasé au moment d'une mise à jour. */
-        const val UI_MODE_REV = 7
+        const val UI_MODE_REV = 8
 
         /** Types d'URL `spotify:` convertibles en lien web. */
         private val WEB_KINDS = setOf(

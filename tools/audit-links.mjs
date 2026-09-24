@@ -289,6 +289,21 @@ for (const anchor of ["data-testid=\"home-page\"", "#main-view", "main[data-test
   }
 }
 
+/* **Le filet de sécurité côté application.** Une page qui n'affiche rien (le
+   cas du 24/09 : écran noir sous notre barre) doit ramener à notre coque — la
+   seule dont on sait qu'elle affiche la page — et non laisser l'utilisateur
+   devant un écran vide sans issue. */
+const activitySource = read("android/app/src/main/java/com/spotiduck/app/MainActivity.kt");
+if (!/checkContentUsable/.test(activitySource)) {
+  errors.push("l'application ne vérifie plus que la page affiche quelque chose : un écran vide ne serait plus rattrapé");
+}
+if (!/CONTENT_PROBE_JS/.test(activitySource)) {
+  errors.push("le script de mesure du contenu a disparu de MainActivity");
+}
+if (!/showUiChooser\(\)/.test(activitySource)) {
+  errors.push("le sélecteur d'interface n'est plus joignable (sortie de secours perdue)");
+}
+
 /* 2-ter-ter. Deux défauts qui ont coûté une version chacun, et qui ne se voient
    qu'à l'usage : l'écran d'accueil qui restait posé par-dessus le lecteur (il
    n'était réévalué que sur les mutations du `<body>`), et un appui d'onglet qui
