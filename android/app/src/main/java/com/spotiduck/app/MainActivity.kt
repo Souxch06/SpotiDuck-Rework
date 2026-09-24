@@ -1234,6 +1234,22 @@ class MainActivity : AppCompatActivity() {
         removed > 0
     }.getOrDefault(false)
 
+    /* readAsset et toastFor : emportées par erreur lors de la refonte de la
+       session (elles vivaient au milieu du bloc remplacé). C'est la
+       compilation qui les a réclamées — elles sont restaurées ici. */
+    private fun readAsset(name: String): String =
+        runCatching { assets.open(name).bufferedReader().use { it.readText() } }
+            .getOrElse {
+                Log.e(TAG, "assets/$name missing — run `npm run build`", it)
+                ""
+            }
+
+    private fun toastFor(mode: String): Int = when (mode) {
+        MODE_INJECT -> R.string.ui_mode_inject_toast
+        MODE_NATIVE -> R.string.ui_mode_native_toast
+        else -> R.string.ui_mode_original_toast
+    }
+
     private fun prefs() = getSharedPreferences(PREFS, MODE_PRIVATE)
 
     /* ------------------------------------------------------------------ *
