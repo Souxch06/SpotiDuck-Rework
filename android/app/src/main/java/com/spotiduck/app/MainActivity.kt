@@ -946,11 +946,11 @@ class MainActivity : AppCompatActivity() {
         /* Le mode livré par défaut est en tête : c'est celui qu'on cherche en
            ouvrant ce sélecteur, et c'est celui que la version a choisi. */
         val labels = arrayOf(
-            getString(R.string.ui_mode_inject),
             getString(R.string.ui_mode_original),
+            getString(R.string.ui_mode_inject),
             getString(R.string.ui_mode_native)
         )
-        val modes = arrayOf(MODE_INJECT, MODE_ORIGINAL, MODE_NATIVE)
+        val modes = arrayOf(MODE_ORIGINAL, MODE_INJECT, MODE_NATIVE)
         val checked = modes.indexOf(uiMode).coerceAtLeast(0)
         AlertDialog.Builder(this)
             .setTitle(getString(R.string.ui_mode_title))
@@ -1446,33 +1446,30 @@ class MainActivity : AppCompatActivity() {
         const val MODE_INJECT = "inject"
 
         /**
-         * Interface livrée par défaut : **la page bureau de Spotify, habillée
-         * par la coque maison** (`MODE_INJECT`) — la page que le code d'origine
-         * recevait, avec la coque par-dessus (barre du bas, mini-lecteur,
-         * lecteur plein écran, feuilles). La page **mobile**, elle, est servie
-         * à un agent de téléphone et bloque la lecture d'un compte gratuit ;
-         * elle reste proposée dans le sélecteur, à titre de comparaison.
+         * Interface livrée par défaut : **l'interface d'origine de SpotiDuck**
+         * (`MODE_ORIGINAL`) — le code d'origine tel quel, que l'utilisateur
+         * connaît et sur lequel la lecture fonctionne.
          *
-         * L'écueil déjà payé, à ne pas repayer : la 2.6.0 avait livré la page
-         * mobile par défaut sans aucun moyen d'en sortir. Le sélecteur (appui
-         * long) est présent dans tous les modes — c'est le chemin de retour.
+         * Ce n'est pas un repli mais une mesure (sonde `probe-coop`, runs
+         * 36033504237 et 36034083349) : sur la **vraie** page, l'interface
+         * d'origine se construit entièrement (`firstFuck`, `actPlayPause`, sa
+         * feuille de style posée, 110 Ko de styles), tandis que la coque maison
+         * n'y laisse visible que sa barre du haut — ses onglets du bas, son
+         * mini-lecteur et son en-tête restent masqués par sa propre mise en
+         * page, et le contenu de Spotify n'est pas habillé. C'est ce que
+         * l'utilisateur a vu : « les boutons ne sont pas comme notre version,
+         * rien n'est relié ».
+         *
+         * La coque reste sélectionnable (appui long) : elle demande une reprise
+         * de ses styles contre la vraie page, pas un abandon. La page mobile
+         * aussi, avec un libellé qui dit qu'elle ne lit pas. L'écueil déjà payé,
+         * à ne pas repayer : la 2.6.0 avait livré la page mobile par défaut sans
+         * aucun moyen d'en sortir.
          */
-        /* Le défaut est **la page bureau de Spotify habillée par notre coque**
-           (`MODE_INJECT`), pas sa page mobile. Mesuré en CI (`probe-playback`,
-           run 36028586893) : le message « Lecture désactivée » et sa phrase
-           « Spotify ne fonctionnera pas si vous bloquez le contenu protégé… »
-           sont des textes du **lecteur web mobile** de Spotify
-           (`mwp.playback.error.protected.content`, servi dans le paquet
-           `mobile-web-player`) : avec un agent de téléphone, Spotify sert sa
-           page mobile, qui ne lit rien pour un compte gratuit. Le code
-           d'origine n'a jamais eu ce défaut parce qu'il annonce un Chrome de
-           bureau et reçoit la page bureau. C'est donc la page bureau qui est
-           livrée par défaut, avec la coque par-dessus — et le sélecteur
-           (appui long) reste le chemin de retour. */
-        const val MODE_DEFAULT = MODE_INJECT
+        const val MODE_DEFAULT = MODE_ORIGINAL
 
         /** Incrémenter à chaque fois que `MODE_DEFAULT` change. */
-        const val UI_MODE_REV = 5
+        const val UI_MODE_REV = 6
 
         /** Types d'URL `spotify:` convertibles en lien web. */
         private val WEB_KINDS = setOf(

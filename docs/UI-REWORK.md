@@ -1536,3 +1536,54 @@ La coque tient maintenant **exactement** le contrat du mode mobile, mêmes trois
 
 audit 0 erreur / 0 avertissement, smoke 89/89, ressources compilées par `aapt2`
 avant le push, `npm run build` + `npm run sync:android` avant le commit.
+
+## 26. La coque sur la vraie page : ce que la mesure a montré (v2.9.3)
+
+Deux plaintes d'affilée — « le bouton ne fait rien, je suis bloqué à la
+connexion » puis « les boutons ne sont pas comme notre version, rien n'est relié
+à aucune action » — avaient la même racine : la coque n'a jamais été mesurée sur
+la **vraie** page. Le smoke la vérifie sur une page **factice**
+(`demo/mock/spotify.js`) : il valide sa logique, pas son habillage, et il ne
+pouvait pas voir ce que l'utilisateur voyait.
+
+D'où `tools/probe-coop.mjs` (+ `probe-coop.yml`) : la coque est chargée sur la
+vraie page dans un vrai Chrome, exactement comme l'application le fait
+(identité au début du chargement, coque à la fin), et **l'écran est renvoyé en
+image**.
+
+### Ce que la sonde a mesuré
+
+| | Coque maison | Interface d'origine |
+| --- | --- | --- |
+| Script exécuté | oui (`window.SpotiDuckUI`, 78 160 car. de styles) | oui (`firstFuck`, `actPlayPause` = fonctions, 110 233 car. de styles) |
+| Barre du haut | visible (412×56) | — (la sienne, `.npbtn`) |
+| Onglets du bas | **masqués** (0×0 : `tabbar: false` par défaut) | — |
+| Mini-lecteur | **masqué** (0×0, aucun morceau au lancement) | posé par son propre script |
+| En-tête (`.sd-topbar`) | **masqué** (0×0) | — |
+| Habillage du contenu Spotify | **non** : les cartes, la barre latérale et la barre de lecture restent ceux de Spotify (masqués ou bruts, jamais mis à l'échelle « téléphone ») | son propre habillage, mesuré complet |
+
+Autrement dit : sur la vraie page, la coque ne laisse voir qu'une **fine rangée
+d'icônes** au-dessus du contenu bureau de Spotify. C'est exactement ce que
+l'utilisateur a décrit. Ses appuis, eux, fonctionnent (l'onglet Bibliothèque
+ouvre bien la barre latérale en 412×675) — mais rien de visible ne le montre.
+
+### La décision
+
+Le défaut redevient **l'interface d'origine** (`MODE_ORIGINAL`, `UI_MODE_REV = 6`),
+celle que l'utilisateur connaît et sur laquelle la lecture fonctionne : mesurée
+complète sur la vraie page. La coque reste sélectionnable (appui long) et son
+libellé dit la vérité — « habillage à finir » —, parce qu'elle demande une
+reprise de ses styles **contre le DOM réel** de Spotify, pas un abandon.
+
+### Ce que la sonde a appris sur l'outillage (à garder)
+
+* **une annotation GitHub est coupée à 1 800 caractères** et le job n'en garde
+  qu'une poignée (~15) : un diagnostic bavard perd sa fin, silencieusement ;
+* **`gh run download` et `gh api …/jobs/<id>/logs` ne répondent pas** dans cet
+  environnement (EOF) : le seul canal qui marche partout, ce sont les
+  annotations — y compris pour une image, envoyée en **décimal**, morceau par
+  morceau (`SHOT:<nom>:<i>/<n>:<octets>`), parce que `page.screenshot()` de
+  Puppeteer rend un `Uint8Array` et non un `Buffer` (l'encodage base64 donnait
+  une chaîne hostile aux annotations) ;
+* **un appui peut naviguer** : toute mesure doit être protégée, sinon le contexte
+  est détruit et c'est justement le résultat intéressant qui disparaît.

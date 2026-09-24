@@ -217,15 +217,20 @@ const activity = read("android/app/src/main/java/com/spotiduck/app/MainActivity.
 for (const stale of ["the two interfaces", "MODE_INJECT is the default"]) {
   if (activity.includes(stale)) errors.push(`MainActivity : commentaire périmé (« ${stale} »)`);
 }
-if (!/MODE_DEFAULT\s*=\s*MODE_INJECT/.test(activity)) {
-  errors.push("MainActivity : le mode par défaut n'est plus la page bureau habillée par la coque");
+/* Mesuré par la sonde `probe-coop` : sur la vraie page, l'interface d'origine
+   se construit entièrement, la coque maison n'y laisse qu'une barre du haut, et
+   la page mobile ne lit rien. Le défaut est donc l'interface d'origine. */
+if (!/MODE_DEFAULT\s*=\s*MODE_ORIGINAL/.test(activity)) {
+  errors.push("MainActivity : le mode par défaut n'est plus l'interface d'origine");
 }
-if (/MODE_DEFAULT\s*=\s*MODE_NATIVE/.test(activity)) {
-  errors.push("MainActivity : le défaut est repassé sur la page mobile, celle qui bloque la lecture");
+for (const wrong of ["MODE_NATIVE", "MODE_INJECT"]) {
+  if (new RegExp(`MODE_DEFAULT\\s*=\\s*${wrong}`).test(activity)) {
+    errors.push(`MainActivity : le défaut est repassé sur ${wrong} — mesuré incomplet sur la vraie page`);
+  }
 }
 /* …et le mode par défaut doit rester quittable **depuis lui-même**, sans
    réinstaller : c'est ce qui manquait à la 2.6.0. */
-if (!/MODE_INJECT,\s*MODE_ORIGINAL,\s*MODE_NATIVE/.test(activity.replace(/\s+/g, " "))) {
+if (!/MODE_ORIGINAL,\s*MODE_INJECT,\s*MODE_NATIVE/.test(activity.replace(/\s+/g, " "))) {
   errors.push("MainActivity : le sélecteur d'interface ne propose plus les trois modes, défaut en tête");
 }
 /* L'identité « bureau » de la coque : agent annoncé **et** `navigator`

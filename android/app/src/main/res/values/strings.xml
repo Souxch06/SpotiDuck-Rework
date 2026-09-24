@@ -16,7 +16,7 @@
     <!-- Ce que le choix change pour un compte *gratuit* : c'est là que se
          décide « quelles fonctions Premium j'ai », parce que Spotify n'accorde
          pas les mêmes libertés à la page bureau et à la page mobile. -->
-    <string name="ui_mode_note">Sur un compte gratuit, seule la page bureau de Spotify lit la musique — la page web mobile répond « Lecture désactivée ». C\'est donc la page bureau, habillée par la coque, qui est livrée par défaut. Aucune interface ne débloque la qualité 320 kbps, le téléchargement ni les sauts illimités : ces décisions-là appartiennent au compte, pas à l\'application.</string>
+    <string name="ui_mode_note">L\'interface d\'origine est celle de SpotiDuck : elle lit la musique sur un compte gratuit, et c\'est elle qui est livrée par défaut. La coque maison lui ajoute une barre du bas, un mini-lecteur et un lecteur plein écran, mais son habillage de la page de Spotify reste à finir : sur la vraie page, nos boutons ne remplacent pas encore ceux de Spotify. La page web mobile, elle, répond « Lecture désactivée » sur un compte gratuit. Aucune interface ne débloque la qualité 320 kbps, le téléchargement ni les sauts illimités : ces décisions-là appartiennent au compte, pas à l\'application.</string>
     <!-- Trois interfaces :
          · « native » = la page web mobile de Spotify — l'affichage mobile,
            livré par défaut ;
@@ -42,13 +42,13 @@
     <string name="diagnostic_copied">Diagnostic copié</string>
     <string name="play_protect">Play Protect</string>
     <string name="play_protect_path">Dans le Play Store : profil → Play Protect → ⚙️ → décocher « Analyser les applis avec Play Protect ».</string>
-    <string name="ui_mode_original">Interface d\'origine de SpotiDuck</string>
+    <string name="ui_mode_original">Interface d\'origine de SpotiDuck (défaut)</string>
     <string name="ui_mode_original_short">Interface d\'origine</string>
     <string name="ui_mode_original_toast">Interface d\'origine — rechargement…</string>
-    <string name="ui_mode_inject">Coque SpotiDuck (défaut)</string>
+    <string name="ui_mode_inject">Coque SpotiDuck (habillage à finir)</string>
     <string name="ui_mode_inject_short">Coque SpotiDuck</string>
     <string name="ui_mode_native">Page web mobile (pas de lecture sans Premium)</string>
     <string name="ui_mode_native_short">Page web mobile</string>
     <string name="ui_mode_native_toast">Page web mobile — lecture bloquée sur un compte gratuit</string>
-    <string name="ui_mode_inject_toast">Coque SpotiDuck — rechargement…</string>
+    <string name="ui_mode_inject_toast">Coque SpotiDuck — habillage à finir, rechargement…</string>
 </resources>
