@@ -203,6 +203,21 @@ if (!/podz-content\|gew4-spclient/.test(adBlocker)) {
 if (!/audio\/mpeg/.test(adBlocker)) {
   errors.push("AdBlocker : rien ne distingue plus une annonce audio d'une musique");
 }
+/* Kotlin : un `Log` sans import fait échouer la compilation (vécu). Le build
+   n'est pas lancé ici, donc on regarde au moins ça pour chaque fichier. */
+const kotlinFiles = readdirSync(join(root, "android/app/src/main/java/com/spotiduck/app"))
+  .filter((f) => f.endsWith(".kt"));
+for (const file of kotlinFiles) {
+  const source = read(join("android/app/src/main/java/com/spotiduck/app", file));
+  if (/\bLog\./.test(source) && !/^import android\.util\.Log$/m.test(source)) {
+    errors.push(`${file} : utilise Log sans l'importer android.util.Log`);
+  }
+  /* Un nom importé deux fois : `Conflicting import` (vécu aussi, sur Intent). */
+  const imports = [...source.matchAll(/^import\s+([\w.]+)$/gm)].map((m) => m[1]);
+  const names = imports.map((i) => i.split(".").pop());
+  const dupes = names.filter((n, i) => names.indexOf(n) !== i);
+  if (dupes.length) errors.push(`${file} : nom(s) importé(s) deux fois — ${[...new Set(dupes)].join(", ")}`);
+}
 if (!/isAdAudio/.test(activity) || !/sniffContentType/.test(activity)) {
   errors.push("MainActivity : les publicités audio ne sont plus détectées avant blocage");
 }

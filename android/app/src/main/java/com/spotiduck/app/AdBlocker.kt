@@ -1,6 +1,7 @@
 package com.spotiduck.app
 
 import android.content.Context
+import android.util.Log
 import android.webkit.CookieManager
 import android.webkit.WebResourceResponse
 import java.io.ByteArrayInputStream
