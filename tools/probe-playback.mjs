@@ -222,28 +222,38 @@ async function main() {
     { needle: "Playback disabled", label: "EN : Playback disabled" },
     { needle: "protected content", label: "EN : protected content" },
   ];
+  /* GitHub plafonne le nombre d'annotations : on regroupe. L'essentiel tient
+     en une ligne par message — dans quel paquet il vit, et chez quel agent. */
+  const whereLines = [];
   for (const { needle, label } of wanted) {
     const where = corpus.filter((item) => item.body.includes(needle));
     if (where.length === 0) {
-      warn(label, "introuvable dans la page et les scripts servis");
+      whereLines.push(`${label} : absent`);
       continue;
     }
-    for (const item of where.slice(0, 2)) {
-      const at = item.body.indexOf(needle);
-      note(`${label} — ${item.label}`, `${item.url} — …${item.body.slice(Math.max(0, at - 220), at + 220)}…`);
-    }
+    const labels = [...new Set(where.map((item) => item.label))];
+    whereLines.push(`${label} : ${labels.join(" + ")} (${where.length})`);
+    const first = where[0];
+    const at = first.body.indexOf(needle);
+    whereLines.push(`  ↳ ${first.url} — …${first.body.slice(Math.max(0, at - 180), at + 180)}…`);
   }
+  note("Où vit le message", whereLines.join(" ") )
 
   /* Repères techniques, avec le code qui les entoure. */
   const seen = new Set();
+  const patternLines = [];
   for (const item of corpus) {
     for (const hit of scan(item.label, item.url, item.body)) {
       const key = hit.name + item.label;
       if (seen.has(key)) continue;
       seen.add(key);
-      note(`${hit.name} (${item.label})`, `${hit.total} occurrence(s) — …${clean(hit.contexts[0], 520)}…`);
+      if (patternLines.length < 3) {
+        note(`${hit.name} (${item.label})`, `${hit.total} occurrence(s) — …${clean(hit.contexts[0], 420)}…`);
+      }
+      patternLines.push(`${hit.name}@${item.label}=${hit.total}`);
     }
   }
+  note("Repères techniques (tout)", patternLines.join(" · "));
 
   /* ------------------------------------------------ ce que voit Chrome ---
      Comparaison directe des **deux identités**, dans le même navigateur :
@@ -272,6 +282,7 @@ async function main() {
     },
   ];
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const browserLines = [];
   let puppeteer = null;
   try {
     puppeteer = (await import("puppeteer-core")).default;
@@ -398,23 +409,19 @@ async function main() {
             return out;
           });
           report.browser.push({ label: scenario.label, ...probe });
-          note(
-            `Chrome — ${scenario.label} : DRM`,
-            `requestMediaKeySystemAccess=${probe.hasRequestMediaKeySystemAccess} · widevine audio=${probe.widevineAudio} · MediaKeys=${probe.hasMediaKeys}`
+          const layout = Object.entries(probe.layout || {})
+            .filter(([, v]) => v)
+            .map(([k]) => k)
+            .join("+") || "aucun repère";
+          const banner = probe.around
+            ? `BANDEAU : ${clean(probe.around, 240)}`
+            : `aucun bandeau (${probe.bodyLength} car.)`;
+          browserLines.push(
+            `${scenario.label} → widevine=${probe.widevineAudio} / MediaKeys=${probe.hasMediaKeys} / ` +
+              `navigator=${probe.userAgentData} / page=${layout} / ${banner}`
           );
-          note(`Chrome — ${scenario.label} : agent`, `userAgentData=${probe.userAgentData}`);
-          if (probe.highEntropy) note(`Chrome — ${scenario.label} : valeurs fines`, probe.highEntropy);
-          note(
-            `Chrome — ${scenario.label} : mise en page`,
-            Object.entries(probe.layout || {})
-              .filter(([, v]) => v)
-              .map(([k]) => k)
-              .join(", ") || "aucun repère connu"
-          );
-          if (probe.around) warn(`Chrome — ${scenario.label} : BANDEAU`, probe.around);
-          else note(`Chrome — ${scenario.label} : bandeau`, `aucun « désactivé / protégé » (${probe.bodyLength} caractères de page)`);
         } catch (error) {
-          warn(`Chrome — ${scenario.label}`, String(error && error.message));
+          browserLines.push(`${scenario.label} → ÉCHEC : ${String(error && error.message).slice(0, 200)}`);
         } finally {
           await page.close().catch(() => {});
         }
@@ -423,8 +430,11 @@ async function main() {
       break;
     }
     if (launchErrors.length) {
-      warn("Chrome : aucun navigateur pilotable", launchErrors.join(" · "));
+      browserLines.push(`aucun navigateur pilotable — ${launchErrors.join(" · ")}`);
     }
+  }
+  if (browserLines.length) {
+    note("Relevé navigateur (ce que la page voit)", browserLines.join("  ||  "));
   }
 
   writeFileSync(`${OUT}/rapport.json`, JSON.stringify(report, null, 2));
