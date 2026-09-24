@@ -1033,7 +1033,7 @@
         svg(ICONS.deviceLine) +
         "</button>" +
         '<div class="sd-mini-volume" hidden>' +
-        '<span class="sd-iconbtn sd-mini-volicon" aria-hidden="true">' +
+        '<span class="sd-mini-volicon" aria-hidden="true">' +
         svg(ICONS.speakerLine) +
         "</span>" +
         '<input class="sd-mini-vol" type="range" min="0" max="100" step="1" value="100" aria-label="' +
@@ -2262,7 +2262,10 @@
       var html = document.documentElement;
       var w = viewW();
       var h = viewH();
-      var base = clamp(0.92, Math.min(w / 412, h / 915), 1.15);
+      /* clamp(valeur, mini, maxi) : l'ancienne forme donnait `0,92` comme
+         valeur et la mesure comme minimum — d'où 1,40 sur une tablette au lieu
+         du plafond de 1,15. */
+      var base = clamp(Math.min(w / 412, h / 915), 0.92, 1.15);
       base = Math.round(base * 1000) / 1000;
       this.base = base;
       html.style.setProperty("--sd-u-base", String(base));

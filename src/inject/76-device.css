@@ -13,7 +13,9 @@
    système. Ce sont donc des mesures, pas des suppositions.
    ========================================================================== */
 
-/* Téléphone étroit (≤ 379 px de large) : des barres plus fines, du texte intact. */
+/* Téléphone étroit (≤ 379 px de large) : des barres plus fines, du texte intact.
+   Les commandes, elles, gardent `--sd-tap` (48 dp × 0,92 = 44,2 px) : une barre
+   plus fine ne doit pas donner des boutons intouchables. */
 html.sd-mobile.sd-size-compact {
   --sd-nav-h: calc(52px * var(--sd-u));
   --sd-mini-h: calc(108px * var(--sd-u));
@@ -56,4 +58,12 @@ html.sd-mobile.sd-orient-landscape .sd-layer .sd-mini-top .sd-mini-art {
 }
 html.sd-mobile.sd-orient-landscape .sd-layer .sd-mini-row {
   height: calc(34px * var(--sd-u));
+}
+
+/* Les cibles tactiles ne suivent pas les barres : elles gardent leur plancher
+   (`--sd-tap` = 48 dp × unité ≥ 44 px) quel que soit le palier. C'est la règle
+   Material, et la sonde la mesure à chaque exécution. */
+html.sd-mobile .sd-layer .sd-mini-row,
+html.sd-mobile .sd-layer .sd-mini-row2 {
+  min-height: var(--sd-tap);
 }

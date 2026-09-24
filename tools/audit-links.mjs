@@ -218,6 +218,35 @@ if (!/Device\.apply\(\)/.test(shellJs) || !/setProperty\("--sd-u-base"/.test(she
   errors.push("la coque ne mesure plus l'appareil : l'unité retomberait sur une valeur fixe");
 }
 
+/* Les cibles tactiles ne doivent pas descendre sous la main : tout contrôle de
+   la coque se dimensionne avec `--sd-tap` (48 dp × unité ≥ 44 px), jamais avec
+   une taille fixe qui rétrécirait l'appareil. La sonde relève la plus petite
+   cible à chaque exécution ; ici on empêche la régression à la source. */
+/* Les règles sont lues une par une (sélecteur / corps) : une expression
+   régulière sur tout le fichier se laisse piéger par la règle voisine. */
+const cssRules = css
+  .split("}")
+  .map((chunk) => {
+    const brace = chunk.lastIndexOf("{");
+    return brace === -1 ? null : { sel: chunk.slice(0, brace), body: chunk.slice(brace + 1) };
+  })
+  .filter(Boolean);
+const hasTapFloor = (selector) =>
+  cssRules.some(
+    (rule) =>
+      rule.sel.includes(selector) &&
+      /width:\s*var\(--sd-tap\)/.test(rule.body) &&
+      /height:\s*var\(--sd-tap\)/.test(rule.body)
+  );
+for (const sel of [".sd-nav-item", ".sd-mini-row .sd-iconbtn", ".sd-mini-row2 .sd-iconbtn"]) {
+  if (!hasTapFloor(sel)) {
+    errors.push(
+      `« ${sel} » ne se dimensionne plus sur --sd-tap : la cible tactile peut passer sous 44 px sur un petit écran`
+    );
+  }
+}
+
+
 /* 2-ter-ter. Deux défauts qui ont coûté une version chacun, et qui ne se voient
    qu'à l'usage : l'écran d'accueil qui restait posé par-dessus le lecteur (il
    n'était réévalué que sur les mutations du `<body>`), et un appui d'onglet qui

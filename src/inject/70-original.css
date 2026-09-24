@@ -23,7 +23,7 @@ html.sd-mobile {
      contrôles 34 + progression 20 + rangée paroles/karaoké/file/appareils/
      volume 32, plus les marges. Le contenu réserve exactement cette hauteur
      (`--sd-bottom`), donc rien ne passe dessous. */
-  --sd-mini-h: calc(156px * var(--sd-u));
+  --sd-mini-h: calc(184px * var(--sd-u));
 }
 
 /* --------------------------------------------------------------------------
@@ -58,12 +58,16 @@ html.sd-mobile.sd-queue-open .sd-layer .sd-nav {
   display: none !important;
 }
 
+/* Cibles tactiles : `--sd-tap` vaut 48 dp × l'unité, donc jamais moins de
+   44 px même sur un écran étroit (l'unité plancher est 0,92). Un contrôle de
+   40 px était mesuré sous la cible Material — sur six commandes de la barre du
+   haut. */
 html.sd-mobile .sd-layer .sd-nav-item,
 html.sd-mobile .sd-layer .sd-nav .sd-iconbtn {
   display: grid;
   place-items: center;
-  width: calc(40px * var(--sd-u));
-  height: calc(40px * var(--sd-u));
+  width: var(--sd-tap);
+  height: var(--sd-tap);
   min-width: 0;
   padding: 0;
   border: 0;
@@ -150,7 +154,7 @@ html.sd-mobile .sd-layer .sd-mini-top .sd-mini-art {
   flex: 0 0 calc(44px * var(--sd-u));
 }
 html.sd-mobile .sd-layer .sd-mini-row {
-  height: calc(34px * var(--sd-u));
+  height: var(--sd-tap);
 }
 
 html.sd-mobile .sd-layer .sd-mini-top {
@@ -191,8 +195,8 @@ html.sd-mobile .sd-layer .sd-mini-row {
   height: calc(40px * var(--sd-u));
 }
 html.sd-mobile .sd-layer .sd-mini-row .sd-iconbtn {
-  width: calc(36px * var(--sd-u));
-  height: calc(36px * var(--sd-u));
+  width: var(--sd-tap);
+  height: var(--sd-tap);
   color: var(--sd-sub);
 }
 html.sd-mobile .sd-layer .sd-mini-row .sd-iconbtn svg {
@@ -245,12 +249,12 @@ html.sd-mobile .sd-layer .sd-mini-row2 {
   align-items: center;
   justify-content: space-between;
   gap: calc(6px * var(--sd-u));
-  height: calc(32px * var(--sd-u));
+  height: var(--sd-tap);
   padding: 0 calc(2px * var(--sd-u));
 }
 html.sd-mobile .sd-layer .sd-mini-row2 .sd-iconbtn {
-  width: calc(32px * var(--sd-u));
-  height: calc(32px * var(--sd-u));
+  width: var(--sd-tap);
+  height: var(--sd-tap);
   color: var(--sd-sub);
 }
 /* Chaque commande de la rangée porte son nom : c'est ce qui permet de la
@@ -293,6 +297,8 @@ html.sd-mobile .sd-layer .sd-mini-volume[hidden] {
 html.sd-mobile .sd-layer .sd-mini-volicon {
   width: calc(24px * var(--sd-u));
   height: calc(24px * var(--sd-u));
+  display: grid;
+  place-items: center;
   color: var(--sd-sub);
   flex: 0 0 auto;
 }
@@ -305,8 +311,8 @@ html.sd-mobile .sd-layer .sd-mini-vol {
   -webkit-appearance: none;
   appearance: none;
   flex: 1 1 auto;
-  min-width: 0;
-  height: calc(20px * var(--sd-u));
+  min-width: calc(88px * var(--sd-u));
+  height: calc(44px * var(--sd-u)); /* zone tactile du curseur */
   background: transparent;
   touch-action: none;
 }

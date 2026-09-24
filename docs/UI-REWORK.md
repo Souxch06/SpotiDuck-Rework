@@ -1934,3 +1934,33 @@ reste disponible : il est devenu un **facteur** de cette base.
 * sonde : sur le banc en conditions de WebView (`banc-tel`), cinq profils
   d'appareils sont mesurés (unité calculée, barres, débordement, plus petite
   cible tactile) — « adapté à l'appareil » est une mesure, pas une impression.
+
+### §30-bis — Ce que la première sonde a rattrapé (v2.9.8)
+
+La sonde a mesuré cinq profils d'appareils **avant** la livraison, et deux
+choses ne collaient pas :
+
+* **L'unité plafonnait mal.** Sur une tablette 800×1280 elle valait `1,399` au
+  lieu de `1,15` : les arguments de `clamp` étaient dans le mauvais ordre
+  (`clamp(0,92, mesure, 1,15)` — la mesure devenait le *minimum*). Corrigé en
+  `clamp(mesure, 0,92, 1,15)`, et le banc le vérifie sur l'appareil large ;
+* **Six commandes sur vingt-neuf passaient sous la cible tactile de 44 px**
+  (barre du haut et mini-lecteur, 40 px et 32 px × unité). Toutes les commandes
+  de la coque se dimensionnent maintenant sur `--sd-tap` (48 dp × unité, donc
+  44,2 px au minimum, l'unité plancher étant 0,92) — y compris la rangée bonus
+  et le curseur de volume, dont la zone tactile fait 44 px. L'icône de volume
+  n'est plus un bouton (c'est une icône) : elle ne se compte plus comme une
+  cible.
+
+Un garde-fou d'audit lit les règles une par une et refuse toute commande qui
+reviendrait à une taille figée.
+
+Mesure de la sonde après correction :
+
+| appareil   | unité | barre du haut | mini-lecteur | débordement | plus petite cible |
+| ---------- | ----- | ------------- | ------------ | ----------- | ----------------- |
+| 360×800    | 0,92  | 360×48        | 360×155      | 0           | ≥ 44 px           |
+| 412×915    | 1,00  | 412×56        | 412×168      | 0           | ≥ 44 px           |
+| 480×1040   | 1,14  | 480×64        | 480×191      | 0           | ≥ 44 px           |
+| 915×412    | 0,92  | 915×42        | 640×138      | 0           | ≥ 44 px           |
+| 800×1280   | 1,15  | 800×69        | 640×211      | 0           | ≥ 44 px           |
