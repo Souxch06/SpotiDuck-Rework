@@ -1703,3 +1703,87 @@ d'erreur. Le banc du §26 n'était pas mesuré : il était inventé.
 Leçon pour la suite, du même genre que celles du §26 : **une sonde doit vérifier
 qu'elle mesure bien la page voulue** — un chemin faux, une redirection ou une
 page d'erreur rendent des chiffres plausibles et une conclusion fausse.
+
+## 28. « L'affichage n'est plus adapté à Android » : la page débordait de 388 px (v2.9.5)
+
+### Le reproche
+
+> « Y a rien qui va, l'affichage n'est plus adapté à Android etc. Reprend le code
+> source de l'appli SpotiDuck pour la logique etc mais pour l'UI utilise notre code
+> ptn c'est moche. »
+
+### Ce que les versions précédentes n'avaient jamais mesuré
+
+Toutes les mesures de la coque se faisaient dans **un navigateur de bureau à
+412 px** : un Chrome desktop, où la page se met en page sur la largeur qu'on lui
+donne, sans histoire. Une WebView, elle, est en `useWideViewPort` : tant qu'aucun
+`<meta name="viewport">` n'est posé, elle se donne une largeur de mise en page de
+**980 px** et dézoome pour la faire tenir. Ce n'est pas un détail de configuration
+— c'est toute la différence entre « ça ressemble à une application » et « c'est un
+site de bureau ».
+
+La sonde mesure maintenant cette page-là (`telephone`, cible ajoutée) : mêmes
+conditions que la WebView (mise en page large, densité réelle, écran tactile,
+chaîne d'injection de l'application : identité puis meta en attente de
+`document.head` à `onPageStarted`, meta et coque à `onPageFinished`).
+
+Premier résultat, et il est net :
+
+    mise en page=412px · contenu=800×731 · débordement=388
+    débordants: div=800, div[data-testid=root].Root.global-nav=800, div.zXqm…=800,
+                aside[now-playing-bar]=620, div[signup-bar]=620
+
+La page fait **800 px de large dans un écran de 412** : deux fois plus large que
+le téléphone. Le texte est rogné à droite, la page se fait glisser de côté. C'est
+exactement ce que l'utilisateur décrit — et ce n'était pas la mise en page de la
+coque (mesurée juste : barre du haut 412×56, mini-lecteur 412×132), mais **la page
+de Spotify, que la coque n'adaptait pas**.
+
+### La correction : reprendre la feuille de l'application d'origine
+
+L'application d'origine fait tenir cette page bureau sur un téléphone avec une
+feuille compacte — cinq règles décisives parmi une soixantaine, posées juste avant
+`document.head.appendChild(st)` dans `C1356q3` :
+
+```css
+body{min-width:100%!important;min-height:100%!important}
+div[data-testid=root]{--panel-gap:0!important}
+#main-view+div,#main-view+div>div{overflow:hidden!important;width:auto}
+#main-view+div>div>div>div:nth-child(2)>div{width:100vw!important}
+div[data-testid=grid-container]{margin-inline:0!important;column-gap:0!important;overflow:hidden!important}
+```
+
+Notre coque ne les avait pas. C'est **du code de SpotiDuck pour la mise en page,
+et notre coque pour l'interface** — mot pour mot ce que l'utilisateur demandait.
+
+C'est donc un artefact **généré**, comme l'interface d'origine :
+
+* `tools/build-original-fit.mjs` — extrait la feuille de
+  `src/original/spotiduck-original.js`, la porte sous `html.sd-mobile .sd-root`
+  (pour que nos propres feuilles gardent la main) et écarte la seule règle qui
+  n'est pas de la mise en page (`*{transition:none}`, qui éteindrait aussi les
+  transitions de la coque) ;
+* `src/inject/05-original-fit.css` — 59 règles, chargées en premier ;
+* `npm run build` refuse un écart entre la source et le fichier généré ;
+* un test du banc et un garde-fou d'audit vérifient que les règles décisives sont
+  là **et** qu'elles restent portées sous notre coque ;
+* `75-fit.css` ajoute les filets de sécurité (rien de plus large que l'écran,
+  enfants de grille ou de flex autorisés à rétrécir — `min-width: auto` est la
+  cause classique d'un débordement dans une grille) et ramène dans l'écran les
+  conteneurs de la page marketing, nommés par la mesure (800 px).
+
+### Après
+
+    telephone → débordement=0 · contenu=412×731
+    accueil   → débordement=0 · contenu=412×731
+    connexion → débordement=0 · contenu=412×915
+    banc      → débordement=0 · contenu=396×799 (barre 412×56, mini 412×132)
+
+### Leçon d'outillage, du même genre que celles du §26 et du §27
+
+Le workflow de la sonde se déclenchait sur les changements de l'**outil**
+(`tools/probe-coop.mjs`) mais jamais sur ceux de l'**interface** (`src/inject/**`) :
+on relisait donc une annotation périmée en croyant mesurer la version qu'on venait
+d'écrire. Il suit désormais `src/inject/**` et `dist/spotiduck-ui.js`.
+
+**Une mesure ne vaut que si l'on sait sur quelle version elle a été prise.**
