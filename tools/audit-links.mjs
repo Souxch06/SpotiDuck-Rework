@@ -163,6 +163,9 @@ for (const sel of CORE_SELECTORS) {
    connexion utilisable, et il a fallu deux versions entières pour revenir à
    l'affichage voulu. Le choix reste donc sous surveillance. */
 const activity = read("android/app/src/main/java/com/spotiduck/app/MainActivity.kt");
+for (const stale of ["the two interfaces", "MODE_INJECT is the default"]) {
+  if (activity.includes(stale)) errors.push(`MainActivity : commentaire périmé (« ${stale} »)`);
+}
 if (!/MODE_DEFAULT\s*=\s*MODE_ORIGINAL/.test(activity)) {
   errors.push("MainActivity : le mode par défaut n'est plus l'interface d'origine");
 }

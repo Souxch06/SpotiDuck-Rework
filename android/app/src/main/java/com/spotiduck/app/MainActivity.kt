@@ -2,22 +2,21 @@ package com.spotiduck.app
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.provider.Settings
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
-import android.content.ComponentName
-import android.content.Intent
-import android.net.Uri
-import android.provider.Settings
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -36,16 +35,19 @@ import androidx.core.view.WindowInsetsCompat
  * SpotiDuck — WebView shell around the Spotify web player.
  *
  * Responsibilities (and nothing else):
- *  1. serve one of the two interfaces the user can pick between:
- *       • `native` (default) — Chrome-Android user agent, so open.spotify.com
- *         serves **its own mobile interface** (bottom navigation bar, compact
- *         rows, full-screen player). Nothing is redrawn; the app only hides the
- *         browser banners and mirrors the metadata to the notification.
- *       • `inject` — desktop user agent plus `assets/spotiduck-ui.js`, the
- *         SpotiDuck layer (tab bar, queue, settings, offline handling…).
- *     The mode is a long-press (3 s anywhere on the page) away, so switching
- *     costs nothing; it is stored in SharedPreferences and survives restarts;
- *  2. inject `assets/spotiduck-ui.js` after every page load (it is a single
+ *  1. serve one of the three interfaces the user can pick between:
+ *       • `original` (default) — the project's original injected script
+ *         (`assets/spotiduck-original.js`) on the **desktop** web player, with
+ *         the original app's WebView settings: that is the interface SpotiDuck
+ *         has always had, unedited;
+ *       • `inject` — the same desktop player plus `assets/spotiduck-ui.js`, our
+ *         own layer (top navigation, mini player, sheets, settings…);
+ *       • `native` — Chrome-Android user agent, so open.spotify.com serves
+ *         **its own mobile interface**; nothing is redrawn, the app only hides
+ *         the browser banners and mirrors the metadata to the notification.
+ *     The mode is a long-press away (the chooser also opens Play Protect
+ *     settings); it is stored in SharedPreferences and survives restarts;
+ *  2. inject the script of that mode after every page load (each is a single
  *     self-contained script, CSS included);
  *  3. expose the `AndBridge` object the layer talks to;
  *  4. keep the audio alive (wake lock, foreground service, notification);
