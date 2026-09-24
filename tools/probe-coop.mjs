@@ -298,6 +298,13 @@ async function main() {
        puis coque). C'est la seule mesure qui voit ce que l'utilisateur voit
        quand il dit « l'affichage n'est plus adapté à Android ». */
     { label: "telephone", url: "https://open.spotify.com/", mode: "telephone" },
+    /* **Notre interface, dans les conditions de la WebView.** Le banc était
+       toujours mesuré en mode bureau (Chrome desktop à 412 px, `isMobile:false`)
+       — un environnement où la page se met en page sur la largeur qu'on lui
+       donne. Ici : mêmes règles de mise en page que la WebView, même chaîne
+       d'injection, pour voir (capture) et chiffrer ce que la coque rend sur un
+       téléphone. */
+    { label: "banc-tel", url: "http://127.0.0.1:5173/demo/player.html", mode: "notre", mobile: true },
   ];
 
   const lines = [];
@@ -353,7 +360,7 @@ async function main() {
         });
       }
       await page.evaluateOnNewDocument(identity);
-      if (target.mode === "telephone") {
+      if (target.mobile === true || target.mode === "telephone") {
         /* Exactement ce que fait `MainActivity` : la WebView est en
            `useWideViewPort`, aucun `<meta viewport>` n'existe au départ, et le
            script de l'application le pose dès que `document.head` apparaît —
@@ -412,8 +419,8 @@ async function main() {
       await page.setViewport({
         width: 412,
         height: 915,
-        deviceScaleFactor: target.mode === "telephone" ? 2.625 : 2,
-        isMobile: target.mode === "telephone",
+        deviceScaleFactor: target.mobile === true || target.mode === "telephone" ? 2.625 : 2,
+        isMobile: target.mobile === true || target.mode === "telephone",
         hasTouch: true,
       });
 
@@ -452,7 +459,7 @@ async function main() {
       /* Une seule capture, sur la page choisie : les places d'annotation sont
          comptées (GitHub en garde une poignée), et l'image coûte à elle seule
          plusieurs morceaux. */
-      if (["notre", "telephone"].includes(target.label)) await miniature(target.label);
+      if (["banc-tel"].includes(target.label)) await miniature(target.label);
 
       /* Les trois vues de la barre du haut : état intérieur + ce que la page
          affiche, avant et après un appui réel. (L'interface d'origine a sa
