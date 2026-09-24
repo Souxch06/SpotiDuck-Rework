@@ -109,6 +109,17 @@ const MEASURE = async () => {
   /* Ce qu'il reste du chrome de Spotify : s'il est encore là ET que le nôtre
      ne l'est pas, l'utilisateur voit des boutons de Spotify — « pas comme
      notre version ». */
+  /* Marqueurs propres à l'interface d'origine : elle se reconnaît à ses
+     fonctions globales et à ses propres nœuds. */
+  out.originalUi = {
+    firstFuck: typeof window.firstFuck,
+    actPlayPause: typeof window.actPlayPause,
+    switchLs: typeof window.switchLs,
+    miniPlayer: !!document.querySelector(".npbtn, .np-btn, #npBtn"),
+    topNav: !!document.querySelector(".sd-nav"),
+    feuilleOrigine: [...document.querySelectorAll("style")].some((el) => (el.textContent || "").indexOf("now-playing-bar") >= 0),
+  };
+
   out.spotifyChrome = {
     barreLaterale: box("#Desktop_LeftSidebar_Id"),
     barreHaute: box('[data-testid="topbar-content"]'),
@@ -182,6 +193,10 @@ async function main() {
   const { readFileSync } = await import("node:fs");
   const identity = readFileSync("src/original/spotiduck-identity.js", "utf8");
   const bundle = readFileSync("dist/spotiduck-ui.js", "utf8");
+  /* Le mode d'origine : son empreinte (géométrie 1920×1080 comprise) et son
+     script, tels que l'application les injecte. */
+  const fingerprint = readFileSync("dist/original-fingerprint.js", "utf8");
+  const original = readFileSync("dist/spotiduck-original.js", "utf8");
   console.log(`[Sonde coque] fichiers : identité ${(identity.length / 1024).toFixed(1)} Ko · coque ${(bundle.length / 1024).toFixed(1)} Ko`);
 
   const candidates = [
@@ -214,6 +229,11 @@ async function main() {
   const pages = [
     { label: "accueil", url: "https://open.spotify.com/" },
     { label: "connexion", url: "https://accounts.spotify.com/fr/login?allow_password=1" },
+    /* L'interface d'origine : même page, mais l'empreinte de géométrie d'abord
+       (écran 1920×1080) et son script ensuite — c'est la configuration que
+       l'application d'origine utilise, et c'est celle que l'utilisateur
+       connaît. */
+    { label: "origine", url: "https://open.spotify.com/", mode: "original" },
   ];
 
   const lines = [];
@@ -243,6 +263,28 @@ async function main() {
     });
 
     try {
+      if (target.mode === "original") {
+        /* L'empreinte d'abord : elle fait croire à un écran 1920×1080, ce que
+           l'application d'origine obtient par `setUseWideViewPort(true)` +
+           `setInitialScale(100)`. */
+        await page.evaluateOnNewDocument(fingerprint);
+        await page.evaluateOnNewDocument(() => {
+          const put = () => {
+            const root = document.head || document.documentElement;
+            if (!root) return;
+            let meta = document.querySelector("meta[name='viewport']");
+            if (!meta) {
+              meta = document.createElement("meta");
+              meta.setAttribute("name", "viewport");
+              root.appendChild(meta);
+            }
+            meta.setAttribute("content", "width=1920, user-scalable=yes");
+          };
+          put();
+          document.addEventListener("DOMContentLoaded", put);
+          setTimeout(put, 1200);
+        });
+      }
       await page.evaluateOnNewDocument(identity);
       await page.evaluateOnNewDocument(() => {
         const CONTENT = "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover";
@@ -270,8 +312,8 @@ async function main() {
 
       const before = await safely(() => page.evaluate(MEASURE));
 
-      /* La coque, à la fin du chargement — comme `onPageFinished`. */
-      await safely(() => page.evaluate(bundle));
+      /* Le script du mode choisi, à la fin du chargement (`onPageFinished`). */
+      await safely(() => page.evaluate(target.mode === "original" ? original : bundle));
       await sleep(3500);
 
       const after = await safely(() => page.evaluate(MEASURE));
@@ -297,12 +339,14 @@ async function main() {
         }
       };
 
-      if (target.label === "accueil") await miniature("coque");
+      await miniature(target.mode === "original" ? "origine" : "coque");
 
       /* Les trois vues de la barre du haut : état intérieur + ce que la page
-         affiche, avant et après un appui réel. */
+         affiche, avant et après un appui réel. (L'interface d'origine a sa
+         propre barre : `.sd-nav` n'existe pas chez elle.) */
       const navEffects = [];
-      for (const name of ["library", "search", "home"]) {
+      const hasNav = await safely(() => page.evaluate(() => !!document.querySelector(".sd-nav-item")));
+      for (const name of hasNav === true ? ["library", "search", "home"] : []) {
         const stateBefore = await safely(() => page.evaluate(SHELL_STATE));
         await safely(() => page.evaluate(CLICK, `.sd-nav-item[data-tab="${name}"]`));
         await sleep(600);
