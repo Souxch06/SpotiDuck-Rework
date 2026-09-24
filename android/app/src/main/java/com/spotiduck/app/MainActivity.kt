@@ -407,9 +407,9 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        override fun onReceivedTitle(view: WebView, title: CharSequence?) {
+        override fun onReceivedTitle(view: WebView, title: String?) {
             if (!isPopup) return
-            loginWindows.firstOrNull { it.web === view }?.title?.let { it.text = title ?: getString(R.string.login_window_title) }
+            loginWindows.firstOrNull { it.web === view }?.title?.text = title ?: getString(R.string.login_window_title)
         }
 
         /**
