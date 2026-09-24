@@ -286,9 +286,9 @@ async function main() {
          sont pas joignables ici) : l'écran réduit, JPEG qualité 35. */
       const miniature = async (name) => {
         try {
-          await page.setViewport({ width: 412, height: 915, deviceScaleFactor: 0.34, isMobile: false, hasTouch: true });
+          await page.setViewport({ width: 412, height: 915, deviceScaleFactor: 0.5, isMobile: false, hasTouch: true });
           await sleep(400);
-          const buffer = await page.screenshot({ type: "jpeg", quality: 35 });
+          const buffer = await page.screenshot({ type: "jpeg", quality: 22 });
           shots.push(`SHOT:${target.label}-${name}:${buffer.toString("base64")}`);
           await page.setViewport({ width: 412, height: 915, deviceScaleFactor: 2, isMobile: false, hasTouch: true });
           await sleep(200);
@@ -308,7 +308,8 @@ async function main() {
         await sleep(600);
         const stateAfter = await safely(() => page.evaluate(SHELL_STATE));
         navEffects.push({ name, before: stateBefore, after: stateAfter });
-        if (name === "library" || name === "search") await miniature(name);
+        /* (pas de capture à chaque vue : chaque image coûte des morceaux
+           d'annotation, et GitHub n'en garde qu'une poignée) */
       }
 
       lines.push(
@@ -341,13 +342,23 @@ async function main() {
 
   if (lines.length) note("La coque sur la vraie page", lines.join("  ||  "));
 
-  /* Les miniatures : encodées dans l'annotation, parce que les artefacts ne
-     sont pas joignables depuis tous les environnements. Format :
-     SHOT:<nom>:<base64|message d'échec>. */
+  /* Les miniatures : encodées dans les annotations, parce que les artefacts ne
+     sont pas joignables depuis tous les environnements. Une annotation est
+     coupée net à 1 800 caractères (mesuré), donc chaque image part en morceaux :
+     `SHOT:<nom>:<morceau>/<total>:<base64>`. */
+  const CHUNK = 1700;
   for (const shot of shots) {
     const [, name, payload] = shot.split(":");
-    if (payload.startsWith("echec")) warn(`Capture — ${name}`, payload);
-    else note(`Capture — ${name}`, `SHOT:${name}:${payload}`);
+    if (payload.startsWith("echec")) {
+      warn(`Capture — ${name}`, payload);
+      continue;
+    }
+    const total = Math.ceil(payload.length / CHUNK);
+    console.log(`[Sonde coque] capture ${name} : ${payload.length} caractères en ${total} morceau(x)`);
+    for (let i = 0; i < total; i++) {
+      const part = payload.slice(i * CHUNK, (i + 1) * CHUNK);
+      note(`Capture ${name} ${i + 1}/${total}`, `SHOT:${name}:${i + 1}/${total}:${part}`);
+    }
   }
 
   const allErrors = report.pages.flatMap((p) => (p.errors || []).map((e) => `${p.label}: ${e}`));
