@@ -234,6 +234,11 @@ async function main() {
        l'application d'origine utilise, et c'est celle que l'utilisateur
        connaît. */
     { label: "origine", url: "https://open.spotify.com/", mode: "original" },
+    /* Notre interface, sur le banc de démonstration : le faux web player
+       (`demo/player.html`) est le DOM pour lequel la coque est écrite — c'est
+       l'affichage de référence, celui des captures du projet. Le serveur est
+       lancé par le workflow. */
+    { label: "notre", url: "http://127.0.0.1:5173/player.html", mode: "notre" },
   ];
 
   const lines = [];
@@ -263,7 +268,10 @@ async function main() {
     });
 
     try {
-      if (target.mode === "original") {
+      if (target.mode === "notre") {
+        /* Le banc monte lui-même le faux lecteur puis la coque : on ne pose ni
+           identité ni meta viewport. */
+      } else if (target.mode === "original") {
         /* L'empreinte d'abord : elle fait croire à un écran 1920×1080, ce que
            l'application d'origine obtient par `setUseWideViewPort(true)` +
            `setInitialScale(100)`. */
@@ -328,9 +336,9 @@ async function main() {
          sont pas joignables ici) : l'écran réduit, JPEG qualité 35. */
       const miniature = async (name) => {
         try {
-          await page.setViewport({ width: 412, height: 915, deviceScaleFactor: 0.32, isMobile: false, hasTouch: true });
+          await page.setViewport({ width: 412, height: 915, deviceScaleFactor: 0.28, isMobile: false, hasTouch: true });
           await sleep(400);
-          const buffer = await page.screenshot({ type: "jpeg", quality: 20 });
+          const buffer = await page.screenshot({ type: "jpeg", quality: 18 });
           shots.push(`SHOT:${target.label}-${name}:${buffer.toString("base64")}`);
           await page.setViewport({ width: 412, height: 915, deviceScaleFactor: 2, isMobile: false, hasTouch: true });
           await sleep(200);
@@ -342,7 +350,7 @@ async function main() {
       /* Une seule capture, sur la page choisie : les places d'annotation sont
          comptées (GitHub en garde une poignée), et l'image coûte à elle seule
          plusieurs morceaux. */
-      if (target.label === (process.env.PROBE_SHOT || "origine")) await miniature(target.label);
+      if (["origine", "notre", "accueil"].includes(target.label)) await miniature(target.label);
 
       /* Les trois vues de la barre du haut : état intérieur + ce que la page
          affiche, avant et après un appui réel. (L'interface d'origine a sa
@@ -361,6 +369,17 @@ async function main() {
 
       /* Un résumé court par page : le détail complet va dans le rapport et
          dans la console, l'annotation ne portant que ce qui décide. */
+      if (target.mode === "notre") {
+        const box = (sel) => {
+          const entry = after && after.controls ? after.controls[sel] : null;
+          return entry ? entry.replace(/ pos=.*;? ?z=[^ ]*/, "") : "?";
+        };
+        note(
+          "Notre interface (banc)",
+          `haut=${box("barre du haut (.sd-nav)")} · bas=${box("barre du bas (.sd-tabbar)")} · mini=${box("mini-lecteur (.sd-mini)")} · ` +
+            `en-tête=${box("en-tête (.sd-topbar)")} · classes="${after && after.classes ? after.classes : "?"}"`
+        );
+      }
       const visible = (sel) => {
         const entry = after && after.controls ? after.controls[sel] : null;
         return entry ? (entry.indexOf("visible") === 0 ? "visible" : "masqué") : "?";
