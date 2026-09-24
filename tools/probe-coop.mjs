@@ -145,6 +145,42 @@ const MEASURE = async () => {
   var meta = document.querySelector("meta[name='viewport']");
   /* Qui déborde : un élément plus large que l'écran explique « c'est rogné, il
      faut faire glisser la page ». On les nomme — la coque n'est pas la page. */
+  /* **Ce qui est rogné.** `debordement` se mesure avec `scrollWidth` — or notre
+     feuille met `overflow-x: hidden`, donc ce qui dépasse est coupé *sans*
+     augmenter `scrollWidth` : la sonde annonçait « débordement 0 » alors que
+     l'utilisateur voyait « c'est encore coupé ». On mesure donc le rognage réel,
+     élément par élément : ce qui sort de l'écran (rect.right) **et** ce qui est
+     coupé par un parent en `overflow: hidden` (scrollWidth > clientWidth). */
+  out.rognes = (function () {
+    var w = root.clientWidth;
+    var out = { sort: [], coupes: [] };
+    var all = document.body ? document.body.querySelectorAll("*") : [];
+    for (var i = 0; i < all.length; i++) {
+      var el = all[i];
+      if (el.closest && el.closest(".sd-layer")) continue;
+      var r = el.getBoundingClientRect();
+      if (r.height > 4 && r.width > 40 && r.right > w + 3 && out.sort.length < 8) {
+        out.sort.push(
+          (el.getAttribute("data-testid") || el.tagName.toLowerCase()) +
+            " " + Math.round(r.width) + "px depasse=" + Math.round(r.right - w)
+        );
+      }
+      var cs = window.getComputedStyle(el);
+      var clipX = cs.overflowX === "hidden" || cs.overflowX === "clip" || cs.overflow === "hidden";
+      if (clipX && el.scrollWidth > el.clientWidth + 4 && out.coupes.length < 8) {
+        out.coupes.push(
+          (el.getAttribute("data-testid") || el.tagName.toLowerCase()) +
+            " " + el.clientWidth + "<" + el.scrollWidth +
+            " (" + Math.round((el.scrollWidth / Math.max(1, el.clientWidth) - 1) * 100) + "%)"
+        );
+      }
+    }
+    return (
+      "hors-ecran: " + (out.sort.join(" . ") || "aucun") +
+      " || coupes-par-un-parent: " + (out.coupes.join(" . ") || "aucun")
+    );
+  })();
+
   out.debordants = (function () {
     var w = root.clientWidth;
     var found = [];
@@ -721,6 +757,7 @@ async function main() {
       if (after && after.structure) lines.push(`Structure - ${target.label} : ${after.structure}`);
       if (after && after.shelves) lines.push(`Rangées - ${target.label} : ${after.shelves}`);
       if (after && after.content) lines.push(`Contenu-te tailles - ${target.label} : ${after.content}`);
+      if (after && after.rognes) lines.push(`Rognage - ${target.label} : ${after.rognes}`);
       lines.push(summary);
       console.log(`[Sonde coque] ${summary}`);
       note(`Mesure — ${target.label}`, summary);
