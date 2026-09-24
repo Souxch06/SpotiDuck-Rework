@@ -212,29 +212,39 @@ async function main() {
   }
 
   const pages = [
-    { label: "lecteur connecté ou accueil", url: "https://open.spotify.com/" },
-    { label: "page de connexion", url: "https://accounts.spotify.com/fr/login?allow_password=1" },
+    { label: "accueil", url: "https://open.spotify.com/" },
+    { label: "connexion", url: "https://accounts.spotify.com/fr/login?allow_password=1" },
   ];
 
   const lines = [];
+  const shots = [];
+
+  /* Toute mesure est tolérante : un appui peut **naviguer** (c'est même ce
+     qu'on espère), et une page qui navigue détruit le contexte d'exécution.
+     Sans ce garde-fou, la moindre navigation faisait tomber toute la sonde —
+     ce qui est arrivé, et masquait justement le résultat intéressant. */
+  const safely = async (fn, ...args) => {
+    try {
+      return await fn(...args);
+    } catch (error) {
+      const message = String((error && error.message) || error);
+      return { erreur: message.slice(0, 140), navigation: /context was destroyed|Execution context/i.test(message) };
+    }
+  };
 
   for (const target of pages) {
     const page = await browser.newPage();
     const errors = [];
-    const warnings = [];
-    page.on("pageerror", (error) => errors.push(String(error && error.message).slice(0, 300)));
+    page.on("pageerror", (error) => errors.push(String(error && error.message).slice(0, 240)));
     page.on("console", (message) => {
-      const text = `${message.type()}: ${message.text()}`;
-      if (message.type() === "error") errors.push(text.slice(0, 300));
-      else if (message.type() === "warning") warnings.push(text.slice(0, 200));
+      if (message.type() === "error" && !/Google Analytics|sandboxed/i.test(message.text())) {
+        errors.push(message.text().slice(0, 240));
+      }
     });
 
     try {
-      /* 1. l'identité, avant tout — comme l'application. */
       await page.evaluateOnNewDocument(identity);
       await page.evaluateOnNewDocument(() => {
-        /* Le meta viewport que l'application pose aussi (`VIEWPORT_META_JS`) :
-           la coque compte sur une largeur de mise en page = largeur d'écran. */
         const CONTENT = "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover";
         const put = () => {
           const root = document.head || document.documentElement;
@@ -258,106 +268,72 @@ async function main() {
       await page.goto(target.url, { waitUntil: "domcontentloaded", timeout: 60000 });
       await sleep(6000);
 
-      const before = await page.evaluate(MEASURE).catch((error) => ({ erreur: String(error && error.message).slice(0, 120) }));
+      const before = await safely(() => page.evaluate(MEASURE));
 
-      /* 2. la coque, à la fin du chargement — comme `onPageFinished`. */
-      /* L'injection elle-même peut naviguer (la page de connexion de Spotify
-         redirige) : sans ce garde-fou, toute la mesure de la page tombait. */
-      await page.evaluate(bundle).catch((error) => errors.push("injection : " + String(error && error.message).slice(0, 160)));
+      /* La coque, à la fin du chargement — comme `onPageFinished`. */
+      await safely(() => page.evaluate(bundle));
       await sleep(3500);
 
-      const after = await page.evaluate(MEASURE).catch((error) => ({ erreur: String(error && error.message).slice(0, 120) }));
+      const after = await safely(() => page.evaluate(MEASURE));
+      await safely(() =>
+        page.evaluate(() => {
+          window.__sdProbeErrors = [];
+          window.addEventListener("error", (e) => window.__sdProbeErrors.push(String(e.message).slice(0, 200)));
+        })
+      );
 
-      /* Les erreurs levées **pendant** un appui : une exception dans le
-         gestionnaire de clic ne remonte pas à celui qui a appelé `click()`. */
-      await page.evaluate(() => {
-        window.__sdProbeErrors = [];
-        window.addEventListener("error", (e) => window.__sdProbeErrors.push(String(e.message).slice(0, 200)));
-        window.addEventListener("unhandledrejection", (e) => window.__sdProbeErrors.push("promesse : " + String(e.reason).slice(0, 200)));
-      });
+      /* Une miniature téléchargeable depuis les annotations (les artefacts ne
+         sont pas joignables ici) : l'écran réduit, JPEG qualité 35. */
+      const miniature = async (name) => {
+        try {
+          await page.setViewport({ width: 412, height: 915, deviceScaleFactor: 0.34, isMobile: false, hasTouch: true });
+          await sleep(400);
+          const buffer = await page.screenshot({ type: "jpeg", quality: 35 });
+          shots.push(`SHOT:${target.label}-${name}:${buffer.toString("base64")}`);
+          await page.setViewport({ width: 412, height: 915, deviceScaleFactor: 2, isMobile: false, hasTouch: true });
+          await sleep(200);
+        } catch (error) {
+          shots.push(`SHOT:${target.label}-${name}:echec ${String((error && error.message) || error).slice(0, 60)}`);
+        }
+      };
 
-      /* 1. les trois vues de la barre du haut, l'une après l'autre : l'état
-         intérieur de la coque + ce que la page affiche. */
+      await miniature("coque");
+
+      /* Les trois vues de la barre du haut : état intérieur + ce que la page
+         affiche, avant et après un appui réel. */
       const navEffects = [];
       for (const name of ["library", "search", "home"]) {
-        const before = await page.evaluate(SHELL_STATE);
-        await page.evaluate(CLICK, `.sd-nav-item[data-tab="${name}"]`);
-        const afterOne = await page.evaluate(SHELL_STATE);
-        navEffects.push({ name, before, after: afterOne, changed: JSON.stringify(before) !== JSON.stringify(afterOne) });
-      }
-      const clickNav = await page.evaluate(CLICK, '.sd-nav-item[data-tab="library"]');
-      const afterNav = await page.evaluate(MEASURE);
-
-      /* 2. la barre du bas : le réglage peut la masquer — on la force allumée,
-         puis on l'interroge. C'est le contrôle que l'utilisateur décrit comme
-         « les boutons de notre version ». */
-      await page.evaluate(() => {
-        try {
-          if (window.SpotiDuckUI && window.SpotiDuckUI.set) window.SpotiDuckUI.set("tabbar", true);
-          else if (window.SpotiDuckUI && window.SpotiDuckUI.settings) window.SpotiDuckUI.settings.set("tabbar", true);
-        } catch (e) {}
-      });
-      await sleep(1200);
-      const afterEnable = await page.evaluate(MEASURE);
-      const clickTab = await page.evaluate(CLICK, '.sd-tab[data-tab="search"], .sd-tab');
-      const afterTab = await page.evaluate(MEASURE);
-
-      /* Des captures : c'est le seul moyen de *voir* ce que l'utilisateur voit.
-         Volontairement petites (JPEG qualité 40) pour rester téléchargeables. */
-      const shots = [];
-      for (const step of ["bundle", "library", "search", "home"]) {
-        const file = `${OUT}/${target.label.replace(/\W+/g, "-")}-${step}.jpg`;
-        try {
-          await page.screenshot({ path: file, type: "jpeg", quality: 40 });
-          shots.push(file);
-        } catch (error) {
-          shots.push(`${file} : échec ${String(error && error.message).slice(0, 80)}`);
-        }
+        const stateBefore = await safely(() => page.evaluate(SHELL_STATE));
+        await safely(() => page.evaluate(CLICK, `.sd-nav-item[data-tab="${name}"]`));
+        await sleep(600);
+        const stateAfter = await safely(() => page.evaluate(SHELL_STATE));
+        navEffects.push({ name, before: stateBefore, after: stateAfter });
+        if (name === "library" || name === "search") await miniature(name);
       }
 
-      const entry = {
-        label: target.label,
-        url: target.url,
-        shots,
-        navEffects,
-        before,
-        after,
-        clickNav,
-        afterNav,
-        afterEnable,
-        clickTab,
-        afterTab,
-        errors,
-        warnings,
-      };
-      report.pages.push(entry);
-
-      /* --- ce qu'on en dit, en une ligne par page ------------------------- */
-      const controls = Object.entries(after.controls || {})
-        .map(([k, v]) => `${k}=${v}`)
-        .join(" · ");
-      const chrome = Object.entries(after.spotifyChrome || {})
-        .map(([k, v]) => `${k}=${v}`)
-        .join(" · ");
       lines.push(
-        `${target.label} → coque=${after.layer ? "construite" : "ABSENTE"} / classes="${after.classes}" / ` +
-          `styles=${after.styles} (${after.cssBytes} car.) / layout=${Object.entries(after.desktopLayout).filter(([, v]) => v).map(([k]) => k).join("+") || "aucun"} | ` +
-          `CONTRÔLES : ${controls} | RESTE DE SPOTIFY : ${chrome} | ` +
+        `${target.label} → coque=${after && after.layer ? "construite" : after && after.erreur ? `mesure impossible (${after.erreur})` : "ABSENTE"} / ` +
+          `styles=${after && after.cssBytes ? after.cssBytes : "?"} car. / ` +
+          `CONTRÔLES : ${after && after.controls ? Object.entries(after.controls).map(([k, v]) => `${k}=${v}`).join(" · ") : "?"} | ` +
+          `RESTE DE SPOTIFY : ${after && after.spotifyChrome ? Object.entries(after.spotifyChrome).map(([k, v]) => `${k}=${v}`).join(" · ") : "?"} | ` +
           `LES TROIS VUES : ${navEffects
             .map(
               (e) =>
-                `${e.name}→ tab=${e.after.stateTab} route=${e.after.route} chemin=${e.after.path} classes="${e.after.classes}" ` +
-                `barreLatérale=${e.after.sidebarDisplay}/${e.after.sidebarBox} recherche=${e.after.recherche ? "oui" : "non"} ` +
-                `accueil=${e.after.accueil ? "oui" : "non"} ${e.changed ? "CHANGE" : "AUCUN CHANGEMENT"}` +
-                (e.after.erreurs.length ? ` ERREURS=${JSON.stringify(e.after.erreurs)}` : "")
+                `${e.name}→ tab=${e.after && e.after.stateTab} chemin=${e.after && e.after.path} ` +
+                `barreLatérale=${e.after && e.after.sidebarDisplay}/${e.after && e.after.sidebarBox} ` +
+                `recherche=${e.after && e.after.recherche ? "oui" : "non"} accueil=${e.after && e.after.accueil ? "oui" : "non"}` +
+                (e.after && e.after.navigation ? " (la page a navigué)" : "") +
+                (e.after && e.after.erreurs && e.after.erreurs.length ? ` ERREURS=${JSON.stringify(e.after.erreurs)}` : "")
             )
-            .join("  ·  ")} | ` +
-          `barre du bas forcée : ${afterEnable.controls && afterEnable.controls["barre du bas (.sd-tabbar)"]} → APPUI : ${clickTab.clicked ? `${clickTab.changed ? "navigue" : "NE NAVIGUE PAS"}` : clickTab.reason}`
+            .join("  ·  ")}`
       );
       console.log(`[Sonde coque] ${lines[lines.length - 1]}`);
+
+      report.pages.push({ label: target.label, url: target.url, before, after, navEffects, errors });
+      if (errors.length) warn(`Erreurs — ${target.label}`, errors.slice(0, 5).join("  ||  "));
     } catch (error) {
-      lines.push(`${target.label} → ÉCHEC : ${String(error && error.message).slice(0, 200)}`);
-      report.pages.push({ label: target.label, url: target.url, failure: String(error && error.message) });
+      lines.push(`${target.label} → ÉCHEC : ${String((error && error.message) || error).slice(0, 200)}`);
+      report.pages.push({ label: target.label, url: target.url, failure: String((error && error.message) || error) });
     } finally {
       await page.close().catch(() => {});
     }
@@ -365,8 +341,17 @@ async function main() {
 
   if (lines.length) note("La coque sur la vraie page", lines.join("  ||  "));
 
+  /* Les miniatures : encodées dans l'annotation, parce que les artefacts ne
+     sont pas joignables depuis tous les environnements. Format :
+     SHOT:<nom>:<base64|message d'échec>. */
+  for (const shot of shots) {
+    const [, name, payload] = shot.split(":");
+    if (payload.startsWith("echec")) warn(`Capture — ${name}`, payload);
+    else note(`Capture — ${name}`, `SHOT:${name}:${payload}`);
+  }
+
   const allErrors = report.pages.flatMap((p) => (p.errors || []).map((e) => `${p.label}: ${e}`));
-  if (allErrors.length) warn("Erreurs de la page", allErrors.slice(0, 6).join("  ||  "));
+  if (allErrors.length) warn("Erreurs de la page", allErrors.slice(0, 5).join("  ||  "));
   else note("Erreurs de la page", "aucune");
 
   await browser.close().catch(() => {});
