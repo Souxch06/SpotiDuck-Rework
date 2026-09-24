@@ -343,6 +343,48 @@ await checkAsync("settings sheet applies + persists a setting", async () => {
   return "theme=dark persisted · reduce-motion toggled";
 });
 
+await checkAsync("settings: the Play Protect row opens the phone setting", async () => {
+  SD.openSettings();
+  await tick(60);
+  const sheet = q(".sd-sheet-settings");
+  const row = sheet.querySelector('[data-row="playprotect"]');
+  assert(row, "la ligne « Vérification Play Protect » a disparu des réglages");
+  assert(/Play Protect/i.test(row.textContent), "la ligne n'est plus nommée : " + row.textContent.trim());
+  /* L'application ne peut pas désactiver Play Protect : elle doit au moins
+     ouvrir le réglage, et dire quoi faire quand elle n'y arrive pas. */
+  const real = window.AndBridge;
+  const seen = [];
+  window.AndBridge = new Proxy({}, { get: (t, p) => (...a) => { seen.push(String(p)); return String(p) === "openPlayProtect"; } });
+  row.click();
+  await tick(60);
+  assert(seen.includes("openPlayProtect"), "AndBridge.openPlayProtect n'a pas été appelé : " + seen.join(", "));
+  const toast = q(".sd-toast");
+  assert(toast && toast.textContent.trim().length > 0, "aucune consigne affichée après l'appui");
+  assert(/Analyser les applis/.test(toast.textContent), "la consigne ne dit pas quel réglage décocher : " + toast.textContent);
+  window.AndBridge = real;
+  SD.close();
+  await tick(40);
+  return "ligne présente · réglage ouvert · consigne affichée";
+});
+
+await checkAsync("settings: without the bridge, the row gives the manual path", async () => {
+  const real = window.AndBridge;
+  window.AndBridge = new Proxy({}, { get: () => () => false }); // Android plus ancien
+  SD.openSettings();
+  await tick(60);
+  q('.sd-sheet-settings [data-row="playprotect"]').click();
+  await tick(60);
+  const toast = q(".sd-toast");
+  assert(
+    toast && /Play Store/.test(toast.textContent),
+    "le chemin manuel n'est pas affiché : " + (toast ? toast.textContent : "pas de message")
+  );
+  window.AndBridge = real;
+  SD.close();
+  await tick(40);
+  return "consigne manuelle ✓";
+});
+
 await checkAsync("interface size setting scales the whole shell", async () => {
   SD.openSettings();
   await tick(60);

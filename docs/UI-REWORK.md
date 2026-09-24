@@ -622,3 +622,38 @@ d'origine sur une page qui imite la page bureau de Spotify :
 choix, l'origine de l'asset (`src/original/`), la feuille d'origine
 (md5 `13de5546d0`), l'agent bureau du mode d'origine et les scripts chargés par
 `readAsset`.
+
+---
+
+## 13. Play Protect : installation sans interruption (v2.7.1)
+
+Play Protect analyse tout APK installé hors du Play Store. C'est un service de
+Google, pas une permission Android : **aucune application ne peut le désactiver
+pour elle-même**, et rien dans l'APK ne peut supprimer cet écran (demander
+`REQUEST_INSTALL_PACKAGES` ou embarquer un installateur rendrait au contraire
+l'analyse plus méfiante).
+
+Ce qui a été ajouté, en revanche, c'est le chemin le plus court vers le réglage
+qui l'arrête :
+
+* `MainActivity.openPlayProtect()` essaie dans l'ordre l'écran Play Protect des
+  services Google, celui du Play Store, le lien `market://playprotect`, les
+  réglages de sécurité du téléphone, puis l'ouverture du Play Store ; il répond
+  `true` si un écran a été ouvert.
+* `Bridge.openPlayProtect()` l'expose à la page.
+* L'interface injectée a une ligne **Vérification Play Protect** (Paramètres →
+  À propos) qui appelle ce réglage, avec la consigne affichée si l'ouverture
+  échoue.
+* Le **mode d'origine n'a pas d'écran de réglages** : le sélecteur d'interface
+  (appui long) a un bouton **Play Protect** qui mène au même endroit.
+
+Le pas-à-pas, à donner tel quel : *Play Store → icône de profil → Play Protect →
+⚙️ → décocher « Analyser les applis avec Play Protect »*. Sur l'écran d'alerte
+lui-même, **⋮ → Plus de détails → Installer quand même** passe lorsque
+l'installation est seulement déconseillée ; l'écran « Application non sécurisée
+bloquée » ne propose, lui, que l'abandon — il faut alors le réglage ci-dessus.
+Installer par `adb install -r` évite l'interface d'installation (et donc
+l'interruption), sans désactiver quoi que ce soit.
+
+Le README détaille les deux écrans, les trois contournements et la seule voie
+vers un verdict de confiance (publication Play, ou recours Play Protect).

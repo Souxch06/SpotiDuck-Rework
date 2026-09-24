@@ -14,6 +14,10 @@ import android.util.Log
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.content.ComponentName
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -364,6 +368,43 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, toastFor(clean), Toast.LENGTH_SHORT).show()
     }
 
+    /**
+     * Ouvre l'écran **Play Protect** du Play Store (ou, à défaut, le réglage
+     * de sécurité du téléphone).
+     *
+     * L'application ne peut pas désactiver Play Protect : ce n'est pas une
+     * permission Android mais un service de Google, qui analyse les APK
+     * installés hors du Play Store et refuse parfois de les laisser passer.
+     * Ce qu'on peut faire, c'est mener l'utilisateur au réglage en deux gestes
+     * au lieu de le laisser le chercher dans le Play Store.
+     *
+     * @return `true` si un écran a été ouvert, `false` pour que l'interface
+     *         affiche le chemin à suivre à la main.
+     */
+    fun openPlayProtect(): Boolean {
+        val candidates = listOf(
+            /* Play Protect, dans les services Google. */
+            Intent().setComponent(
+                ComponentName("com.google.android.gms", "com.google.android.gms.security.settings.VerifyAppsSettingsActivity")
+            ),
+            /* Le même écran, dans le Play Store. */
+            Intent().setComponent(
+                ComponentName("com.android.vending", "com.google.android.finsky.activities.SettingsActivity")
+            ),
+            Intent(Intent.ACTION_VIEW, Uri.parse("market://playprotect")),
+            /* À défaut : les réglages de sécurité du téléphone, puis le Play Store. */
+            Intent(Settings.ACTION_SECURITY_SETTINGS),
+            packageManager.getLaunchIntentForPackage("com.android.vending")
+        )
+        for (candidate in candidates) {
+            if (candidate == null) continue
+            candidate.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            val ok = runCatching { startActivity(candidate); true }.getOrElse { false }
+            if (ok) return true
+        }
+        return false
+    }
+
     /** Sélecteur : appui long de 3 s (n'importe où) ou rangée des paramètres. */
     fun showUiChooser() {
         val labels = arrayOf(
@@ -380,6 +421,14 @@ class MainActivity : AppCompatActivity() {
                 dialog.dismiss()
             }
             .setNegativeButton(android.R.string.cancel, null)
+            /* Le seul chemin vers Play Protect dans le mode d'origine (pas
+               d'écran de réglages) : l'installation suivante ne sera plus
+               interrompue par sa vérification. */
+            .setNeutralButton(R.string.play_protect) { _, _ ->
+                if (!openPlayProtect()) {
+                    Toast.makeText(this, R.string.play_protect_path, Toast.LENGTH_LONG).show()
+                }
+            }
             .show()
     }
 

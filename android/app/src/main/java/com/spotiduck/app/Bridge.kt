@@ -269,6 +269,16 @@ class Bridge(activity: MainActivity) {
         act.runOnUiThread { act.switchUiMode(mode ?: MainActivity.MODE_NATIVE) }
     }
 
+    /**
+     * Mène à l'écran Play Protect : c'est là que se désactive l'analyse qui
+     * interrompt l'installation des APK venus d'ailleurs. L'application ne peut
+     * pas la désactiver elle-même (service Google, pas une permission).
+     *
+     * @return `true` si un écran a pu être ouvert.
+     */
+    @JavascriptInterface
+    fun openPlayProtect(): Boolean = activity.get()?.openPlayProtect() ?: false
+
     /** Ouvre le sélecteur (appui long de 3 s ou rangée des paramètres). */
     @JavascriptInterface
     fun showUiChooser() {

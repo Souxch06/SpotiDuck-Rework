@@ -202,6 +202,38 @@ stored mode:
 calls the latter when it receives a long press, and `MainActivity` does the same
 on a long press in the original mode (which has no settings screen of its own).
 
+### Installing: the Play Protect screen
+
+Google Play Protect scans every APK installed from outside the Play Store. It is
+a Google service on the phone, not something an app can switch off for itself —
+but the two things it complains about, and the fixes, are worth knowing:
+
+| What you see | Why | What to do |
+| --- | --- | --- |
+| “Play Protect n'a pas pu vérifier cette appli” / *unknown developer* | SpotiDuck is not published on the Play Store and is signed with its own key | tap **Installer quand même** (or ⋮ → *Plus de détails*), or turn the scan off (below) |
+| “Application non sécurisée bloquée” — the install button is the only option | the on-device classifier has a negative verdict for this APK | turn the scan off (below); *Installer quand même* is not offered on this screen |
+
+**Turn the scan off for good** (2 taps from inside the app):
+
+1. **Long-press the page → Play Protect** — the app opens the setting for you
+   (in our own shell: *Settings → À propos → Vérification Play Protect*).
+2. In the Play Store screen that opens: **⚙️ → uncheck “Analyser les applis avec
+   Play Protect”**.
+
+Manually, that screen is *Play Store → profile icon → Play Protect → ⚙️ →
+“Analyser les applis avec Play Protect”*. You can re-enable it afterwards; the
+app you already installed keeps working.
+
+Two more ways around it, for reference: `adb install -r SpotiDuck-….apk`
+(no installer UI, so no prompt), or installing the APK from a device where the
+scan is off. Publishing on the Play Store, or [appealing to Play
+Protect](https://support.google.com/googleplay/android-developer/contact/protectappeals),
+are the only ways to get a *trusted* verdict — neither is possible for a Spotify
+wrapper.
+
+Nothing in the APK can suppress that screen: `REQUEST_INSTALL_PACKAGES` or a
+bundled installer would only make Play Protect more suspicious, not less.
+
 **Build it**
 
 ```bash
