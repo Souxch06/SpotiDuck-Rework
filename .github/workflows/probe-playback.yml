@@ -1,0 +1,57 @@
+name: Probe the playback
+
+# Sonde de lecture. L'application affiche, au lancement, le verdict de Spotify :
+#
+#   « Lecture désactivée — Spotify ne fonctionnera pas si vous bloquez le
+#     contenu protégé, si votre navigateur n'est pas compatible ou si vous
+#     utilisez un mode de navigation privée ou incognito. »
+#
+# Ce message a trois causes possibles, et une seule est vraie sur ce téléphone.
+# Cette sonde les sépare par la mesure, au lieu de les supposer :
+#
+#   1. le **contenu protégé** (DRM Widevine) : que répond
+#      `navigator.requestMediaKeySystemAccess('com.widevine.alpha', …)` pour un
+#      flux audio, dans un vrai Chrome du runner ?
+#   2. le **navigateur non compatible** : quels repères Spotify teste-t-il
+#      (`userAgentData`, `platformVersion`, EME) et le code qui entoure le
+#      message est-il conditionné à l'agent ?
+#   3. la **navigation privée** : le message est-il posé pour un agent mobile
+#      comme pour un agent de bureau, ou seulement pour l'un des deux ?
+#
+# Le script récupère la page et **tous ses scripts** pour les deux agents, puis
+# imprime le code entourant chaque repère. Ces contextes sont la seule source
+# fiable pour écrire le correctif : ils montrent la condition exacte.
+#
+# Aucun échec n'est bloquant : tout est publié en annotations.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/probe-playback.yml"
+      - "tools/probe-playback.mjs"
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Chrome du runner
+        run: |
+          set +e -uo pipefail
+          which google-chrome google-chrome-stable chromium || true
+          google-chrome --version || true
+      - name: Installer le pilote CDP
+        run: npm install --no-save --no-audit --no-fund puppeteer-core@23
+      - name: Mesurer ce que Spotify exige et ce que le navigateur offre
+        run: node tools/probe-playback.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: probe-playback
+          path: /tmp/probe-playback
+          if-no-files-found: ignore
