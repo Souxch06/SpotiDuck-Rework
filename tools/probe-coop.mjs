@@ -228,69 +228,49 @@ const MEASURE = async () => {
      telephone, les pochettes de l'accueil mesurent ~59 px avec des gouttières de
      ~36 px. Il faut savoir QUI décide de ces tailles (la grille ? une variable
      CSS ? un style en ligne ?) avant d'écrire la moindre règle. */
-  /* **Ce qui pilote la taille du contenu, nommé précisément.** « Ca rends pas
-     tres beau » : sur le telephone, les pochettes de l'accueil paraissent
-     minuscules et tres espacees. Impossible d'ecrire la bonne regle sans savoir
-     quels elements portent la taille — et la premiere version de ce releve a
-     montre que la grille de l'accueil n'est pas `grid-container` (absent).
-     On descend donc la structure reelle de la premiere rangee, en nommant
-     chaque niveau : balise, identifiant de test, largeur, image. */
-  out.content = (function () {
-    var shelf = document.querySelector('section[data-testid=component-shelf]');
-    if (!shelf) return "aucune shelf";
+  /* **Toutes les rangées, avec leurs tailles réelles.** La première version ne
+     regardait que la première shelf — or l'accueil en mélange plusieurs types
+     (carrousels, grilles à quatre colonnes). Pour chaque rangée : le conteneur
+     qui décide (nommé), son mode d'affichage, le nombre de colonnes, les
+     gouttières, la carte et la pochette. C'est ce relevé qui permet d'écrire la
+     bonne règle — et de voir laquelle des rangées ressemble à la capture
+     (« des pochettes de 59 px, quatre colonnes, 36 px de vide »). */
+  out.shelves = (function () {
+    var list = document.querySelectorAll('section[data-testid=component-shelf]');
     var rows = [];
-    var describe = function (el, depth) {
-      var r = el.getBoundingClientRect();
-      var cs = window.getComputedStyle(el);
-      var img = el.querySelector("img");
+    for (var i = 0; i < list.length && i < 8; i++) {
+      var sh = list[i];
+      var sr = sh.getBoundingClientRect();
+      var img = sh.querySelector("img");
       var ir = img ? img.getBoundingClientRect() : null;
-      return (
-        new Array(depth + 1).join("  ") +
-        el.tagName.toLowerCase() +
-        (el.getAttribute("data-testid") ? "[" + el.getAttribute("data-testid") + "]" : "") +
-        (el.getAttribute("role") ? "{" + el.getAttribute("role") + "}" : "") +
-        (el.className && typeof el.className === "string"
-          ? "." + el.className.split(/\s+/).slice(0, 2).join(".")
-          : "") +
-        " " + Math.round(r.width) + "x" + Math.round(r.height) +
-        " " + cs.display +
-        (cs.gridTemplateColumns && cs.gridTemplateColumns !== "none" ? " cols=" + cs.gridTemplateColumns : "") +
-        (cs.columnGap && cs.columnGap !== "normal" ? " gap=" + cs.columnGap : "") +
-        (ir ? " img=" + Math.round(ir.width) : "")
-      );
-    };
-    /* Les deux premiers niveaux de la rangée : c'est là que Spotify décide. */
-    var kids = shelf.children;
-    rows.push("shelf " + Math.round(shelf.getBoundingClientRect().width) + "x" + Math.round(shelf.getBoundingClientRect().height) + " enfants=" + kids.length);
-    for (var i = 0; i < Math.min(kids.length, 4); i++) {
-      rows.push(describe(kids[i], 1));
-      var kk = kids[i].children;
-      for (var j = 0; j < Math.min(kk.length, 3); j++) {
-        rows.push(describe(kk[j], 2));
-        var kkk = kk[j].children;
-        for (var m = 0; m < Math.min(kkk.length, 3); m++) rows.push(describe(kkk[m], 3));
+      /* Le conteneur des cartes : le premier descendant qui porte un
+         `data-testid` connu, sinon le premier enfant de l'en-tête suivant. */
+      var container =
+        sh.querySelector('[data-testid=grid-container], [data-testid=carousel-scroller]') ||
+        (sh.children.length > 1 ? sh.children[1] : sh);
+      var cs = window.getComputedStyle(container);
+      /* La carte : remonte depuis l'image jusqu'à l'enfant direct d'un
+         conteneur qui en aligne plusieurs. */
+      var card = img;
+      var guard = 0;
+      while (card && card.parentElement && card.parentElement !== container && guard++ < 8) {
+        card = card.parentElement;
       }
-    }
-    /* La carte : le premier descendant qui contient une image. */
-    var withImg = null;
-    var all = shelf.querySelectorAll("*");
-    for (var n = 0; n < all.length && !withImg; n++) {
-      if (all[n].querySelector("img")) withImg = all[n];
-    }
-    if (withImg) {
-      var r = withImg.getBoundingClientRect();
-      var im = withImg.querySelector("img").getBoundingClientRect();
-      var next = withImg.nextElementSibling;
-      var nr = next ? next.getBoundingClientRect() : null;
+      var cr = card ? card.getBoundingClientRect() : null;
       rows.push(
-        "CARTE " + describe(withImg, 0) +
-          " gouttiere=" + (nr ? Math.round(nr.left - r.right) : "?") +
-          " en-ligne=" + JSON.stringify((withImg.getAttribute("style") || "").slice(0, 90))
+        "#" + (i + 1) +
+          " " + Math.round(sr.width) + "x" + Math.round(sr.height) +
+          " cont=" + (container.getAttribute("data-testid") || container.tagName.toLowerCase()) +
+          " " + cs.display +
+          (cs.gridTemplateColumns && cs.gridTemplateColumns !== "none"
+            ? " cols=" + cs.gridTemplateColumns.split(" ").length
+            : "") +
+          " gap=" + cs.columnGap +
+          (cr ? " carte=" + Math.round(cr.width) + "x" + Math.round(cr.height) : " carte=?") +
+          (ir ? " image=" + Math.round(ir.width) + "x" + Math.round(ir.height) : " image=?")
       );
-      var par = withImg.parentElement;
-      if (par) rows.push("parent " + describe(par, 1) + " enfants=" + par.children.length);
     }
-    return rows.join(" ~ ");
+    return rows.join(" . ") || "aucune shelf";
   })();
 
   out.tapTargets = (function () {
@@ -739,6 +719,7 @@ async function main() {
           .join(", ")}`;
       if (after && after.contentVisible) lines.push(`Contenu - ${target.label} : ${after.contentVisible}`);
       if (after && after.structure) lines.push(`Structure - ${target.label} : ${after.structure}`);
+      if (after && after.shelves) lines.push(`Rangées - ${target.label} : ${after.shelves}`);
       if (after && after.content) lines.push(`Contenu-te tailles - ${target.label} : ${after.content}`);
       lines.push(summary);
       console.log(`[Sonde coque] ${summary}`);
