@@ -84,6 +84,25 @@ html.sd-mobile .sd-root [data-testid="component-shelf"] > *,
 html.sd-mobile .sd-root [data-testid="tracklist-row"] > * {
   min-width: 0 !important;
 }
+/* Les conteneurs nommés par la mesure (page marketing, session déconnectée) :
+   `div[data-testid=root]`, la barre de navigation et la barre d'inscription
+   étaient larges de **800 px** dans un écran de 412. */
+html.sd-mobile .sd-root div[data-testid="root"],
+html.sd-mobile .sd-root #global-nav-bar,
+html.sd-mobile .sd-root [data-testid="signup-bar"],
+html.sd-mobile .sd-root div[data-testid="root"] > * {
+  max-width: 100% !important;
+  min-width: 0 !important;
+}
+/* Les textes de la page marketing sont mis en page pour 800 px : à la largeur
+   d'un téléphone, ils poussent le conteneur (mesuré : 455 px de large, rognés à
+   droite). */
+html.sd-mobile .sd-root [data-testid="signup-bar"] *,
+html.sd-mobile .sd-root #global-nav-bar * {
+  min-width: 0 !important;
+  max-width: 100% !important;
+}
+
 /* Les intertitres ne doivent pas imposer leur largeur au conteneur. */
 html.sd-mobile .sd-root [data-testid="grid-container"] > * > *,
 html.sd-mobile .sd-root .encore-text-headline-large,

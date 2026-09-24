@@ -23,6 +23,13 @@ on:
     paths:
       - ".github/workflows/probe-coop.yml"
       - "tools/probe-coop.mjs"
+      # La sonde mesure l'interface : elle doit se déclencher **quand
+      # l'interface change**, sinon on relit une mesure périmée en croyant
+      # mesurer la version qu'on vient d'écrire (c'est arrivé au tour
+      # précédent : la feuille « tenir dans l'écran » ajoutée, et l'annotation
+      # relue d'un run d'avant).
+      - "src/inject/**"
+      - "dist/spotiduck-ui.js"
 
 jobs:
   probe:
