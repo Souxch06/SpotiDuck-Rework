@@ -39,15 +39,16 @@ import org.json.JSONObject
  *
  * Responsibilities (and nothing else):
  *  1. serve one of the three interfaces the user can pick between:
- *       • `original` (default) — the project's original injected script
+ *       • `native` (default) — Chrome-Android user agent, so open.spotify.com
+ *         serves **its own mobile page**; nothing is redrawn, the app only
+ *         hides the browser banners, pins the viewport and mirrors the
+ *         metadata to the notification (`assets/native-mode.js`);
+ *       • `original` — the project's original injected script
  *         (`assets/spotiduck-original.js`) on the **desktop** web player, with
  *         the original app's WebView settings: that is the interface SpotiDuck
  *         has always had, unedited;
  *       • `inject` — the same desktop player plus `assets/spotiduck-ui.js`, our
  *         own layer (top navigation, mini player, sheets, settings…);
- *       • `native` — Chrome-Android user agent, so open.spotify.com serves
- *         **its own mobile interface**; nothing is redrawn, the app only hides
- *         the browser banners and mirrors the metadata to the notification.
  *     The mode is a long-press away (the chooser also opens Play Protect
  *     settings); it is stored in SharedPreferences and survives restarts;
  *  2. inject the script of that mode after every page load (each is a single

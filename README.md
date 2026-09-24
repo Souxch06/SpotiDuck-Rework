@@ -182,7 +182,7 @@ android/app/src/main/java/com/spotiduck/app/
     PlaybackService.kt     media notification + lock screen / headset controls
     AdBlocker.kt           host-list blocking (assets/adblock_hosts.txt)
 android/app/src/main/assets/
-    spotiduck-original.js  ← copy of dist/spotiduck-original.js (the default UI)
+    spotiduck-original.js  ← copy of dist/spotiduck-original.js (mode "original")
     spotiduck-ui.js        ← copy of dist/spotiduck-ui.js (npm run sync:android)
     native-mode.js         ← the native mode (script injected when ui_mode=native)
     adblock_hosts.txt      ← copy of the repository list
@@ -193,9 +193,9 @@ stored mode:
 
 | Mode | User agent | Layout | Script |
 | --- | --- | --- | --- |
-| `original` (default) | desktop Chrome | the original app's settings, no viewport meta forced | `spotiduck-original.js` |
+| `native` (default) | Chrome Android | meta pinned by the script | `native-mode.js` |
+| `original` | desktop Chrome | the original app's settings, no viewport meta forced | `spotiduck-original.js` |
 | `inject` | desktop Chrome | meta pinned to `width=device-width` | `spotiduck-ui.js` |
-| `native` (beta) | Chrome Android | meta pinned by the script | `native-mode.js` |
 
 `Bridge` exposes `uiMode()`, `setUiMode(mode)` and `showUiChooser()`; the runtime
 calls the latter when it receives a long press, and `MainActivity` does the same

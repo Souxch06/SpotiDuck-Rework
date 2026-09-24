@@ -821,7 +821,7 @@ check("no runtime errors", () => {
  * Le user-agent est celui de Chrome Android, donc la page affichée est
  * celle de Spotify ; ce script doit seulement la laisser tranquille et
  * continuer à faire fonctionner les boutons de la notification Android —
- * c'est le mode par défaut depuis la 2.5.0.
+ * c'est le mode livré par défaut depuis la 2.7.3.
  * ------------------------------------------------------------------ */
 const natHtml =
   '<!doctype html><html><head></head><body>' +
@@ -999,7 +999,8 @@ check("native mode: no runtime errors", () => {
 /* ------------------------------------------------------------------ *
  *  Interface d'origine — le code d'origine, tel quel                  *
  *                                                                     *
- *  C'est le mode livré par défaut : l'affichage d'origine de SpotiDuck *
+ *  C'est l'affichage historique du projet (proposé au sélecteur) :  *
+ *  l'affichage d'origine de SpotiDuck
  *  (= le script injecté de l'application d'origine, sans retouche).    *
  *  On le charge donc pour de vrai, sur une page qui ressemble à la     *
  *  page bureau de Spotify (c'est elle qu'il habille), et on vérifie ce *

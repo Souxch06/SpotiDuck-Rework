@@ -398,7 +398,7 @@ Spotify… là c'est vraiment pas beau* ». Conclusion tirée : imiter Spotify, 
 avec les bonnes métriques, ne donne jamais Spotify. La v2.5 arrête donc de
 redessiner — **elle affiche la page mobile de Spotify**.
 
-| | Interface **SpotiDuck** (couche injectée, défaut) | Interface **« native »** (bêta) |
+| | Interface **SpotiDuck** (couche injectée) | Interface **« native »** (bêta) |
 | --- | --- | --- |
 | User-agent | desktop | Chrome Android (Pixel 7) |
 | Qui dessine | notre couche + le web player reflowé | Spotify (`open.spotify.com` en version **web mobile**) |
