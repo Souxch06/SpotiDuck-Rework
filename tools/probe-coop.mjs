@@ -128,6 +128,26 @@ const MEASURE = async () => {
   return out;
 };
 
+/** L'état intérieur de la coque — ce que ses boutons sont censés changer. */
+const SHELL_STATE = () => {
+  const api = window.SpotiDuckUI;
+  const sidebar = document.querySelector("#Desktop_LeftSidebar_Id");
+  const cs = sidebar ? getComputedStyle(sidebar) : null;
+  const rect = sidebar ? sidebar.getBoundingClientRect() : null;
+  return {
+    path: location.pathname,
+    classes: document.documentElement.className.split(/\s+/).filter((c) => c.indexOf("sd-") === 0).join(" "),
+    stateTab: api && api.state ? api.state.tab : null,
+    route: api && api.state ? api.state.route : null,
+    sidebarDisplay: cs ? cs.display : "absente",
+    sidebarBox: rect ? `${Math.round(rect.width)}×${Math.round(rect.height)}` : "-",
+    recherche: !!document.querySelector('[data-testid="search-page"]'),
+    accueil: !!document.querySelector('[data-testid="home-page"]'),
+    dialogue: !!document.querySelector('[role="dialog"]'),
+    erreurs: (window.__sdProbeErrors || []).slice(0, 4),
+  };
+};
+
 /** Un appui réel sur un contrôle, et ce qu'il déclenche. */
 const CLICK = async (selector) => {
   const el = document.querySelector(selector);
@@ -238,15 +258,33 @@ async function main() {
       await page.goto(target.url, { waitUntil: "domcontentloaded", timeout: 60000 });
       await sleep(6000);
 
-      const before = await page.evaluate(MEASURE);
+      const before = await page.evaluate(MEASURE).catch((error) => ({ erreur: String(error && error.message).slice(0, 120) }));
 
       /* 2. la coque, à la fin du chargement — comme `onPageFinished`. */
-      await page.evaluate(bundle);
+      /* L'injection elle-même peut naviguer (la page de connexion de Spotify
+         redirige) : sans ce garde-fou, toute la mesure de la page tombait. */
+      await page.evaluate(bundle).catch((error) => errors.push("injection : " + String(error && error.message).slice(0, 160)));
       await sleep(3500);
 
-      const after = await page.evaluate(MEASURE);
+      const after = await page.evaluate(MEASURE).catch((error) => ({ erreur: String(error && error.message).slice(0, 120) }));
 
-      /* 1. l'appui sur la barre du haut (la navigation livrée par défaut). */
+      /* Les erreurs levées **pendant** un appui : une exception dans le
+         gestionnaire de clic ne remonte pas à celui qui a appelé `click()`. */
+      await page.evaluate(() => {
+        window.__sdProbeErrors = [];
+        window.addEventListener("error", (e) => window.__sdProbeErrors.push(String(e.message).slice(0, 200)));
+        window.addEventListener("unhandledrejection", (e) => window.__sdProbeErrors.push("promesse : " + String(e.reason).slice(0, 200)));
+      });
+
+      /* 1. les trois vues de la barre du haut, l'une après l'autre : l'état
+         intérieur de la coque + ce que la page affiche. */
+      const navEffects = [];
+      for (const name of ["library", "search", "home"]) {
+        const before = await page.evaluate(SHELL_STATE);
+        await page.evaluate(CLICK, `.sd-nav-item[data-tab="${name}"]`);
+        const afterOne = await page.evaluate(SHELL_STATE);
+        navEffects.push({ name, before, after: afterOne, changed: JSON.stringify(before) !== JSON.stringify(afterOne) });
+      }
       const clickNav = await page.evaluate(CLICK, '.sd-nav-item[data-tab="library"]');
       const afterNav = await page.evaluate(MEASURE);
 
@@ -264,9 +302,24 @@ async function main() {
       const clickTab = await page.evaluate(CLICK, '.sd-tab[data-tab="search"], .sd-tab');
       const afterTab = await page.evaluate(MEASURE);
 
+      /* Des captures : c'est le seul moyen de *voir* ce que l'utilisateur voit.
+         Volontairement petites (JPEG qualité 40) pour rester téléchargeables. */
+      const shots = [];
+      for (const step of ["bundle", "library", "search", "home"]) {
+        const file = `${OUT}/${target.label.replace(/\W+/g, "-")}-${step}.jpg`;
+        try {
+          await page.screenshot({ path: file, type: "jpeg", quality: 40 });
+          shots.push(file);
+        } catch (error) {
+          shots.push(`${file} : échec ${String(error && error.message).slice(0, 80)}`);
+        }
+      }
+
       const entry = {
         label: target.label,
         url: target.url,
+        shots,
+        navEffects,
         before,
         after,
         clickNav,
@@ -290,8 +343,16 @@ async function main() {
         `${target.label} → coque=${after.layer ? "construite" : "ABSENTE"} / classes="${after.classes}" / ` +
           `styles=${after.styles} (${after.cssBytes} car.) / layout=${Object.entries(after.desktopLayout).filter(([, v]) => v).map(([k]) => k).join("+") || "aucun"} | ` +
           `CONTRÔLES : ${controls} | RESTE DE SPOTIFY : ${chrome} | ` +
-          `APPUI barre du haut : ${clickNav.clicked ? `${clickNav.changed ? "navigue" : "NE NAVIGUE PAS"} (tap=${JSON.stringify(clickNav.tapRecorded)})` : clickNav.reason} | ` +
-          `barre du bas forcée : ${afterEnable.controls && afterEnable.controls["barre du bas (.sd-tabbar)"]} → APPUI : ${clickTab.clicked ? `${clickTab.changed ? "navigue" : "NE NAVIGUE PAS"} (tap=${JSON.stringify(clickTab.tapRecorded)})` : clickTab.reason}`
+          `LES TROIS VUES : ${navEffects
+            .map(
+              (e) =>
+                `${e.name}→ tab=${e.after.stateTab} route=${e.after.route} chemin=${e.after.path} classes="${e.after.classes}" ` +
+                `barreLatérale=${e.after.sidebarDisplay}/${e.after.sidebarBox} recherche=${e.after.recherche ? "oui" : "non"} ` +
+                `accueil=${e.after.accueil ? "oui" : "non"} ${e.changed ? "CHANGE" : "AUCUN CHANGEMENT"}` +
+                (e.after.erreurs.length ? ` ERREURS=${JSON.stringify(e.after.erreurs)}` : "")
+            )
+            .join("  ·  ")} | ` +
+          `barre du bas forcée : ${afterEnable.controls && afterEnable.controls["barre du bas (.sd-tabbar)"]} → APPUI : ${clickTab.clicked ? `${clickTab.changed ? "navigue" : "NE NAVIGUE PAS"}` : clickTab.reason}`
       );
       console.log(`[Sonde coque] ${lines[lines.length - 1]}`);
     } catch (error) {
