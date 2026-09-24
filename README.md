@@ -67,6 +67,13 @@ By wrapping the Spotify Web Player in a highly optimized Android WebView, SpotiD
 
 ## 🧩 The interface: ours by default, Spotify's web page as a beta
 
+The shell uses the **project's original layout**: navigation at the top
+(home · library · search · logo · notifications · friends · profile), and a
+**complete mini player** at the bottom — cover, title, artist, like, then
+shuffle · previous · play · next · repeat, then elapsed time, a draggable
+progress bar and duration. The bottom tab bar still exists but is off by
+default (`Paramètres → barre d'onglets`).
+
 SpotiDuck ships **two interfaces**, switchable at runtime:
 
 | | **SpotiDuck** (injected layer, default) | **“Native”** (beta) |
@@ -91,6 +98,9 @@ src/inject/20-shell.css     tab bar, mini player, full-screen player, queue shee
 src/inject/30-sheets.css    options & settings sheets, login page, offline banner
 src/inject/40-audit.css     interface hardening (touch targets, overflow, modals…)
 src/inject/50-android.css   Android/Material 3 pass (Roboto, 48 dp, shapes, motion)
+src/inject/70-original.css the shell's own layout: top navigation bar, full mini
+                            player (shuffle/prev/play/next/repeat + progress),
+                            2-column home shortcuts
 src/inject/spotiduck-ui.js  runtime (reads the player, drives playback, gestures)
 dist/spotiduck-ui.js        ← built bundle, this is what the app injects in this mode
 demo/                       mock Spotify web player + phone-frame preview

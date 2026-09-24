@@ -517,3 +517,38 @@ Trois causes d'un affichage « pas adapté au téléphone », toutes mesurables 
 * `tools/sync-android.mjs` vérifie désormais que `native-mode.js` contient bien
   `window.SpotiDuckUI`, les `data-testid` des contrôles, `showUiChooser` et
   `recMediaStatus` : un fichier tronqué ne peut plus partir dans l'APK.
+
+---
+
+## 11. Retour à la disposition d'origine (v2.6.4)
+
+Après plusieurs essais d'imitation, la référence retenue est celle des
+**captures de la première version du projet** : la disposition d'origine de
+SpotiDuck, servie par `src/inject/70-original.css` (partie 7/7, chargée en
+dernier).
+
+| Élément | Avant | Maintenant |
+| --- | --- | --- |
+| Navigation | barre d'onglets **en bas** (Accueil · Rechercher · Bibliothèque) | barre **en haut** : maison · bibliothèque · recherche · **logo** · notifications · amis · profil. Les onglets du bas restent disponibles en réglage, désactivés par défaut |
+| Mini-lecteur | pochette + titre + j'aime/lecture/suivant, une barre fine de progression | **lecteur complet** : pochette + titre + artiste + j'aime, puis aléatoire · précédent · lecture · suivant · répétition, puis temps écoulé · barre de progression glissable · durée. Hauteur `--sd-mini-h` = 120 dp × `--sd-u` |
+| Raccourcis de l'accueil | grandes tuiles | **deux colonnes** de cartes compactes (pochette 48 dp + titre), comme la capture |
+| Contenu sous la barre | — | `body { padding-top: safe + nav }` pour que la barre ne recouvre jamais la page ; la barre de titre des sous-pages (retour) passe **sous** la nav, et la sidebar Bibliothèque redescend d'autant |
+
+### Les boutons du bas qui disparaissaient
+
+`html.sd-keyboard` était posée dès que la zone visible rétrécissait de plus de
+120 px — sans vérifier qu'un clavier était ouvert. Un redimensionnement, une
+rotation, l'apparition de la barre système ou un changement d'onglet suffisaient :
+la barre et le mini-lecteur s'effaçaient alors que rien ne gênait. La classe n'est
+plus posée que si `document.activeElement` est un champ de saisie (ou
+`contenteditable`), et elle est retirée au `focusout`.
+
+### Tests
+
+`npm run smoke` — **58 tests** (53 → 58) : navigation en haut (ordre des trois
+vues, logo, trois boutons d'écrans Spotify, libellés d'accessibilité), barre du
+bas désactivée par défaut mais toujours présente dans le DOM, mini-lecteur
+complet (six contrôles + deux temps + rail `role="slider"`), commandes du
+mini-lecteur réellement transmises au web player (lecture, aléatoire,
+répétition), et **le cas inverse** du clavier : une zone visible qui rétrécit
+sans champ focalisé ne masque plus rien.

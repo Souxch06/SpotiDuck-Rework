@@ -32,7 +32,7 @@
 
   if (window.SpotiDuckUI && window.SpotiDuckUI.version) return; // idempotent
 
-  var VERSION = "2.6.3";
+  var VERSION = "2.6.4";
   var STYLE_ID = "spotiduck-ui-style";
   var BODY_CLASS = "sd-mobile";
 
@@ -99,12 +99,16 @@
     takeControl: true, // click Spotify's "Écouter sur cet appareil" prompt
     resume: false, // resume playback when something else pauses it
     /* Interface */
-    tabbar: true, // can be turned off if the ROM draws its own bar
+    /* Barre d'onglets en BAS : désactivée par défaut depuis la v2.6.4 — la
+       navigation est celle de l'application d'origine, en HAUT (`.sd-nav`).
+       Le réglage reste disponible pour ceux qui préfèrent les onglets. */
+    tabbar: false,
     haptics: true,
     /* Densité d'affichage : le seul réglage qui change la taille de TOUTE
        l'interface (voir `applyDensity`) — compact | normal | large. */
     density: "normal",
     labels: {
+      app: "SpotiDuck",
       home: "Accueil",
       search: "Rechercher",
       library: "Bibliothèque",
@@ -119,6 +123,11 @@
       pause: "Pause",
       next: "Suivant",
       prev: "Précédent",
+      notifications: "Notifications",
+      friends: "Activité des amis",
+      profile: "Profil",
+      notAvailable: "Indisponible ici — Spotify ne propose pas cet écran sur cette page",
+      progress: "Position de lecture",
       shuffle: "Lecture aléatoire",
       repeat: "Répéter",
       nowPlaying: "Lecture en cours",
@@ -811,6 +820,13 @@
       '<g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2.8l1.2 1.9 2.2-.5.6 2.2 2 .9-.9 2 1.2 1.9-1.2 1.9.9 2-2 .9-.6 2.2-2.2-.5L12 21.2l-1.2-1.9-2.2.5-.6-2.2-2-.9.9-2L5.7 12l1.2-1.9-.9-2 2-.9.6-2.2 2.2.5z"/></g>',
     discLine:
       '<g fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.6"/></g>',
+    /* Barre de navigation supérieure (disposition d'origine de SpotiDuck). */
+    bellLine:
+      '<g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9.5a6 6 0 0 1 12 0c0 4 1.2 5.6 2.2 6.6.5.5.1 1.4-.6 1.4H4.4c-.7 0-1.1-.9-.6-1.4C4.8 15.1 6 13.5 6 9.5z"/><path d="M9.8 20.2a2.4 2.4 0 0 0 4.4 0"/></g>',
+    friendsLine:
+      '<g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="9.2" cy="8.6" r="3.4"/><path d="M2.8 19.4c0-3 2.9-5 6.4-5s6.4 2 6.4 5"/><path d="M16.4 6.2a3.2 3.2 0 0 1 0 6.2"/><path d="M17.6 14.8c2.2.5 3.6 1.9 3.6 4"/></g>',
+    spotifyLogo:
+      '<g><circle cx="12" cy="12" r="10"/><g fill="none" stroke="#000" stroke-width="1.9" stroke-linecap="round"><path d="M7 9c3.3-.9 6.7-.5 9.6 1.3"/><path d="M7.6 12.6c2.7-.7 5.4-.4 7.8 1.1"/><path d="M8.2 15.9c2.1-.5 4.2-.3 6 .9"/></g></g>',
     personLine:
       '<g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><circle cx="12" cy="8" r="3.6"/><path d="M4.8 20.4c0-3.3 3.2-5.6 7.2-5.6s7.2 2.3 7.2 5.6"/></g>',
     refreshLine:
@@ -869,22 +885,70 @@
         svg(ICONS.chevronDown) +
         "</button>";
 
-      /* ---- mini player ---- */
+      /* ---- barre de navigation supérieure (disposition d'origine) ----
+         Maison · Bibliothèque · Recherche sont les trois vues ; le logo rappelle
+         l'application, et les trois icônes de droite ouvrent les écrans de
+         Spotify (notifications, amis, profil). Sur les sous-pages, la barre de
+         titre ci-dessus reprend la main. */
+      var nav = document.createElement("nav");
+      nav.className = "sd-nav";
+      nav.setAttribute("role", "tablist");
+      nav.setAttribute("aria-label", Settings.labels.app);
+      nav.innerHTML = [
+        navItem("home", ICONS.homeLine, ICONS.homeSolid, Settings.labels.home),
+        navItem("library", ICONS.libraryLine, ICONS.librarySolid, Settings.labels.library),
+        navItem("search", ICONS.searchLine, ICONS.searchSolid, Settings.labels.search),
+        '<span class="sd-nav-logo" aria-hidden="true">' + svg(ICONS.spotifyLogo) + "</span>",
+        '<button class="sd-iconbtn sd-nav-bell" type="button" aria-label="' +
+          Settings.labels.notifications +
+          '">' +
+          svg(ICONS.bellLine) +
+          "</button>",
+        '<button class="sd-iconbtn sd-nav-friends" type="button" aria-label="' +
+          Settings.labels.friends +
+          '">' +
+          svg(ICONS.friendsLine) +
+          "</button>",
+        '<button class="sd-iconbtn sd-nav-profile" type="button" aria-label="' +
+          Settings.labels.profile +
+          '">' +
+          svg(ICONS.personLine) +
+          "</button>",
+      ].join("");
+
+      /* ---- mini player : le lecteur complet, comme dans l'application ----
+         Ligne 1 · pochette, titre, artiste, j'aime
+         Ligne 2 · aléatoire, précédent, lecture, suivant, répétition
+         Ligne 3 · temps écoulé, barre de progression, durée totale */
       var mini = document.createElement("div");
       mini.className = "sd-mini";
       mini.setAttribute("role", "button");
       mini.setAttribute("tabindex", "0");
       mini.setAttribute("aria-label", Settings.labels.nowPlaying);
       mini.innerHTML =
+        '<div class="sd-mini-top">' +
         '<div class="sd-mini-art"><img alt="" decoding="async"></div>' +
         '<div class="sd-mini-meta">' +
         '<span class="sd-mini-title"></span>' +
         '<span class="sd-mini-artist"></span>' +
         "</div>" +
-        '<div class="sd-mini-controls">' +
-        '<button class="sd-iconbtn sd-mini-like" type="button">' +
+        '<button class="sd-iconbtn sd-mini-like" type="button" aria-label="' +
+        Settings.labels.like +
+        '">' +
         svg(ICONS.heartLine, "sd-icon-line") +
         svg(ICONS.heartSolid, "sd-icon-solid") +
+        "</button>" +
+        "</div>" +
+        '<div class="sd-mini-row">' +
+        '<button class="sd-iconbtn sd-mini-shuffle" type="button" aria-label="' +
+        Settings.labels.shuffle +
+        '">' +
+        svg(ICONS.shuffleLine) +
+        "</button>" +
+        '<button class="sd-iconbtn sd-mini-prev" type="button" aria-label="' +
+        Settings.labels.previous +
+        '">' +
+        svg(ICONS.prev) +
         "</button>" +
         '<button class="sd-iconbtn sd-mini-play" type="button"></button>' +
         '<button class="sd-iconbtn sd-mini-next" type="button" aria-label="' +
@@ -892,8 +956,21 @@
         '">' +
         svg(ICONS.next) +
         "</button>" +
+        '<button class="sd-iconbtn sd-mini-repeat" type="button" aria-label="' +
+        Settings.labels.repeat +
+        '">' +
+        svg(ICONS.repeatLine) +
+        "</button>" +
         "</div>" +
-        '<div class="sd-mini-progress"><i></i></div>';
+        '<div class="sd-mini-seek-row">' +
+        '<span class="sd-mini-time sd-mini-cur">0:00</span>' +
+        '<div class="sd-mini-seek" role="slider" tabindex="0" aria-label="' +
+        Settings.labels.progress +
+        '" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">' +
+        "<i></i>" +
+        "</div>" +
+        '<span class="sd-mini-time sd-mini-dur">0:00</span>' +
+        "</div>";
 
       /* ---- tab bar ---- */
       var tabbar = document.createElement("nav");
@@ -1042,6 +1119,7 @@
         '<span class="sd-offline-icon">' + svg(ICONS.cloudOffLine) + "</span>" +
         "<span>" + Settings.labels.offline + "</span>";
 
+      L.appendChild(nav);
       L.appendChild(topbar);
       L.appendChild(mini);
       L.appendChild(tabbar);
@@ -1069,9 +1147,20 @@
         miniTitle: $(".sd-mini-title", mini),
         miniArtist: $(".sd-mini-artist", mini),
         miniLike: $(".sd-mini-like", mini),
+        miniShuffle: $(".sd-mini-shuffle", mini),
+        miniPrev: $(".sd-mini-prev", mini),
         miniPlay: $(".sd-mini-play", mini),
         miniNext: $(".sd-mini-next", mini),
-        miniProgress: $(".sd-mini-progress > i", mini),
+        miniRepeat: $(".sd-mini-repeat", mini),
+        miniCur: $(".sd-mini-cur", mini),
+        miniDur: $(".sd-mini-dur", mini),
+        miniSeek: $(".sd-mini-seek", mini),
+        miniProgress: $(".sd-mini-seek > i", mini),
+        nav: nav,
+        navItems: $$(".sd-nav-item", nav),
+        navBell: $(".sd-nav-bell", nav),
+        navFriends: $(".sd-nav-friends", nav),
+        navProfile: $(".sd-nav-profile", nav),
         tabbar: tabbar,
         tabs: $$(".sd-tab", tabbar),
         player: player,
@@ -1151,20 +1240,30 @@
       toggle(e.miniLike, "is-active", s.liked);
       e.like.setAttribute("aria-label", s.liked ? Settings.labels.unlike : Settings.labels.like);
 
-      /* shuffle / repeat */
-      toggle(e.shuffle, "is-active", !!s.shuffle);
-      e.shuffle.setAttribute("aria-checked", s.shuffle ? "true" : "false");
-      toggle(e.repeat, "is-active", s.repeat !== "off");
-      toggle(e.repeat, "is-one", s.repeat === "track");
-      e.repeat.setAttribute("aria-checked", s.repeat === "off" ? "false" : s.repeat === "track" ? "mixed" : "true");
+      /* shuffle / repeat (feuille du lecteur **et** mini-lecteur) */
+      [e.shuffle, e.miniShuffle].forEach(function (btn) {
+        if (!btn) return;
+        toggle(btn, "is-active", !!s.shuffle);
+        btn.setAttribute("aria-checked", s.shuffle ? "true" : "false");
+      });
+      [e.repeat, e.miniRepeat].forEach(function (btn) {
+        if (!btn) return;
+        toggle(btn, "is-active", s.repeat !== "off");
+        toggle(btn, "is-one", s.repeat === "track");
+        btn.setAttribute(
+          "aria-checked",
+          s.repeat === "off" ? "false" : s.repeat === "track" ? "mixed" : "true"
+        );
+      });
 
       /* disable what the web player cannot do here */
       e.lyrics.hidden = !Spotify.lyricsButton();
       e.device.hidden = !Spotify.devicesButton();
       e.queue.hidden = !Spotify.queueButton() && !$("#Desktop_PanelContainer_Id");
 
-      /* duration */
+      /* duration (feuille du lecteur + mini-lecteur) */
       e.tDur.textContent = fmtTime(s.duration);
+      if (e.miniDur) e.miniDur.textContent = fmtTime(s.duration);
       this.paintProgress();
 
       /* route chrome */
@@ -1178,6 +1277,13 @@
       var pos = livePosition();
       var ratio = s.duration > 0 ? clamp(pos / s.duration, 0, 1) : 0;
       this.el.miniProgress.style.width = (ratio * 100).toFixed(2) + "%";
+      if (this.el.miniCur && !s.seeking) this.el.miniCur.textContent = fmtTime(pos);
+      if (this.el.miniSeek) {
+        var pct = String(Math.round(ratio * 100));
+        if (this.el.miniSeek.getAttribute("aria-valuenow") !== pct) {
+          this.el.miniSeek.setAttribute("aria-valuenow", pct);
+        }
+      }
       if (!s.seeking) {
         this.el.seekFill.style.width = (ratio * 100).toFixed(2) + "%";
         this.el.seekThumb.style.left = (ratio * 100).toFixed(2) + "%";
@@ -1213,6 +1319,19 @@
         t.setAttribute("aria-selected", active ? "true" : "false");
       });
 
+      /* Barre de navigation supérieure : présente sur les trois vues
+         (accueil, recherche, bibliothèque). Sur une sous-page — playlist,
+         album, artiste —, c'est la barre de titre ci-dessous qui prend la
+         main, avec son bouton retour. */
+      var navOn = !isSubPage;
+      html.classList.toggle("sd-nav-on", navOn);
+      e.navItems.forEach(function (item) {
+        var name = item.getAttribute("data-tab");
+        var active = name === s.tab;
+        item.classList.toggle("is-active", active);
+        item.setAttribute("aria-selected", active ? "true" : "false");
+      });
+
       var showTop = isLibrary || isSubPage;
       e.topbar.classList.toggle("is-visible", showTop);
       e.topbarBack.style.display = isSubPage ? "" : "none";
@@ -1234,11 +1353,24 @@
       var e = this.el;
       var self = this;
 
-      /* tab bar */
+      /* tab bar (bas, désactivée par défaut) */
       e.tabbar.addEventListener("click", function (ev) {
         var btn = ev.target.closest(".sd-tab");
         if (!btn) return;
         Router.tab(btn.getAttribute("data-tab"));
+      });
+
+      /* barre de navigation supérieure : mêmes trois vues, plus les écrans de
+         Spotify (notifications, amis, profil) */
+      e.nav.addEventListener("click", function (ev) {
+        var item = ev.target.closest(".sd-nav-item");
+        if (item) {
+          Router.tab(item.getAttribute("data-tab"));
+          return;
+        }
+        if (ev.target.closest(".sd-nav-bell")) Actions.spotifyButton("bell");
+        else if (ev.target.closest(".sd-nav-friends")) Actions.spotifyButton("friends");
+        else if (ev.target.closest(".sd-nav-profile")) Actions.spotifyButton("profile");
       });
 
       /* mini player: tap = open, controls stop propagation */
@@ -1259,6 +1391,18 @@
       e.miniNext.addEventListener("click", function (ev) {
         ev.stopPropagation();
         Actions.next();
+      });
+      e.miniPrev.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        Actions.prev();
+      });
+      e.miniShuffle.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        Actions.shuffle();
+      });
+      e.miniRepeat.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        Actions.repeat();
       });
       e.miniLike.addEventListener("click", function (ev) {
         ev.stopPropagation();
@@ -1342,6 +1486,24 @@
       Gestures.bind();
     },
   };
+
+  /**
+   * Élément de la barre de navigation **supérieure** : c'est la disposition de
+   * l'application d'origine (maison · bibliothèque · recherche · logo ·
+   * notifications · amis · profil), pas les onglets du bas.
+   */
+  function navItem(name, line, solid, label) {
+    return (
+      '<button class="sd-nav-item" type="button" role="tab" data-tab="' +
+      name +
+      '" aria-label="' +
+      label +
+      '" aria-selected="false">' +
+      svg(line, "sd-icon-line") +
+      svg(solid, "sd-icon-solid") +
+      "</button>"
+    );
+  }
 
   function tab(name, line, solid, label) {
     return (
@@ -1480,6 +1642,35 @@
    *     immediately, then re-reads the DOM shortly after so the two can
    *     never drift apart.
    * ------------------------------------------------------------------ */
+  /**
+   * Boutons de droite de la barre de navigation : ils ouvrent **les** écrans de
+   * Spotify (notifications, activité des amis, menu du profil) en cliquant le
+   * bouton correspondant du web player. Si Spotify ne propose pas ce bouton
+   * (page de connexion, autre version), on le dit au lieu de laisser un bouton
+   * qui ne fait rien.
+   */
+  var SPOTIFY_BUTTONS = {
+    bell: [
+      '[data-testid="notification-button"]',
+      'button[aria-label*="otification"]',
+      '[data-testid="whats-new-button"]',
+      'button[aria-label*="ouveaut"]',
+    ],
+    friends: [
+      '[data-testid="friends-button"]',
+      'button[aria-label*="ctivit"]',
+      'button[aria-label*="riends"]',
+      'button[aria-label*="rofil d"]',
+    ],
+    profile: [
+      '[data-testid="user-widget-link"]',
+      'button[data-testid="user-widget-link"]',
+      '[data-testid="user-widget-dropdown"]',
+      'button[aria-label*="rofil"]',
+      'button[aria-label*="count"]',
+    ],
+  };
+
   var Actions = {
     settle: function (delay) {
       clearTimeout(Actions._t);
@@ -1562,6 +1753,24 @@
       if (!Spotify.cycleRepeat()) emit({ repeat: State.repeat }, "rollback");
       this.settle(500);
     },
+    /** Ouvre un écran de Spotify depuis la barre de navigation supérieure. */
+    spotifyButton: function (which) {
+      var list = SPOTIFY_BUTTONS[which] || [];
+      for (var i = 0; i < list.length; i++) {
+        var el = $(list[i]);
+        if (el && el.getClientRects().length) {
+          try {
+            el.click();
+            return true;
+          } catch (e) {
+            /* on essaie le suivant */
+          }
+        }
+      }
+      Toast.show(Settings.labels.notAvailable, 2200);
+      return false;
+    },
+
     like: function () {
       buzzer();
       var want = !State.liked;
@@ -2638,7 +2847,61 @@
       this.miniSwipe();
       this.sheetDrag();
       this.seekDrag();
+      this.miniSeekDrag();
     },
+    /* Barre de progression du mini-lecteur : on peut y poser le doigt pour se
+       déplacer dans le morceau sans ouvrir le lecteur plein écran. */
+    miniSeekDrag: function () {
+      var rail = UI.el.miniSeek;
+      var fill = UI.el.miniProgress;
+      var cur = UI.el.miniCur;
+      if (!rail) return;
+      var dragging = false;
+      function ratioFrom(ev) {
+        var r = rail.getBoundingClientRect();
+        return clamp((ev.clientX - r.left) / Math.max(1, r.width), 0, 1);
+      }
+      function preview(ratio) {
+        var ms = ratio * (State.duration || 0);
+        State.seekPreview = ms;
+        fill.style.width = (ratio * 100).toFixed(2) + "%";
+        if (cur) cur.textContent = fmtTime(ms);
+      }
+      rail.addEventListener("pointerdown", function (ev) {
+        if (!State.duration) return;
+        ev.stopPropagation(); // ne pas ouvrir le lecteur plein écran
+        dragging = true;
+        emit({ seeking: true }, "mini-seek-start");
+        rail.classList.add("is-dragging");
+        try {
+          rail.setPointerCapture(ev.pointerId);
+        } catch (e) {
+          /* WebViews plus anciennes */
+        }
+        preview(ratioFrom(ev));
+      });
+      rail.addEventListener("pointermove", function (ev) {
+        if (!dragging) return;
+        ev.stopPropagation();
+        preview(ratioFrom(ev));
+      });
+      var end = function (ev) {
+        if (!dragging) return;
+        dragging = false;
+        rail.classList.remove("is-dragging");
+        Actions.seek(ratioFrom(ev) * (State.duration || 0));
+        buzz(8);
+      };
+      rail.addEventListener("pointerup", end);
+      rail.addEventListener("pointercancel", end);
+      /* Un simple appui sur la barre ne doit pas ouvrir la feuille. */
+      ["click", "pointerdown", "pointerup"].forEach(function (type) {
+        rail.addEventListener(type, function (ev) {
+          ev.stopPropagation();
+        });
+      });
+    },
+
     /* mini player: tap → open, swipe ← → next, swipe → → previous, swipe ↑ → open */
     miniSwipe: function () {
       var el = UI.el.mini;
@@ -2912,13 +3175,40 @@
      *  `clientHeight`: the Android wrapper may fake `window.innerHeight`. */
     watchKeyboard: function () {
       var vv = window.visualViewport;
-      if (!vv) return;
-      var apply = function () {
-        var gap = (document.documentElement.clientHeight || 0) - vv.height;
-        document.documentElement.classList.toggle("sd-keyboard", gap > 120);
+      /* Ce qui faisait « disparaître les boutons du bas de temps en temps » :
+         la classe `sd-keyboard` se posait dès que la zone visible rétrécissait
+         de plus de 120 px, sans vérifier qu'un clavier était ouvert. Or un
+         redimensionnement, une rotation, l'apparition de la barre de
+         navigation système ou le passage d'un onglet à l'autre peuvent faire
+         exactement ça — la barre d'onglets et le mini-lecteur s'effaçaient
+         alors que rien ne gênait. On ne masque donc plus que si un champ de
+         saisie est réellement focalisé. */
+      var typing = function () {
+        var el = document.activeElement;
+        if (!el) return false;
+        var tag = el.tagName;
+        return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable === true;
       };
-      vv.addEventListener("resize", apply);
-      vv.addEventListener("scroll", apply);
+      var apply = function () {
+        var gap = vv ? (document.documentElement.clientHeight || 0) - vv.height : 0;
+        document.documentElement.classList.toggle("sd-keyboard", typing() && gap > 120);
+      };
+      if (vv) {
+        vv.addEventListener("resize", apply);
+        vv.addEventListener("scroll", apply);
+      }
+      /* Le clavier suit le focus : c'est le signal le plus fiable, et il
+         fonctionne même sans `visualViewport`. */
+      document.addEventListener("focusin", apply, true);
+      document.addEventListener(
+        "focusout",
+        function () {
+          setTimeout(apply, 120);
+        },
+        true
+      );
+      window.addEventListener("orientationchange", apply);
+      window.addEventListener("resize", apply);
       apply();
     },
 
@@ -3167,6 +3457,10 @@
     },
     openMenu: function () {
       Sheets.open("menu");
+    },
+    /** Barre de navigation supérieure : notifications, amis, profil. */
+    spotifyButton: function (which) {
+      return Actions.spotifyButton(which);
     },
     openSettings: function () {
       Sheets.open("settings");

@@ -560,8 +560,45 @@ await checkAsync("a native dialog makes our chrome step back", async () => {
   return "ours fades, dialog keeps the taps ✓";
 });
 
+await checkAsync("a shrinking viewport alone does not hide the bars", async () => {
+  // Le bug « les boutons du bas disparaissent de temps en temps » : la classe
+  // `sd-keyboard` se posait dès que la zone visible rétrécissait, sans qu'un
+  // clavier soit ouvert (rotation, barre système, redimensionnement).
+  const html = doc.documentElement;
+  const realVV = window.visualViewport;
+  const fake = { height: 300, width: 360, addEventListener() {}, removeEventListener() {} };
+  Object.defineProperty(window, "visualViewport", { value: fake, configurable: true });
+  Object.defineProperty(html, "clientHeight", { value: 700, configurable: true });
+  // Aucun champ de saisie actif : rien ne doit se masquer.
+  if (doc.activeElement && doc.activeElement.blur) doc.activeElement.blur();
+  SD._internals.Polish.watchKeyboard();
+  await tick(30);
+  assert(!html.classList.contains("sd-keyboard"), "the bars must stay visible when nothing is focused");
+  // Un vrai champ focalisé, clavier ouvert : là, oui.
+  const input = doc.createElement("input");
+  doc.body.appendChild(input);
+  input.focus();
+  SD._internals.Polish.watchKeyboard();
+  await tick(30);
+  assert(html.classList.contains("sd-keyboard"), "the bars must step back for a real keyboard");
+  input.blur();
+  SD._internals.Polish.watchKeyboard();
+  await tick(30);
+  assert(!html.classList.contains("sd-keyboard"), "the bars must come back once the field loses focus");
+  if (realVV) Object.defineProperty(window, "visualViewport", { value: realVV, configurable: true });
+  return "clavier ouvert = barres effacées · sinon visibles ✓";
+});
+
 await checkAsync("software keyboard hides the bars but keeps search usable", async () => {
   const fire = () => window.__vvListeners.filter(([t]) => t === "resize").forEach(([, fn]) => fn());
+  // Un clavier n'existe que si un champ est focalisé : c'est ce que la couche
+  // vérifie maintenant (voir le test précédent, qui couvre le cas inverse).
+  const field = doc.querySelector("#sd-kbd-probe") || doc.createElement("input");
+  if (!field.parentElement) {
+    field.id = "sd-kbd-probe";
+    doc.body.appendChild(field);
+  }
+  field.focus();
   window.visualViewport.height = 300; // keyboard takes ~340px
   fire();
   await tick(30);
@@ -570,6 +607,7 @@ await checkAsync("software keyboard hides the bars but keeps search usable", asy
   fire();
   await tick(30);
   assert(!doc.documentElement.classList.contains("sd-keyboard"), "sd-keyboard not cleared");
+  field.blur();
   return "tab bar + mini slide away ✓";
 });
 
@@ -615,6 +653,65 @@ check("logged-out landing page shows the native welcome screen", () => {
   assert(/\/login\?allow_password=1$/.test(cta.getAttribute("href")), "CTA points at " + cta.getAttribute("href"));
   assert(earlyDoc.querySelector(".sd-welcome-title").textContent === "SpotiDuck", "wrong title");
   return "logo + titre + bouton « Se connecter »";
+});
+
+check("navigation is at the top, like the original app", () => {
+  const nav = doc.querySelector(".sd-nav");
+  assert(nav, "the top navigation bar was not built");
+  assert(nav.parentElement === doc.body || nav.closest(".sd-layer"), "the nav must live in our layer");
+  const items = [...nav.querySelectorAll(".sd-nav-item")].map((b) => b.getAttribute("data-tab"));
+  assert(items.join("|") === "home|library|search", "nav order: " + items.join("|"));
+  assert(nav.querySelector(".sd-nav-logo"), "the centred logo is missing");
+  ["bell", "friends", "profile"].forEach((k) => {
+    assert(nav.querySelector(".sd-nav-" + k), "missing nav button: " + k);
+  });
+  const labels = [...nav.querySelectorAll("button")].every((b) => b.getAttribute("aria-label"));
+  assert(labels, "every nav button must carry a label");
+  assert(doc.documentElement.classList.contains("sd-nav-on"), "sd-nav-on is not set on a main tab");
+  return "7 éléments · maison/bibliothèque/recherche + logo + 3 écrans Spotify";
+});
+
+await checkAsync("the bottom tab bar is off by default", async () => {
+  // La disposition d'origine a la navigation en haut : la barre du bas reste
+  // disponible (réglage) mais ne s'affiche pas d'elle-même. Le défaut se lit
+  // dans la source — les tests précédents ont pu le basculer à l'exécution.
+  const src = await read("src/inject/spotiduck-ui.js");
+  assert(/tabbar:\s*false/.test(src), "the default for `tabbar` must be false");
+  SD.set("tabbar", false);
+  assert(doc.documentElement.classList.contains("sd-no-tabbar"), "sd-no-tabbar missing");
+  assert(doc.querySelectorAll(".sd-tab").length === 3, "the tab bar must still exist in the DOM (setting)");
+  return "navigation en haut · onglets disponibles mais masqués ✓";
+});
+
+check("the mini player carries the full transport", () => {
+  const mini = doc.querySelector(".sd-mini");
+  ["shuffle", "prev", "play", "next", "repeat", "like"].forEach((k) => {
+    assert(mini.querySelector(".sd-mini-" + k), "missing mini control: " + k);
+  });
+  assert(mini.querySelector(".sd-mini-cur"), "elapsed time missing");
+  assert(mini.querySelector(".sd-mini-dur"), "duration missing");
+  assert(mini.querySelector(".sd-mini-seek[role='slider']"), "the progress rail must be a slider");
+  return "aléatoire · précédent · lecture · suivant · répétition · progression";
+});
+
+check("the mini player's own controls drive playback", () => {
+  const mini = doc.querySelector(".sd-mini");
+  const before = window.MockSpotify.state.playing;
+  mini.querySelector(".sd-mini-play").click();
+  assert(window.MockSpotify.state.playing !== before, "mini play did not toggle playback");
+  mini.querySelector(".sd-mini-play").click();
+  const shuffleBtn = doc.querySelector('[data-testid="control-button-shuffle"]');
+  const shuffleBefore = shuffleBtn.getAttribute("aria-checked");
+  mini.querySelector(".sd-mini-shuffle").click();
+  assert(shuffleBtn.getAttribute("aria-checked") !== shuffleBefore, "mini shuffle did not reach the web player");
+  const repeatBefore = doc.querySelector('[data-testid="control-button-repeat"]').getAttribute("aria-checked");
+  mini.querySelector(".sd-mini-repeat").click();
+  assert(
+    doc.querySelector('[data-testid="control-button-repeat"]').getAttribute("aria-checked") !== repeatBefore,
+    "mini repeat did not reach the web player"
+  );
+  mini.querySelector(".sd-mini-repeat").click();
+  return "lecture · aléatoire · répétition ✓";
 });
 
 check("the layout viewport is pinned to the device width", () => {

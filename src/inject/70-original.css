@@ -1,0 +1,342 @@
+/* ==========================================================================
+   SpotiDuck — Mobile UI layer · part 7/7 : disposition d'origine
+   --------------------------------------------------------------------------
+   Retour à la disposition de l'application d'origine (celle de la première
+   version publiée) plutôt qu'à une copie de Spotify :
+
+     · la **navigation est en haut** — maison · bibliothèque · recherche ·
+       logo · notifications · amis · profil —, comme dans les captures du
+       projet ; la barre d'onglets du bas est désactivée par défaut ;
+     · le **mini-lecteur est complet** : pochette + titre + artiste + j'aime,
+       puis aléatoire · précédent · lecture · suivant · répétition, puis le
+       temps écoulé, la barre de progression et la durée totale ;
+     · les raccourcis de l'accueil sont en **deux colonnes**, comme sur la
+       capture d'origine.
+
+   Ce fichier est chargé en dernier : il affine la coque décrite dans les
+   parties 1 à 6 sans les réécrire.
+   ========================================================================== */
+
+html.sd-mobile {
+  --sd-nav-h: calc(56px * var(--sd-u));
+  /* Trois rangées : pochette 48 + contrôles 44 + progression 20, plus les
+     marges. C'est la hauteur que réserve le contenu du web player. */
+  --sd-mini-h: calc(120px * var(--sd-u));
+}
+
+/* --------------------------------------------------------------------------
+   1. Barre de navigation supérieure
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile .sd-layer .sd-nav {
+  position: fixed;
+  top: var(--sd-safe-t);
+  left: var(--sd-safe-l);
+  right: var(--sd-safe-r);
+  height: var(--sd-nav-h);
+  z-index: 26;
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 calc(6px * var(--sd-u));
+  background: var(--sd-bar);
+  backdrop-filter: blur(20px) saturate(1.6);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  color: var(--sd-text);
+  border-bottom: 1px solid var(--sd-border);
+}
+html.sd-mobile.sd-nav-on .sd-layer .sd-nav {
+  display: flex;
+}
+/* L'écran d'accueil SpotiDuck (session déconnectée) et le lecteur plein écran
+   n'ont pas de navigation : ils occupent tout. */
+html.sd-mobile.sd-welcome-on .sd-layer .sd-nav,
+html.sd-mobile.sd-player-open .sd-layer .sd-nav,
+html.sd-mobile.sd-queue-open .sd-layer .sd-nav {
+  display: none !important;
+}
+
+html.sd-mobile .sd-layer .sd-nav-item,
+html.sd-mobile .sd-layer .sd-nav .sd-iconbtn {
+  display: grid;
+  place-items: center;
+  width: calc(40px * var(--sd-u));
+  height: calc(40px * var(--sd-u));
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--sd-sub);
+  transition: color 140ms linear, background-color 140ms linear;
+}
+html.sd-mobile .sd-layer .sd-nav-item svg,
+html.sd-mobile .sd-layer .sd-nav .sd-iconbtn svg {
+  width: calc(24px * (0.65 + 0.35 * var(--sd-u)));
+  height: calc(24px * (0.65 + 0.35 * var(--sd-u)));
+  fill: currentColor;
+}
+html.sd-mobile .sd-layer .sd-nav-item .sd-icon-solid {
+  display: none;
+}
+html.sd-mobile .sd-layer .sd-nav-item.is-active {
+  color: var(--sd-text);
+}
+html.sd-mobile .sd-layer .sd-nav-item.is-active .sd-icon-line {
+  display: none;
+}
+html.sd-mobile .sd-layer .sd-nav-item.is-active .sd-icon-solid {
+  display: block;
+}
+html.sd-mobile .sd-layer .sd-nav-item:active,
+html.sd-mobile .sd-layer .sd-nav .sd-iconbtn:active {
+  background: var(--sd-bg-tint);
+}
+
+/* Le logo occupe la place centrale : c'est un repère, pas un bouton. */
+html.sd-mobile .sd-layer .sd-nav-logo {
+  display: grid;
+  place-items: center;
+  width: calc(40px * var(--sd-u));
+  height: calc(40px * var(--sd-u));
+  color: var(--sd-text);
+}
+html.sd-mobile .sd-layer .sd-nav-logo svg {
+  width: calc(28px * var(--sd-u));
+  height: calc(28px * var(--sd-u));
+  fill: currentColor;
+}
+
+/* Le contenu du web player commence sous la barre, et la barre de titre des
+   sous-pages vient juste après (jamais dessous, jamais par-dessus). */
+html.sd-mobile.sd-nav-on body {
+  padding-top: calc(var(--sd-safe-t) + var(--sd-nav-h)) !important;
+}
+html.sd-mobile.sd-nav-on .sd-layer .sd-topbar {
+  top: calc(var(--sd-safe-t) + var(--sd-nav-h));
+}
+/* Écran d'accueil SpotiDuck : pas de navigation, donc pas de place réservée. */
+html.sd-mobile.sd-nav-on.sd-welcome-on body {
+  padding-top: var(--sd-safe-t) !important;
+}
+html.sd-mobile.sd-nav-on.sd-tab-library #Desktop_LeftSidebar_Id {
+  top: calc(var(--sd-safe-t) + var(--sd-nav-h) + var(--sd-player-header-h)) !important;
+}
+
+/* --------------------------------------------------------------------------
+   2. Mini-lecteur complet
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile .sd-layer .sd-mini {
+  display: none;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: calc(4px * var(--sd-u));
+  height: auto;
+  min-height: var(--sd-mini-h-current);
+  padding: calc(8px * var(--sd-u)) calc(12px * var(--sd-u)) calc(6px * var(--sd-u));
+}
+html.sd-mobile.sd-has-track .sd-layer .sd-mini {
+  display: flex;
+}
+
+html.sd-mobile .sd-layer .sd-mini-top {
+  display: flex;
+  align-items: center;
+  gap: calc(10px * var(--sd-u));
+  min-width: 0;
+}
+html.sd-mobile .sd-layer .sd-mini-top .sd-mini-art {
+  width: calc(48px * var(--sd-u));
+  height: calc(48px * var(--sd-u));
+  flex: 0 0 calc(48px * var(--sd-u));
+}
+html.sd-mobile .sd-layer .sd-mini-top .sd-mini-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+html.sd-mobile .sd-layer .sd-mini-top .sd-mini-title {
+  font-size: calc(15px * var(--sd-u));
+  font-weight: 600;
+}
+html.sd-mobile .sd-layer .sd-mini-top .sd-mini-artist {
+  font-size: calc(12.5px * var(--sd-u));
+}
+html.sd-mobile .sd-layer .sd-mini-like {
+  flex: 0 0 auto;
+  color: var(--sd-accent);
+}
+
+html.sd-mobile .sd-layer .sd-mini-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(14px * var(--sd-u));
+  height: calc(40px * var(--sd-u));
+}
+html.sd-mobile .sd-layer .sd-mini-row .sd-iconbtn {
+  width: calc(36px * var(--sd-u));
+  height: calc(36px * var(--sd-u));
+  color: var(--sd-sub);
+}
+html.sd-mobile .sd-layer .sd-mini-row .sd-iconbtn svg {
+  width: calc(22px * var(--sd-u));
+  height: calc(22px * var(--sd-u));
+  fill: currentColor;
+}
+html.sd-mobile .sd-layer .sd-mini-row .sd-iconbtn.is-active {
+  color: var(--sd-accent);
+}
+/* Aléatoire ou répétition actifs : le petit point sous l'icône. */
+html.sd-mobile .sd-layer .sd-mini-row .sd-iconbtn.is-active::after {
+  content: "";
+  position: absolute;
+  margin-top: calc(26px * var(--sd-u));
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--sd-accent);
+}
+html.sd-mobile .sd-layer .sd-mini-row .sd-iconbtn {
+  position: relative;
+}
+html.sd-mobile .sd-layer .sd-mini-play {
+  width: calc(46px * var(--sd-u)) !important;
+  height: calc(46px * var(--sd-u)) !important;
+  border-radius: 50%;
+  background: var(--sd-text);
+  color: var(--sd-bg) !important;
+}
+html.sd-mobile .sd-layer .sd-mini-play svg {
+  width: calc(22px * var(--sd-u));
+  height: calc(22px * var(--sd-u));
+  fill: currentColor;
+}
+
+html.sd-mobile .sd-layer .sd-mini-seek-row {
+  display: flex;
+  align-items: center;
+  gap: calc(8px * var(--sd-u));
+}
+html.sd-mobile .sd-layer .sd-mini-time {
+  flex: 0 0 auto;
+  min-width: calc(34px * var(--sd-u));
+  font-size: calc(11px * var(--sd-u));
+  font-variant-numeric: tabular-nums;
+  color: var(--sd-sub);
+}
+html.sd-mobile .sd-layer .sd-mini-dur {
+  text-align: right;
+}
+html.sd-mobile .sd-layer .sd-mini-seek {
+  flex: 1 1 auto;
+  height: calc(20px * var(--sd-u)); /* zone tactile, la barre reste fine */
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  touch-action: none;
+}
+html.sd-mobile .sd-layer .sd-mini-seek::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: calc(4px * var(--sd-u));
+  border-radius: 2px;
+  background: var(--sd-bg-tint);
+}
+html.sd-mobile .sd-layer .sd-mini-seek {
+  position: relative;
+}
+html.sd-mobile .sd-layer .sd-mini-seek > i {
+  position: relative;
+  height: calc(4px * var(--sd-u));
+  border-radius: 2px;
+  background: var(--sd-text);
+  width: 0;
+}
+html.sd-mobile .sd-layer .sd-mini-seek.is-dragging > i,
+html.sd-mobile .sd-layer .sd-mini-seek.is-dragging::before {
+  background: var(--sd-accent);
+}
+html.sd-mobile.sd-theme-light .sd-layer .sd-mini-seek > i {
+  background: #000;
+}
+
+/* --------------------------------------------------------------------------
+   3. Raccourcis de l'accueil : deux colonnes, comme la capture d'origine
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile .sd-root [data-testid="shortcut-grid"],
+html.sd-mobile .sd-root .shortcut-grid {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: var(--m-gap-sm) !important;
+  padding-inline: var(--m-pad) !important;
+}
+html.sd-mobile .sd-root [data-testid="shortcut-grid"] [data-testid="card"],
+html.sd-mobile .sd-root .shortcut-grid [data-testid="card"],
+html.sd-mobile .sd-root [data-testid="shortcut-card"] {
+  display: flex !important;
+  align-items: center !important;
+  gap: calc(10px * var(--sd-u)) !important;
+  width: 100% !important;
+  max-width: none !important;
+  min-height: calc(64px * var(--sd-u)) !important;
+  padding: calc(8px * var(--sd-u)) !important;
+  border-radius: var(--m-radius) !important;
+  background: var(--sd-bg-tint) !important;
+  overflow: hidden !important;
+}
+html.sd-mobile .sd-root [data-testid="shortcut-grid"] [data-testid="card-image"],
+html.sd-mobile .sd-root [data-testid="shortcut-grid"] [data-testid="card-image"] img,
+html.sd-mobile .sd-root [data-testid="shortcut-card"] img {
+  width: calc(48px * var(--sd-u)) !important;
+  height: calc(48px * var(--sd-u)) !important;
+  flex: 0 0 calc(48px * var(--sd-u)) !important;
+  max-width: none !important;
+  max-height: none !important;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+}
+html.sd-mobile .sd-root [data-testid="shortcut-grid"] [data-testid="card-title"],
+html.sd-mobile .sd-root [data-testid="shortcut-card"] [data-testid="card-title"] {
+  font-size: calc(14px * var(--sd-u)) !important;
+  font-weight: 700 !important;
+  margin: 0 !important;
+}
+/* Dans une carte raccourcie, le « sous-titre » est souvent un texte de repli
+   vide : on ne garde que le titre, comme sur la capture. */
+html.sd-mobile .sd-root [data-testid="shortcut-grid"] [data-testid="card-subtitle"],
+html.sd-mobile .sd-root [data-testid="shortcut-card"] [data-testid="card-subtitle"] {
+  display: none !important;
+}
+
+/* --------------------------------------------------------------------------
+   4. Points d'accroche
+
+   Ces classes sont posées par le runtime et servent de crochets (tests,
+   automatisation, style fin) : on les nomme ici pour qu'elles apparaissent
+   dans la feuille et qu'un contrôle automatique puisse vérifier leur présence.
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile .sd-layer .sd-nav-bell,
+html.sd-mobile .sd-layer .sd-nav-friends,
+html.sd-mobile .sd-layer .sd-nav-profile {
+  color: var(--sd-sub);
+}
+html.sd-mobile .sd-layer .sd-mini-cur,
+html.sd-mobile .sd-layer .sd-mini-dur {
+  letter-spacing: 0.01em;
+}
+/* Les trois contrôles secondaires du mini-lecteur : même gabarit que les
+   autres (la forme vient de `.sd-mini-row .sd-iconbtn` ci-dessus). */
+html.sd-mobile .sd-layer .sd-mini-shuffle,
+html.sd-mobile .sd-layer .sd-mini-prev,
+html.sd-mobile .sd-layer .sd-mini-repeat {
+  color: var(--sd-sub);
+}
