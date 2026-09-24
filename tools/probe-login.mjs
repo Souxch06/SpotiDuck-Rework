@@ -99,6 +99,51 @@ async function describe(page) {
   });
 }
 
+/** Remplit les champs visibles et clique le bouton de validation. */
+async function tryLogin(page, { email, password }) {
+  const filled = await page.evaluate(
+    (values) => {
+      const setValue = (el, value) => {
+        el.focus();
+        el.value = value;
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      };
+      const pwd = document.querySelector("input[type='password']");
+      const mail = document.querySelector(
+        "input[type='email'],input[name='username'],input[autocomplete='username'],input[type='text']"
+      );
+      if (mail) setValue(mail, values.email);
+      if (pwd) setValue(pwd, values.password);
+      const wanted = /se connecter|continuer|connexion|log in|sign in|suivant/i;
+      const buttons = [...document.querySelectorAll("button,[role='button'],input[type='submit']")].filter(
+        (b) => wanted.test((b.innerText || b.textContent || "").trim()) && b.getBoundingClientRect().height > 4
+      );
+      const button = buttons[buttons.length - 1];
+      if (button) button.click();
+      return { filledMail: !!mail, filledPassword: !!pwd, clicked: button ? (button.innerText || "").trim() : null };
+    },
+    { email, password }
+  );
+  await sleep(9000);
+  const after = await page.evaluate(() => {
+    const text = (document.body?.innerText || "").replace(/\s+/g, " ").trim();
+    const alerts = [...document.querySelectorAll("[role='alert'],[aria-live],.error,[data-testid*='error'],[class*='error']")]
+      .map((e) => (e.innerText || "").trim())
+      .filter((t) => t.length > 3)
+      .slice(0, 4);
+    return {
+      url: location.href,
+      title: document.title,
+      passwordFields: document.querySelectorAll("input[type='password']").length,
+      alerts,
+      captcha: /captcha|je ne suis pas un robot|challenge|vérification/i.test(text),
+      text: text.slice(0, 400),
+    };
+  });
+  return { filled, ...after };
+}
+
 /** Clique le bouton dont le texte parle de Google, et suit ce qui s'ouvre. */
 async function clickGoogle(browser, page) {
   const clicked = await page.evaluate(() => {
@@ -148,6 +193,7 @@ async function clickGoogle(browser, page) {
       url: u,
       title: await p.title().catch(() => ""),
       body: await p.evaluate(() => (document.body?.innerText || "").replace(/\s+/g, " ").slice(0, 400)).catch(() => ""),
+      hasOpener: await p.evaluate(() => !!window.opener).catch(() => null),
     };
   }
 
@@ -205,16 +251,47 @@ async function main() {
       note(`Formulaires « ${name} »`, JSON.stringify(info.forms || []));
     }
 
-    // Le clic qui décide de tout : « Continuer avec Google » depuis la page
-    // moderne. Si Google refuse, on le voit ici, avec ses mots.
-    const modern = pages.find((p) => p.name === "moderne");
-    if (modern) {
-      const result = await clickGoogle(browser, modern.page).catch((e) => ({ error: String(e) }));
-      report.googleClick = result;
-      note("Clic Google", JSON.stringify(result).slice(0, 900));
-      if (result && result.blocked) {
-        warn("Google refuse la connexion", `refus détecté — ${JSON.stringify(result).slice(0, 600)}`);
-      }
+    // Une vraie tentative de connexion sur chacune des deux pages : c'est le
+    // seul moyen de savoir si le chemin e-mail/mot de passe est vivant, et
+    // lequel des deux formulaires (moderne, `allow_password=1`) répond
+    // correctement à une tentative. Compte de sonde : adresse inexistante,
+    // aucun mot de passe réel n'est envoyé.
+    const stamp = Date.now();
+    for (const [name, values] of [
+      ["moderne", { email: `spotiduck-sonde-${stamp}@example.com`, password: "SondeSpotiDuck!42" }],
+      ["classique", { email: `spotiduck-sonde-${stamp}@example.com`, password: "SondeSpotiDuck!42" }],
+    ]) {
+      const target = pages.find((p) => p.name === name);
+      if (!target) continue;
+      const attempt = await tryLogin(target.page, values).catch((e) => ({ error: String(e) }));
+      report[`attempt_${name}`] = attempt;
+      note(
+        `Tentative « ${name} »`,
+        `champs remplis ${JSON.stringify(attempt.filled)} · clic « ${attempt.clicked} » · après : mot de passe ${attempt.passwordFields} · captcha ${attempt.captcha ? "oui" : "non"}`
+      );
+      note(`Message « ${name} »`, `alertes ${JSON.stringify(attempt.alerts || [])} · texte : ${attempt.text || attempt.error}`);
+    }
+
+    // Le clic qui décide de tout : « Continuer avec Google ». Si Google refuse,
+    // on le voit ici, avec ses mots. On repart d'une page propre : la tentative
+    // de connexion ci-dessus a laissé du texte d'erreur un peu partout.
+    const clean = await browser.newPage();
+    await clean.setUserAgent(UA);
+    await clean.setViewport({ width: 412, height: 915, deviceScaleFactor: 2.6, isMobile: true, hasTouch: true });
+    await clean.goto("https://accounts.spotify.com/fr/login", { waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => {});
+    await sleep(7000);
+    const result = await clickGoogle(browser, clean).catch((e) => ({ error: String(e) }));
+    report.googleClick = result;
+    note("Clic Google", `cliqué ${result.clicked} · cible(s) ouverte(s) ${(result.openedTargets || []).length} · refus ${result.blocked ? "OUI" : "non"} · ${result.reason || result.error || ""}`);
+    if (result.popup) {
+      note("Fenêtre Google", `adresse : ${result.popup.url}`);
+      note("Fenêtre Google (texte)", `titre « ${result.popup.title} » · ${result.popup.body}`);
+      note("Fenêtre Google (opener)", `window.opener ${result.popup.hasOpener ? "présent" : "ABSENT"}`);
+    } else {
+      warn("Aucune fenêtre Google", `rien à lire : ${JSON.stringify(result).slice(0, 300)}`);
+    }
+    if (result.blocked) {
+      warn("Google refuse la connexion", `refus détecté — ${JSON.stringify(result).slice(0, 600)}`);
     }
   } catch (e) {
     warn("Sonde navigateur interrompue", String(e));
@@ -223,6 +300,13 @@ async function main() {
     if (browser) await browser.close().catch(() => {});
     writeFileSync(`${OUT}/rapport.json`, JSON.stringify(report, null, 2));
     console.log(`[Sonde] rapport écrit dans ${OUT}/rapport.json`);
+    /* Le rapport entier est aussi recopié dans le journal : les artefacts ne
+       sont pas toujours téléchargeables, et un constat illisible ne sert à
+       rien. */
+    const flat = JSON.stringify(report);
+    for (let i = 0; i < flat.length; i += 3500) {
+      console.log(`RAPPORT ${String(i / 3500).padStart(3, "0")} ${flat.slice(i, i + 3500)}`);
+    }
   }
 }
 

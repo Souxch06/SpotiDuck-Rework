@@ -23,6 +23,7 @@ on:
   push:
     paths:
       - ".github/workflows/probe-login.yml"
+      - "tools/probe-login.mjs"
 
 jobs:
   static:
