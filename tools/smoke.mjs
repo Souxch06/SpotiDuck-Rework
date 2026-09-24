@@ -999,9 +999,9 @@ check("native mode: no runtime errors", () => {
 /* ------------------------------------------------------------------ *
  *  Interface d'origine — le code d'origine, tel quel                  *
  *                                                                     *
- *  C'est l'affichage historique du projet (proposé au sélecteur) :  *
- *  l'affichage d'origine de SpotiDuck
- *  (= le script injecté de l'application d'origine, sans retouche).    *
+ *  C'est l'affichage historique du projet, proposé par le sélecteur :  *
+ *  l'affichage d'origine de SpotiDuck (= le script injecté de          *
+ *  l'application d'origine, sans retouche).                            *
  *  On le charge donc pour de vrai, sur une page qui ressemble à la     *
  *  page bureau de Spotify (c'est elle qu'il habille), et on vérifie ce *
  *  qu'il produit : la feuille d'origine, son bouton de lecture, la     *
