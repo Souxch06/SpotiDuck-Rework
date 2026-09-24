@@ -16,6 +16,10 @@
            (c'est celle-ci qui est livrée par défaut) ;
          · « native » = la page web mobile de Spotify (bêta) ;
          · « inject » = la couche SpotiDuck, habillage maison. -->
+    <string name="diagnostic">Diagnostic</string>
+    <string name="diagnostic_title">Ce que la page affiche</string>
+    <string name="diagnostic_copy">Copier</string>
+    <string name="diagnostic_copied">Diagnostic copié</string>
     <string name="play_protect">Play Protect</string>
     <string name="play_protect_path">Dans le Play Store : profil → Play Protect → ⚙️ → décocher « Analyser les applis avec Play Protect ».</string>
     <string name="ui_mode_original">Interface d\'origine de SpotiDuck</string>

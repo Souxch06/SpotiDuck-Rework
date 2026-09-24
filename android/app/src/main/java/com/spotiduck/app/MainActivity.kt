@@ -2,6 +2,8 @@ package com.spotiduck.app
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -30,6 +32,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import org.json.JSONObject
 
 /**
  * SpotiDuck — WebView shell around the Spotify web player.
@@ -308,6 +311,31 @@ class MainActivity : AppCompatActivity() {
      * is off by default — flip it to `true` if a future web player update
      * decides to render a mobile shell from the user agent instead.
      */
+    /**
+     * Montre ce que la page a **réellement** sous les yeux : largeur de mise en
+     * page, valeurs vues par le JavaScript (celles que l'empreinte d'origine
+     * remplace), feuilles de style posées, présence des repères de la page
+     * bureau, et si l'interface d'origine est en service.
+     *
+     * Un rendu qui diffère d'un téléphone à l'autre ne peut pas se corriger
+     * autrement : cette ligne-là est le seul accès au téléphone.
+     */
+    fun showDiagnostic() {
+        webView.evaluateJavascript(DIAGNOSTIC_JS) { raw ->
+            val text = runCatching { JSONObject("{\"v\":$raw}").getString("v") }.getOrElse { raw ?: "" }
+            AlertDialog.Builder(this)
+                .setTitle(getString(R.string.diagnostic_title))
+                .setMessage(text)
+                .setPositiveButton(android.R.string.ok, null)
+                .setNeutralButton(R.string.diagnostic_copy) { _, _ ->
+                    val clip = getSystemService(ClipboardManager::class.java)
+                    clip?.setPrimaryClip(ClipData.newPlainText("SpotiDuck", text))
+                    Toast.makeText(this, R.string.diagnostic_copied, Toast.LENGTH_SHORT).show()
+                }
+                .show()
+        }
+    }
+
     private fun injectViewportScript() {
         if (!FAKE_DESKTOP_VIEWPORT) return
         webView.evaluateJavascript(VIEWPORT_SPOOF_JS, null)
@@ -435,6 +463,9 @@ class MainActivity : AppCompatActivity() {
                 switchUiMode(modes[which])
                 dialog.dismiss()
             }
+            /* Ce que la page a réellement sous les yeux : sans ça, un rendu qui
+               diffère d'un téléphone à l'autre ne se corrige qu'à l'aveugle. */
+            .setPositiveButton(R.string.diagnostic) { _, _ -> showDiagnostic() }
             .setNegativeButton(android.R.string.cancel, null)
             /* Le seul chemin vers Play Protect dans le mode d'origine (pas
                d'écran de réglages) : l'installation suivante ne sera plus
@@ -662,15 +693,39 @@ class MainActivity : AppCompatActivity() {
         private const val WAKE_LOCK_TIMEOUT_MS = 6L * 60L * 60L * 1000L
 
         /**
+         * Sonde de diagnostic : une ligne par constat, lisible au téléphone.
+         * `evaluateJavascript` renvoie une chaîne JSON, donc entre guillemets
+         * (décodée par `showDiagnostic`).
+         */
+        private const val DIAGNOSTIC_JS = """
+          (function(){
+            var q = function (s) { try { return document.querySelectorAll(s).length } catch (e) { return -1 } };
+            var de = document.documentElement;
+            return [
+              "vue " + de.clientWidth + "x" + de.clientHeight + " px CSS",
+              "fenetre " + window.innerWidth + "x" + window.innerHeight + " densite " + window.devicePixelRatio,
+              "ecran " + screen.width + "x" + screen.height,
+              "feuilles " + q("style"),
+              "barre haut " + q("#Desktop_LeftSidebar_Id") + " / lecteur bas " + q("aside[data-testid=now-playing-bar]") + " / accueil " + q("section[data-testid=home-page]"),
+              "rangees " + q("div[data-testid=grid-container]") + " / lignes " + q("div[data-testid=tracklist-row]") + " / navigation " + q("#global-nav-bar"),
+              "interface d'origine " + (typeof window.firstFuck === "function" ? "chargee" : "absente"),
+              "adresse " + location.pathname
+            ].join("\n");
+          })()
+        """
+
+        /**
          * Force un `<meta name="viewport" content="width=device-width…">`.
          *
-         * Le web player est un site **bureau** : il n'en déclare aucun. Or une
-         * WebView qui ne trouve pas ce meta se donne une largeur de mise en page
-         * de 980 px — les media queries, les unités `vw` et les tailles de police
-         * de la couche visent alors un écran trois fois plus large que le
-         * téléphone, et tout paraît énorme et rogné. Le script pose le meta puis
-         * vérifie dix fois (la page se construit en plusieurs fois), et ne touche
-         * jamais au reste du document.
+         * Mesuré en CI (`inspect-page.yml`) : open.spotify.com en déclare un,
+         * pour l'agent bureau (`width=device-width, initial-scale=1,
+         * maximum-scale=1`) comme pour l'agent Android. Ce script est donc un
+         * filet, pas le correctif de l'affichage : il garantit à la couche une
+         * mise en page à la largeur réelle de l'écran si la page cessait d'en
+         * déclarer (sans ce meta, une WebView se donne 980 px de large — media
+         * queries, unités `vw` et tailles de police visent alors un écran trois
+         * fois trop large, et tout paraît énorme et rogné). Il vérifie dix fois
+         * (la page se construit en plusieurs fois) et ne touche à rien d'autre.
          */
         private const val VIEWPORT_META_JS = """
             (function(){
