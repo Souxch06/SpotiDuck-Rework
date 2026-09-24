@@ -286,6 +286,7 @@ async function main() {
       "/usr/bin/chromium",
       "/usr/bin/chromium-browser",
     ].filter(Boolean);
+    const launchErrors = [];
     for (const executablePath of candidates) {
       let browser = null;
       try {
@@ -294,7 +295,11 @@ async function main() {
           headless: true,
           args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--lang=fr-FR", "--window-size=412,915"],
         });
-      } catch {
+      } catch (error) {
+        /* Un lancement raté ne doit pas passer sous silence : sans cela, la
+           moitié la plus utile de la sonde (le relevé navigateur) disparaît
+           sans laisser de trace. */
+        launchErrors.push(`${executablePath} : ${String((error && error.message) || error).slice(0, 200)}`);
         continue;
       }
       note("Chrome", `pilote ouvert avec ${executablePath}`);
@@ -416,6 +421,9 @@ async function main() {
       }
       await browser.close().catch(() => {});
       break;
+    }
+    if (launchErrors.length) {
+      warn("Chrome : aucun navigateur pilotable", launchErrors.join(" · "));
     }
   }
 
