@@ -372,6 +372,19 @@ async function main() {
         await sleep(600);
         const stateAfter = await safely(() => page.evaluate(SHELL_STATE));
         navEffects.push({ name, before: stateBefore, after: stateAfter, click });
+        /* Un appui qui navigue emmène la page ailleurs : sans revenir au point
+           de départ, l'appui suivant se mesure sur une page en cours de
+           chargement (« bouton absent ») et ne dit plus rien de lui-même. */
+        if (click && click.navigation) {
+          try {
+            await page.goto(target.url, { waitUntil: "domcontentloaded", timeout: 45000 });
+            await sleep(2500);
+            await safely(() => page.evaluate(target.mode === "original" ? original : bundle));
+            await sleep(2500);
+          } catch (e) {
+            /* page irrécupérable : les appuis suivants le diront */
+          }
+        }
         /* (pas de capture à chaque vue : chaque image coûte des morceaux
            d'annotation, et GitHub n'en garde qu'une poignée) */
       }
@@ -416,6 +429,9 @@ async function main() {
         ` / appuis : ${navEffects
           .map((e) => {
             if (e.click && e.click.clicked === false) return `${e.name}→bouton absent`;
+            /* `navigation` dit que le contexte d'exécution a été détruit : c'est
+               la preuve que l'appui a changé de page. */
+            if (e.click && e.click.navigation) return `${e.name}→navigue (page changée)`;
             if (e.click && e.click.changed) return `${e.name}→navigue ${e.click.pathAfter}`;
             if (e.after && e.after.navigation) return `${e.name}→navigue`;
             if (e.after && e.after.stateTab) return `${e.name}→${e.after.stateTab}`;
