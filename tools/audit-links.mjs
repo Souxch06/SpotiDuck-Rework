@@ -185,6 +185,19 @@ const nativeAsset = read("android/app/src/main/assets/native-mode.js");
 if (!/showUiChooser/.test(nativeAsset)) {
   errors.push("native-mode.js : plus rien n'ouvre le sélecteur d'interface (appui long)");
 }
+/* Le mode livré affiche la page de Spotify telle quelle, donc c'est à nous de :
+   (a) lui donner une zone de rendu à l'intérieur des barres système — en plein
+       écran sous la barre d'état, sa barre du haut est à moitié dessous et ses
+       boutons tombent dans la zone de la barre d'état ;
+   (b) supprimer le bandeau « ouvrir dans l'application », que Spotify renomme
+       régulièrement (d'où un balayage par texte, pas seulement par attribut). */
+const insets = activity.replace(/\s+/g, " ");
+if (!/uiMode == MODE_NATIVE[\s\S]{0,400}root\.setPadding\(bars\.left, bars\.top/.test(insets)) {
+  errors.push("MainActivity : le mode livré ne réserve plus la place des barres système");
+}
+if (!/data-sd-appprompt/.test(nativeAsset) || !/APP_PROMPT_TEXT/.test(nativeAsset)) {
+  errors.push("native-mode.js : le bandeau « ouvrir dans l'application » n'est plus traqué");
+}
 /* Le mode « natif » ne doit être retenu que s'il a été choisi explicitement. */
 if (!/KEY_UI_MODE_CHOSEN/.test(activity)) {
   errors.push("MainActivity : le mode enregistré n'est plus distingué d'un choix explicite");

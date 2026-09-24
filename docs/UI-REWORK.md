@@ -796,3 +796,78 @@ revenir en arrière. Les deux raisons de ce retrait sont traitées :
 4. alimente la notification par le pont `AndBridge` (titre, artiste, pochette,
    position) ;
 5. ouvre le sélecteur d'interface sur appui long.
+
+## 16. Le haut de la page mobile (v2.7.4)
+
+Constat utilisateur, sur l'affichage mobile livré en 2.7.3 : « *Le bandeau tous
+en haut est trop haut, c'est difficile d'appuyer dessus. Enlève aussi la partie
+« ouvrir dans l'application » qui sert à rien.* » Deux problèmes, deux causes
+distinctes.
+
+### 1. La page dessinait sous la barre d'état
+
+L'activité est en plein écran (`setDecorFitsSystemWindows(window, false)`) et
+`native-mode.js` demandait `viewport-fit=cover` : la page, elle, est écrite pour
+un **navigateur** — c'est-à-dire pour un cadre où le navigateur réserve déjà la
+place des barres système. Résultat : sa barre du haut se retrouvait à moitié
+sous la barre d'état. Elle paraît trop haute, et ses boutons tombent dans la
+zone où l'appui ne part pas (il fait descendre la barre d'état).
+
+Ce qui change :
+
+* en mode mobile, l'application donne à la WebView une zone de rendu **à
+  l'intérieur** des barres système : c'est le **conteneur** qui reçoit la marge,
+  pas la WebView — réduire la WebView elle-même rognait le haut de la page sur
+  certaines versions ;
+* les insets sont **consommés** après ça, pour que la page ne réserve pas la
+  barre d'état une seconde fois (`env(safe-area-inset-top)` vaut alors 0) ;
+* `viewport-fit=cover` est retiré du viewport de la page : c'est précisément lui
+  qui l'invitait à dessiner dessous ;
+* les deux autres interfaces ne bougent pas : elles restent plein écran et
+  réservent la place elles-mêmes (`env(safe-area-inset-*)` et
+  `--sd-safe-*-override`), l'application se contentant de leur transmettre les
+  valeurs mesurées. Le sélecteur réapplique les marges au changement de mode.
+
+### 2. « Ouvrir dans l'application » : traqué par son texte
+
+Ce bandeau renvoie vers `spotify:` ou vers une fiche de magasin d'applications.
+Dans cette application il ne mène nulle part — il n'y a pas d'« application
+Spotify » à ouvrir, c'est l'application elle-même. Les sélecteurs par attributs
+de `native-mode.js` ne l'attrapaient pas : Spotify les renomme d'une version à
+l'autre, alors que le texte, lui, ne change pas. D'où un second balayage, par
+**texte** (`APP_PROMPT_TEXT`) et par **destination** des liens (`spotify:`,
+`market:`, `intent:`, Play Store, App Store, `/download`).
+
+Ce qu'il masque est borné, parce qu'enlever trop serait pire que laisser :
+
+* un bandeau qui ne porte **que** l'invite (au plus un élément cliquable à
+  l'intérieur) part en entier ;
+* une barre qui porte aussi les commandes de la page n'en perd **que** l'invite
+  — le logo, la recherche et le profil restent ;
+* un conteneur qui porte plus d'un élément cliquable n'est jamais pris pour un
+  bandeau d'invite ;
+* un lien vers le magasin sans texte d'invite et sans bandeau autour n'est pas
+  touché : ça peut être un simple lien de la page.
+
+Le balayage est relancé au chargement, puis à 0,4 s / 1,5 s / 4 s et toutes les
+2 s (900 éléments au plus, un motif court) : Spotify repose ce bandeau à chaque
+changement d'écran. `npm run audit` refuse un `native-mode.js` qui n'aurait plus
+ce balayage — c'est-à-dire un bandeau d'invitation qui reviendrait sans que rien
+ne le signale.
+
+### 3. Ce que la sonde dit maintenant
+
+`Diagnostic` (sélecteur d'interface) gagne trois mesures qui portent exactement
+sur ces deux points :
+
+* **ce qu'il y a sous les six premiers pixels** de la page — si c'est le bandeau
+  du haut, il est bien à l'écran ; s'il est absent, la page commence ailleurs ;
+* **la place que la page réserve elle-même pour la barre d'état** (mesurée en
+  posant un élément de la hauteur de `env(safe-area-inset-top)`) : 0 = la page
+  est bien à l'intérieur des barres ;
+* **le nombre d'invitations « ouvrir dans l'application »** présentes puis
+  retirées.
+
+Tests : 70/70 (`npm run smoke`), dont deux nouveaux cas — un bandeau dédié, aux
+attributs inconnus, doit disparaître ; la barre du haut d'une page, qui porte
+aussi ses commandes, doit survivre.

@@ -25,6 +25,7 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AlertDialog
@@ -60,6 +61,7 @@ import org.json.JSONObject
  */
 class MainActivity : AppCompatActivity() {
 
+    private lateinit var root: FrameLayout
     private lateinit var webView: WebView
     private lateinit var adBlocker: AdBlocker
     private val bridge = Bridge(this)
@@ -156,7 +158,19 @@ class MainActivity : AppCompatActivity() {
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
 
-        setContentView(webView)
+        /* La WebView est posée dans un conteneur : c'est ce conteneur qui
+           reçoit la place des barres système dans le mode mobile (voir
+           `installInsetsForwarding`). Donner cette marge à la WebView
+           elle-même rognait le haut de la page sur certaines versions. */
+        root = FrameLayout(this).apply {
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            setBackgroundColor(appBg)
+            addView(webView)
+        }
+        setContentView(root)
         webView.setBackgroundColor(appBg)
 
         // Les commandes de la notification (Play/Next/…) sont exécutées dans la
@@ -270,23 +284,50 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Android 15+ draws edge to edge: the system bars overlap the WebView. The
-     * injected stylesheet already knows how to reserve that space
-     * (`env(safe-area-inset-*)` + the `--sd-safe-*-override` hooks), so we
-     * forward the real insets to it instead of guessing.
+     * Deux régimes, selon le mode, parce que les pages ne savent pas les mêmes
+     * choses des barres système du téléphone.
+     *
+     *  · **Affichage mobile** : c'est la page de Spotify telle quelle, écrite
+     *    pour un navigateur — où c'est le navigateur qui gère les barres. En
+     *    plein écran sous la barre d'état, sa barre du haut se retrouve à moitié
+     *    dessous : elle paraît trop haute, et ses boutons tombent dans la zone
+     *    de la barre d'état où l'appui ne part pas (il la fait descendre). On
+     *    lui donne donc une zone de rendu **à l'intérieur** des barres.
+     *
+     *  · **Les deux autres** interfaces dessinent leurs propres barres et
+     *    réservent la place elles-mêmes (`env(safe-area-inset-*)` et les
+     *    variables `--sd-safe-*-override`) : la WebView reste plein écran, on se
+     *    contente de leur transmettre les valeurs mesurées.
      */
     private fun installInsetsForwarding() {
-        ViewCompat.setOnApplyWindowInsetsListener(webView) { _, insets ->
+        ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
             val bars = insets.getInsets(
                 WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
             )
-            val scale = resources.displayMetrics.density
-            /* La WebView reste plein écran et c'est la page qui réserve la place
-               des barres système (`--sd-safe-*-override`). Réduire la zone de
-               rendu par du padding rognait le haut de la page sur certaines
-               versions de WebView. */
-            webView.setPadding(0, 0, 0, 0)
-            injectInsets(bars.top / scale, bars.bottom / scale, bars.left / scale, bars.right / scale)
+            if (uiMode == MODE_NATIVE) {
+                if (root.paddingTop != bars.top || root.paddingBottom != bars.bottom ||
+                    root.paddingLeft != bars.left || root.paddingRight != bars.right
+                ) {
+                    root.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+                }
+                /* Consommés : le conteneur a pris la place, la page n'a plus à
+                   s'en écarter elle-même (`env(safe-area-inset-*)` renverrait
+                   sinon la barre d'état une seconde fois). */
+                return@setOnApplyWindowInsetsListener WindowInsetsCompat.CONSUMED
+            } else {
+                if (root.paddingTop != 0 || root.paddingBottom != 0 ||
+                    root.paddingLeft != 0 || root.paddingRight != 0
+                ) {
+                    root.setPadding(0, 0, 0, 0)
+                }
+                val scale = resources.displayMetrics.density
+                injectInsets(
+                    bars.top / scale,
+                    bars.bottom / scale,
+                    bars.left / scale,
+                    bars.right / scale
+                )
+            }
             insets
         }
     }
@@ -411,6 +452,10 @@ class MainActivity : AppCompatActivity() {
             .apply()
         if (clean == uiMode) return
         uiMode = clean
+        /* Les barres système ne sont pas réservées de la même façon dans le
+           mode mobile (voir `installInsetsForwarding`) : on redemande les
+           insets, sinon le changement de mode garderait la marge de l'autre. */
+        ViewCompat.requestApplyInsets(root)
         webView.settings.userAgentString = userAgentFor(clean)
         webView.reload()
         Toast.makeText(this, toastFor(clean), Toast.LENGTH_SHORT).show()
@@ -713,6 +758,37 @@ class MainActivity : AppCompatActivity() {
           (function(){
             var q = function (s) { try { return document.querySelectorAll(s).length } catch (e) { return -1 } };
             var de = document.documentElement;
+            /* Ce que la page croit devoir réserver pour la barre d'état : 0 veut
+               dire que la fenêtre est déjà à l'intérieur des barres. */
+            var safeTop = function () {
+              var d = document.createElement("div");
+              d.style.cssText = "position:fixed;top:0;left:0;width:0;height:env(safe-area-inset-top,0px)";
+              (document.body || de).appendChild(d);
+              var h = d.offsetHeight || 0;
+              if (d.parentNode) d.parentNode.removeChild(d);
+              return h;
+            };
+            /* Ce qui se trouve sous les six premiers pixels : si c'est le
+               bandeau du haut, il est bien à l'écran ; s'il est absent, la page
+               commence ailleurs. */
+            var topThing = function () {
+              var e = document.elementFromPoint(Math.round(de.clientWidth / 2), 6);
+              if (!e) return "aucun";
+              var c = typeof e.className === "string" ? e.className : "";
+              return e.tagName.toLowerCase() + (c ? "." + c.split(" ")[0] : "");
+            };
+            /* Invites « ouvrir dans l'application » encore présentes, marquées ou
+               non : c'est le seul moyen de savoir si Spotify les repose. */
+            var appPrompts = function (marked) {
+              if (marked) return q("[data-sd-appprompt='1']");
+              var els = document.querySelectorAll("a,button,[role='button'],[data-testid]");
+              var n = 0;
+              for (var i = 0; i < els.length && i < 900; i++) {
+                var t = (els[i].textContent || "").replace(/\s+/g, " ").trim();
+                if (t.length <= 160 && /ouvrir dans l'application|ouvrir l'application|open (the )?app/i.test(t)) n++;
+              }
+              return n;
+            };
             return [
               "vue " + de.clientWidth + "x" + de.clientHeight + " px CSS",
               "fenetre " + window.innerWidth + "x" + window.innerHeight + " densite " + window.devicePixelRatio,
@@ -720,6 +796,8 @@ class MainActivity : AppCompatActivity() {
               "feuilles " + q("style"),
               "barre haut " + q("#Desktop_LeftSidebar_Id") + " / lecteur bas " + q("aside[data-testid=now-playing-bar]") + " / accueil " + q("section[data-testid=home-page]"),
               "rangees " + q("div[data-testid=grid-container]") + " / lignes " + q("div[data-testid=tracklist-row]") + " / navigation " + q("#global-nav-bar"),
+              "haut de page " + topThing() + " / barre d'etat reservee par la page " + safeTop() + " px",
+              "invites ouvrir-dans-l-application " + appPrompts(false) + " / retirees " + appPrompts(true),
               "interface d'origine " + (typeof window.firstFuck === "function" ? "chargee" : "absente"),
               "adresse " + location.pathname
             ].join("\n");

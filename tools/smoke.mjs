@@ -827,6 +827,14 @@ const natHtml =
   '<!doctype html><html><head></head><body>' +
   '<div data-testid="banner">Ouvrir dans l\'application</div>' +
   '<a href="/download">Telecharger l\'application</a>' +
+  /* Le bandeau du haut, tel que Spotify le repose à chaque changement d'écran :
+     attributs inconnus, texte explicite, lien vers l'application. */
+  '<div id="app-prompt" class="encore-banner-random" role="banner">' +
+  '<span>Ouvrir dans l\'application</span><a href="spotify://open">Ouvrir</a></div>' +
+  /* La barre du haut de la page, elle, porte aussi ses commandes : elle doit
+     survivre — seule l'invite disparaît. */
+  '<header id="top-bar" role="banner"><a href="/search">Rechercher</a>' +
+  '<a href="/me">Profil</a><a href="spotify://open">Ouvrir dans l\'application</a></header>' +
   '<div data-testid="now-playing-widget">' +
   '<a data-testid="context-item-link" href="/track/1">Titre test</a>' +
   '<div data-testid="context-item-info-artist">Artiste test</div>' +
@@ -889,6 +897,27 @@ check("native mode: browser banners are hidden, not removed", () => {
   assert(css.includes("play.google.com") && css.includes("apps.apple.com"), "the store links should be hidden too");
   assert(nd.querySelector("[data-testid='banner']"), "the banner should stay in the DOM, only hidden");
   return "bandeaux masqués en CSS ✓";
+});
+
+check("native mode: the open-in-app banner is hunted down by its text", () => {
+  const band = nd.querySelector("#app-prompt");
+  assert(band, "the test page no longer has the app banner");
+  assert(
+    band.getAttribute("data-sd-appprompt") === "1",
+    "the app banner was not recognised (Spotify renamed its attributes, the text is intact)"
+  );
+  const css = nd.querySelector("style[data-sd='native-mode']");
+  assert(
+    /\[data-sd-appprompt='1'\]\s*\{[^}]*display:none/.test(css.textContent),
+    "nothing hides what the hunt marked"
+  );
+  const bar = nd.querySelector("#top-bar");
+  assert(bar && !bar.hasAttribute("data-sd-appprompt"), "the page's own top bar must survive");
+  const invite = bar.querySelector("a[href^='spotify:']");
+  assert(invite && invite.getAttribute("data-sd-appprompt") === "1", "the invite inside the top bar must go");
+  const track = nd.querySelector("a[data-testid='context-item-link']");
+  assert(track && !track.hasAttribute("data-sd-appprompt"), "a track link must not be hidden");
+  return "bandeau dédié entier · barre du haut épargnée · liens de la page épargnés ✓";
 });
 
 check("native mode: the notification controls press Spotify's buttons", () => {

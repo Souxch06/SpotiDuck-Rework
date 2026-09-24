@@ -10,7 +10,10 @@
  *
  *   1. supprimer les pop-ups que Spotify réserve aux navigateurs mobiles
  *      (bandeaux « Ouvrir dans l'application », consentement aux cookies,
- *      infobulles, promotions plein écran) et les empêcher de revenir ;
+ *      infobulles, promotions plein écran) et les empêcher de revenir — le
+ *      bandeau « ouvrir dans l'application » étant celui du haut de page, il
+ *      est aussi traqué par son **texte** et par la destination de ses liens,
+ *      parce que Spotify renomme ses attributs d'une version à l'autre ;
  *   2. exposer un `window.SpotiDuckUI` minimal (lecture, pause, suivant,
  *      précédent, j'aime, avance) pour que les boutons de la notification
  *      Android et de l'écran de verrouillage fonctionnent : ils cliquent les
@@ -34,8 +37,13 @@
    * page est alors dessinée pour un écran trois fois plus large que le
    * téléphone (d'où une interface énorme, coupée, qu'il faut faire glisser).
    * ------------------------------------------------------------------ */
+  /* Pas de `viewport-fit=cover` : la fenêtre de la WebView est désormais
+     **à l'intérieur** des barres système (l'application réserve leur place), donc
+     la page n'a pas à s'en écarter elle-même — et `cover` l'invitait justement à
+     dessiner dessous, ce qui mettait sa barre du haut à moitié sous la barre
+     d'état. */
   var VIEWPORT_CONTENT =
-    "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover";
+    "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no";
 
   function ensureViewport() {
     var head = document.head || document.documentElement;
@@ -114,6 +122,8 @@
   }).join("\n");
   css.textContent =
     hideCss +
+    /* Ce que le balayage par texte (section 2-bis) a reconnu. */
+    "\n[data-sd-appprompt='1']{display:none !important}\n" +
     "\n" +
     "html{-webkit-text-size-adjust:100% !important;-webkit-tap-highlight-color:transparent !important;overscroll-behavior:none !important}\n" +
     "body{overscroll-behavior:none !important;-webkit-tap-highlight-color:transparent !important}\n" +
@@ -217,6 +227,122 @@
       if (purge()) window.setTimeout(unlockScroll, 900);
     }).observe(document.documentElement, { childList: true, subtree: true });
   } catch (e) {}
+
+  /* ------------------------------------------------------------------ *
+   * 2-bis. « Ouvrir dans l'application » : traqué par le texte
+   *
+   * Ce bandeau — celui du haut de page, sur la version mobile — renvoie vers
+   * `spotify:` ou vers une fiche Play Store. Dans cette application il ne mène
+   * nulle part : il n'y a pas de « application Spotify » à ouvrir, c'est
+   * l'application elle-même. Les sélecteurs de la section 2 ne l'attrapent que
+   * si Spotify garde les mêmes attributs ; ce balayage-là regarde ce que dit
+   * le bandeau, ce que le CSS ne peut pas faire.
+   * ------------------------------------------------------------------ */
+  var APP_PROMPT_TEXT = /ouvrir dans l'application|ouvrir l'application|ouvrir spotify|ouvrir l'appli|écouter dans l'application|continuer dans l'application|télécharger l'application|lancer l'application|open (the )?app|open spotify|get the app|download the app/i;
+  var APP_PROMPT_LINK = /^(spotify:|market:|intent:)/i;
+  var APP_STORE_LINK = /play\.google\.com|apps\.apple\.com|itunes\.apple\.com|\/download/i;
+
+  /**
+   * Posé au-dessus du contenu (position `fixed`, `absolute` ou `sticky`, ou
+   * `role="banner"` / `role="dialog"`) : un bandeau. Au-delà de cinq niveaux on
+   * s'arrête et on ne touche à rien — masquer un parent trop large emporterait
+   * du vrai contenu.
+   */
+  function bannerAncestor(el) {
+    var n = el && el.parentNode;
+    var hops = 1;
+    while (n && n !== document.body && hops <= 5) {
+      var role = n.getAttribute ? n.getAttribute("role") : null;
+      var pos = "";
+      try {
+        pos = document.defaultView.getComputedStyle(n).position || "";
+      } catch (e) {}
+      if (role === "banner" || role === "dialog" || /fixed|absolute|sticky/.test(pos)) return n;
+      n = n.parentNode;
+      hops++;
+    }
+    return null;
+  }
+
+  /**
+   * Ce qu'on masque : le bandeau entier s'il ne porte que l'invite, l'invite
+   * seule s'il porte aussi les commandes de la page (logo, recherche, profil) —
+   * enlever la barre du haut parce qu'elle contient une phrase serait pire que
+   * la laisser.
+   */
+  function promptHost(el, byText) {
+    var band = bannerAncestor(el);
+    if (band) {
+      var inside = 0;
+      try {
+        inside = band.querySelectorAll("a,button,[role='button']").length;
+      } catch (e) {
+        inside = 99;
+      }
+      /* Un bandeau qui ne porte que l'invite (souvent l'invite et un bouton
+         « Ouvrir ») part en entier. */
+      return inside <= 1 ? band : el;
+    }
+    /* Pas de bandeau autour : seul un texte explicite autorise à masquer
+       l'élément lui-même (un lien vers le magasin d'applications peut très bien
+       être un simple lien de la page). */
+    return byText ? el : null;
+  }
+
+  /**
+   * Marque pour le CSS ce qui parle de « l'application » : soit le texte, soit
+   * un lien vers le magasin d'applications (auquel cas il faut **aussi** un
+   * bandeau autour, pour ne pas emporter un simple lien de la page).
+   */
+  function hideAppPrompts() {
+    var els;
+    try {
+      els = document.querySelectorAll("a,button,[role='button'],[data-testid],[role='banner']");
+    } catch (e) {
+      return 0;
+    }
+    var hits = 0;
+    for (var i = 0; i < els.length && i < 900; i++) {
+      var el = els[i];
+      if (el.getAttribute("data-sd-appprompt") === "1") continue;
+      var href = "";
+      var text = "";
+      try {
+        href = el.getAttribute("href") || "";
+        text = (el.textContent || "").replace(/\s+/g, " ").trim();
+      } catch (e) {
+        continue;
+      }
+      if (text.length > 160) text = "";
+      var byText = APP_PROMPT_TEXT.test(text);
+      var byLink = APP_PROMPT_LINK.test(href) || APP_STORE_LINK.test(href);
+      if (!byText && !byLink) continue;
+      /* Un conteneur qui porte déjà les commandes de la page n'est pas un
+         bandeau d'invite : c'est la barre du haut. Ses invites, elles, restent
+         candidates et seront masquées une par une. */
+      var inside = 0;
+      try {
+        inside = el.querySelectorAll("a,button,[role='button']").length;
+      } catch (e) {
+        inside = 99;
+      }
+      if (inside > 1) continue;
+      var host = promptHost(el, byText);
+      if (!host) continue;
+      if (host.getAttribute("data-sd-appprompt") === "1") continue;
+      host.setAttribute("data-sd-appprompt", "1");
+      hits++;
+    }
+    return hits;
+  }
+
+  hideAppPrompts();
+  window.setTimeout(hideAppPrompts, 400);
+  window.setTimeout(hideAppPrompts, 1500);
+  window.setTimeout(hideAppPrompts, 4000);
+  /* Spotify repose son bandeau à chaque changement d'écran : le balayage est
+     donc répété, mais borné (900 éléments, un regex court). */
+  window.setInterval(hideAppPrompts, 2000);
 
   /* ------------------------------------------------------------------ *
    * 2. Pont minimal pour la notification Android

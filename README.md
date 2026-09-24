@@ -193,7 +193,7 @@ stored mode:
 
 | Mode | User agent | Layout | Script |
 | --- | --- | --- | --- |
-| `native` (default) | Chrome Android | meta pinned by the script | `native-mode.js` |
+| `native` (default) | Chrome Android | meta pinned by the script; the page lives inside the system bars | `native-mode.js` |
 | `original` | desktop Chrome | the original app's settings, no viewport meta forced | `spotiduck-original.js` |
 | `inject` | desktop Chrome | meta pinned to `width=device-width` | `spotiduck-ui.js` |
 
