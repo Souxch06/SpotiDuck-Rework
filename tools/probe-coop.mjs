@@ -86,6 +86,36 @@ const MEASURE = async () => {
     out.mini = null;
   }
 
+  /* Chaque contrôle de la coque : présent ? visible (vraie boîte) ? cliquable ?
+     « Les boutons ne sont pas comme notre version » se mesure ici : un contrôle
+     à 0×0 px ou sous `display:none` est un contrôle que l'utilisateur ne voit
+     pas, et « rien n'est relié » commence toujours par là. */
+  const box = (sel) => {
+    const el = document.querySelector(sel);
+    if (!el) return "absent";
+    const cs = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    const visible = rect.width > 0 && rect.height > 0 && cs.display !== "none" && cs.visibility !== "hidden" && Number(cs.opacity) > 0.05;
+    return `${visible ? "visible" : "MASQUÉ"} ${Math.round(rect.width)}×${Math.round(rect.height)} pos=${cs.position} z=${cs.zIndex}`;
+  };
+  out.controls = {
+    "barre du haut (.sd-nav)": box(".sd-nav"),
+    "onglet Bibliothèque (.sd-nav-item)": box('.sd-nav-item[data-tab="library"]'),
+    "barre du bas (.sd-tabbar)": box(".sd-tabbar"),
+    "mini-lecteur (.sd-mini)": box(".sd-mini"),
+    "en-tête (.sd-topbar)": box(".sd-topbar"),
+    "lecteur plein écran (.sd-player)": box(".sd-player"),
+  };
+  /* Ce qu'il reste du chrome de Spotify : s'il est encore là ET que le nôtre
+     ne l'est pas, l'utilisateur voit des boutons de Spotify — « pas comme
+     notre version ». */
+  out.spotifyChrome = {
+    barreLaterale: box("#Desktop_LeftSidebar_Id"),
+    barreHaute: box('[data-testid="topbar-content"]'),
+    navGlobale: box("#global-nav-bar"),
+    barreLecture: box('[data-testid="now-playing-bar"]'),
+  };
+
   /* La page réelle : le lecteur est-il là (donc la session) ? */
   out.desktopLayout = {
     barreLaterale: !!document.querySelector("#Desktop_LeftSidebar_Id"),
@@ -98,19 +128,21 @@ const MEASURE = async () => {
   return out;
 };
 
-/** Un appui réel sur un onglet, et ce qu'il déclenche. */
-const CLICK_TAB = async (index) => {
-  const tabs = [...document.querySelectorAll(".sd-tab")];
-  const tab = tabs[index];
-  if (!tab) return { clicked: false, reason: `onglet ${index} absent (${tabs.length} trouvés)` };
+/** Un appui réel sur un contrôle, et ce qu'il déclenche. */
+const CLICK = async (selector) => {
+  const el = document.querySelector(selector);
+  if (!el) return { clicked: false, reason: `${selector} absent` };
   const before = location.pathname;
-  tab.click();
-  await new Promise((r) => setTimeout(r, 900));
+  const disabled = el.disabled === true;
+  el.click();
+  /* 1 500 ms : la coque reprend la navigation elle-même au bout d'une seconde
+     si le routeur de Spotify n'a pas bougé (voir son propre garde-fou). */
+  await new Promise((r) => setTimeout(r, 1500));
   return {
     clicked: true,
-    label: (tab.textContent || "").trim().slice(0, 24),
-    href: tab.getAttribute("href") || "",
-    route: tab.dataset.route || "",
+    selector,
+    label: (el.textContent || "").trim().slice(0, 24),
+    disabled,
     pathBefore: before,
     pathAfter: location.pathname,
     tapRecorded: (window.__sdNavTap && (window.__sdNavTap.route || window.__sdNavTap.forced)) || null,
@@ -213,21 +245,55 @@ async function main() {
       await sleep(3500);
 
       const after = await page.evaluate(MEASURE);
-      const click = await page.evaluate(CLICK_TAB, 2); /* l'onglet Bibliothèque */
-      const afterClick = await page.evaluate(MEASURE);
 
-      const entry = { label: target.label, url: target.url, before, after, click, afterClick, errors, warnings };
+      /* 1. l'appui sur la barre du haut (la navigation livrée par défaut). */
+      const clickNav = await page.evaluate(CLICK, '.sd-nav-item[data-tab="library"]');
+      const afterNav = await page.evaluate(MEASURE);
+
+      /* 2. la barre du bas : le réglage peut la masquer — on la force allumée,
+         puis on l'interroge. C'est le contrôle que l'utilisateur décrit comme
+         « les boutons de notre version ». */
+      await page.evaluate(() => {
+        try {
+          if (window.SpotiDuckUI && window.SpotiDuckUI.set) window.SpotiDuckUI.set("tabbar", true);
+          else if (window.SpotiDuckUI && window.SpotiDuckUI.settings) window.SpotiDuckUI.settings.set("tabbar", true);
+        } catch (e) {}
+      });
+      await sleep(1200);
+      const afterEnable = await page.evaluate(MEASURE);
+      const clickTab = await page.evaluate(CLICK, '.sd-tab[data-tab="search"], .sd-tab');
+      const afterTab = await page.evaluate(MEASURE);
+
+      const entry = {
+        label: target.label,
+        url: target.url,
+        before,
+        after,
+        clickNav,
+        afterNav,
+        afterEnable,
+        clickTab,
+        afterTab,
+        errors,
+        warnings,
+      };
       report.pages.push(entry);
 
       /* --- ce qu'on en dit, en une ligne par page ------------------------- */
-      const summary =
+      const controls = Object.entries(after.controls || {})
+        .map(([k, v]) => `${k}=${v}`)
+        .join(" · ");
+      const chrome = Object.entries(after.spotifyChrome || {})
+        .map(([k, v]) => `${k}=${v}`)
+        .join(" · ");
+      lines.push(
         `${target.label} → coque=${after.layer ? "construite" : "ABSENTE"} / classes="${after.classes}" / ` +
-        `namespace=${after.namespace} / onglets=${after.tabs.length} [${after.tabs.join(", ")}] / ` +
-        `barre=${after.tabbar ? `${after.tabbar.position} ${after.tabbar.w}×${after.tabbar.h}px ${after.tabbar.visible ? "visible" : "INVISIBLE"}` : "absente"} / ` +
-        `styles=${after.styles} (${after.cssBytes} car.) / layout=${Object.entries(after.desktopLayout).filter(([, v]) => v).map(([k]) => k).join("+") || "aucun"} / ` +
-        `appui=${click.clicked ? `« ${click.label} » ${click.changed ? "navigue" : "NE NAVIGUE PAS"} (tap=${JSON.stringify(click.tapRecorded)})` : click.reason}`;
-      lines.push(summary);
-      console.log(`[Sonde coque] ${summary}`);
+          `styles=${after.styles} (${after.cssBytes} car.) / layout=${Object.entries(after.desktopLayout).filter(([, v]) => v).map(([k]) => k).join("+") || "aucun"} | ` +
+          `CONTRÔLES : ${controls} | RESTE DE SPOTIFY : ${chrome} | ` +
+          `APPUI barre du haut : ${clickNav.clicked ? `${clickNav.changed ? "navigue" : "NE NAVIGUE PAS"} (tap=${JSON.stringify(clickNav.tapRecorded)})` : clickNav.reason} | ` +
+          `barre du bas forcée : ${afterEnable.controls && afterEnable.controls["barre du bas (.sd-tabbar)"]} → APPUI : ${clickTab.clicked ? `${clickTab.changed ? "navigue" : "NE NAVIGUE PAS"} (tap=${JSON.stringify(clickTab.tapRecorded)})` : clickTab.reason}`
+      );
+      console.log(`[Sonde coque] ${lines[lines.length - 1]}`);
     } catch (error) {
       lines.push(`${target.label} → ÉCHEC : ${String(error && error.message).slice(0, 200)}`);
       report.pages.push({ label: target.label, url: target.url, failure: String(error && error.message) });
