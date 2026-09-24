@@ -855,11 +855,13 @@ await checkAsync("the content is laid out for a phone, not for a desktop", async
      Cette passe-là s'en charge — et seulement sur un téléphone. */
   const src = await read("src/inject/77-content.css");
   assert(src.length > 800, "la passe de contenu est vide ou absente");
+  /* Tous les appareils : la capture qui a motivé cette passe vient d'un appareil
+     large (≥ 600 px), et une passe limitée aux écrans étroits n'y faisait rien. */
   assert(
-    /:not\(\.sd-size-wide\)/.test(src),
-    "la passe de contenu n'est pas réservée aux téléphones"
+    /html\.sd-mobile \.sd-root section\[data-testid="component-shelf"\]/.test(src),
+    "la passe de contenu n'est plus appliquée sur tous les appareils"
   );
-  for (const need of ["component-shelf", "grid-container", "aspect-ratio: 1 / 1"]) {
+  for (const need of ["component-shelf", "carousel-scroller", "aspect-ratio: 1 / 1", "img[width]"]) {
     assert(src.includes(need), `la passe de contenu ne traite plus « ${need} »`);
   }
   const bundle = await read("dist/spotiduck-ui.js");

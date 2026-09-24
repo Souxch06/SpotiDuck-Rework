@@ -18,8 +18,23 @@
        grilles    = 2 colonnes de grandes cartes, les carrousels restent des
                     carrousels (c'est ce que fait l'application mobile)
 
-   Elle ne s'applique **pas** aux écrans larges (≥ 600 px, palier
-   `sd-size-wide`) : là, la mise en page d'origine est la bonne.
+   **Elle s'applique partout, large compris** — c'est une leçon payée : la
+   capture du 24/09 à 21 h 47 vient d'un appareil **large** (≥ 600 px de mise en
+   page, la barre du haut fait le tour de l'écran), et la version précédente de
+   cette passe était réservée aux écrans étroits : elle ne faisait donc rien
+   chez lui. Ce qui reste réservé aux écrans étroits, c'est le **nombre de
+   colonnes** ; la taille des pochettes et les espacements, eux, concernent tous
+   les appareils.
+
+   Ce que la sonde a nommé sur la vraie page (structure de la première rangée) :
+
+       section[data-testid=component-shelf] 360×130, deux enfants :
+         · l'en-tête                (titre + « tout afficher »)
+         · div[data-testid=carousel-scroller] 440×66  img=122
+             └── la piste 3830 px de large, cartes de ~140 px
+
+   Autrement dit : la pochette (122 px) ne remplit pas sa carte, la piste
+   déborde de la rangée, et les gouttières de bureau (~36 px) restent.
    ========================================================================== */
 
 /* --------------------------------------------------------------------------
@@ -29,10 +44,10 @@
    « pas très beau », pas la taille des cartes elle-même.
    -------------------------------------------------------------------------- */
 
-html.sd-mobile:not(.sd-size-wide) .sd-root section[data-testid="component-shelf"] img,
-html.sd-mobile:not(.sd-size-wide) .sd-root section[data-testid="component-shelf"] [data-testid="card-image"],
-html.sd-mobile:not(.sd-size-wide) .sd-root div[data-testid="grid-container"] img,
-html.sd-mobile:not(.sd-size-wide) .sd-root div[data-testid="grid-container"] [data-testid="card-image"] {
+html.sd-mobile .sd-root section[data-testid="component-shelf"] img,
+html.sd-mobile .sd-root section[data-testid="component-shelf"] [data-testid="card-image"],
+html.sd-mobile .sd-root div[data-testid="grid-container"] img,
+html.sd-mobile .sd-root div[data-testid="grid-container"] [data-testid="card-image"] {
   width: 100% !important;
   max-width: 100% !important;
   height: auto !important;
@@ -42,15 +57,28 @@ html.sd-mobile:not(.sd-size-wide) .sd-root div[data-testid="grid-container"] [da
   object-fit: cover;
 }
 /* Une pochette de card reste carrée même quand le conteneur est étiré. */
-html.sd-mobile:not(.sd-size-wide) .sd-root section[data-testid="component-shelf"] [data-testid="card-image"],
-html.sd-mobile:not(.sd-size-wide) .sd-root section[data-testid="component-shelf"] img[data-testid="cover-art-image"] {
+html.sd-mobile .sd-root section[data-testid="component-shelf"] [data-testid="card-image"],
+html.sd-mobile .sd-root section[data-testid="component-shelf"] img[data-testid="cover-art-image"] {
   aspect-ratio: 1 / 1;
 }
 
-/* La cellule, elle, ne garde aucune marge intérieure : la gouttière est celle
-   qu'on pose, pas celle d'un gabarit de bureau. */
-html.sd-mobile:not(.sd-size-wide) .sd-root section[data-testid="component-shelf"] div[data-testid="grid-container"] > *,
-html.sd-mobile:not(.sd-size-wide) .sd-root section[data-testid="component-shelf"] div[data-testid="grid-container"] > * > * {
+/* Les conteneurs de cartes : on ne touche pas à leur largeur (c'est le
+   carrousel), seulement à ce qui **borne** la pochette à l'intérieur. */
+html.sd-mobile .sd-root section[data-testid="component-shelf"] [data-testid="carousel-scroller"],
+html.sd-mobile .sd-root section[data-testid="component-shelf"] [data-testid="carousel-scroller"] > *,
+html.sd-mobile .sd-root section[data-testid="component-shelf"] [data-testid="carousel-scroller"] > * > * {
+  max-width: none !important;
+}
+/* Pas de largeur/hauteur figées sur une image de carte : elle prend la sienne
+   de son conteneur (c'est le « img=122 » de la sonde qui rendait les pochettes
+   minuscules dans des cellules larges). */
+html.sd-mobile .sd-root section[data-testid="component-shelf"] img[width],
+html.sd-mobile .sd-root section[data-testid="component-shelf"] img[height] {
+  width: 100% !important;
+  height: auto !important;
+}
+html.sd-mobile .sd-root section[data-testid="component-shelf"] div[data-testid="grid-container"] > *,
+html.sd-mobile .sd-root section[data-testid="component-shelf"] div[data-testid="grid-container"] > * > * {
   padding-inline: 0 !important;
   margin-inline: 0 !important;
   width: auto !important;
@@ -64,20 +92,35 @@ html.sd-mobile:not(.sd-size-wide) .sd-root section[data-testid="component-shelf"
    jamais plus que la largeur de l'écran.
    -------------------------------------------------------------------------- */
 
-html.sd-mobile:not(.sd-size-wide) .sd-root div[data-testid="grid-container"] {
+html.sd-mobile .sd-root div[data-testid="grid-container"] {
   column-gap: calc(12px * var(--sd-u)) !important;
   row-gap: calc(12px * var(--sd-u)) !important;
   grid-gap: calc(12px * var(--sd-u)) !important;
   margin-inline: 0 !important;
 }
+/* Les carrousels : la même gouttière, sur tous les appareils. La piste de la
+   sonde mesurait 3830 px pour une rangée de 360 — c'est ce qui met les cartes
+   à l'étroit et les pochettes au milieu d'un vide. */
+html.sd-mobile .sd-root section[data-testid="component-shelf"] [data-testid="carousel-scroller"] {
+  column-gap: calc(12px * var(--sd-u)) !important;
+  gap: calc(12px * var(--sd-u)) !important;
+}
+html.sd-mobile .sd-root section[data-testid="component-shelf"] [data-testid="carousel-scroller"] > * {
+  gap: calc(12px * var(--sd-u)) !important;
+}
 
 /* Les carrousels de l'accueil (rangées qui défilent horizontalement) : cartes
    d'environ 42 % de la largeur, donc deux et demie visibles — l'utilisateur
    voit qu'il peut faire glisser. */
-html.sd-mobile:not(.sd-size-wide) .sd-root section[data-testid="component-shelf"] [data-testid="card-clickable"],
-html.sd-mobile:not(.sd-size-wide) .sd-root section[data-testid="component-shelf"] [role="button"][data-encore-id="card"] {
+/* Une carte de carrousel : environ deux et demie visibles sur un téléphone,
+   trois et demie sur un écran large — comme l'application. */
+html.sd-mobile .sd-root section[data-testid="component-shelf"] [data-testid="card-clickable"],
+html.sd-mobile .sd-root section[data-testid="component-shelf"] [role="button"][data-encore-id="card"] {
   min-width: calc(150px * var(--sd-u)) !important;
   max-width: calc(190px * var(--sd-u)) !important;
+}
+html.sd-mobile.sd-size-wide .sd-root section[data-testid="component-shelf"] [data-testid="carousel-scroller"] img {
+  max-width: calc(200px * var(--sd-u)) !important;
 }
 
 /* --------------------------------------------------------------------------
@@ -86,25 +129,29 @@ html.sd-mobile:not(.sd-size-wide) .sd-root section[data-testid="component-shelf"
    paragraphe au-dessus de pochettes de 59 px : proportions de site web.
    -------------------------------------------------------------------------- */
 
-html.sd-mobile:not(.sd-size-wide) .sd-root section[data-testid="component-shelf"] {
+html.sd-mobile .sd-root section[data-testid="component-shelf"] {
   margin-block: calc(14px * var(--sd-u)) !important;
   padding-block: 0 !important;
+}
+html.sd-mobile .sd-root section[data-testid="component-shelf"] [data-testid="carousel-scroller"] {
+  height: auto !important;
+  max-height: none !important;
 }
 
 /* Uniquement le **titre de rangée** : `h2`, ou son équivalent Encore. Les
    titres des cartes (qui portent aussi `data-encore-id="text"`) ne sont pas
    concernés — leur taille appartient à la carte. */
-html.sd-mobile:not(.sd-size-wide) .sd-root section[data-testid="component-shelf"] > div:first-child h2,
-html.sd-mobile:not(.sd-size-wide) .sd-root section[data-testid="component-shelf"] h2,
-html.sd-mobile:not(.sd-size-wide) .sd-root section[data-testid="component-shelf"] > div:first-child .encore-text-headline-large {
+html.sd-mobile .sd-root section[data-testid="component-shelf"] > div:first-child h2,
+html.sd-mobile .sd-root section[data-testid="component-shelf"] h2,
+html.sd-mobile .sd-root section[data-testid="component-shelf"] > div:first-child .encore-text-headline-large {
   font-size: calc(17px * var(--sd-u)) !important;
   line-height: 1.3 !important;
   letter-spacing: -0.2px !important;
 }
 
 /* « Tout afficher » : un lien, pas un titre. */
-html.sd-mobile:not(.sd-size-wide) .sd-root section[data-testid="component-shelf"] a[data-testid="see-all-link"],
-html.sd-mobile:not(.sd-size-wide) .sd-root section[data-testid="component-shelf"] a[href*="see-all"] {
+html.sd-mobile .sd-root section[data-testid="component-shelf"] a[data-testid="see-all-link"],
+html.sd-mobile .sd-root section[data-testid="component-shelf"] a[href*="see-all"] {
   font-size: calc(12px * var(--sd-u)) !important;
   text-transform: none !important;
   letter-spacing: 0 !important;
@@ -116,8 +163,8 @@ html.sd-mobile:not(.sd-size-wide) .sd-root section[data-testid="component-shelf"
    téléphone, c'est une bande noire à la fin de chaque rangée.
    -------------------------------------------------------------------------- */
 
-html.sd-mobile:not(.sd-size-wide) .sd-root section[data-testid="component-shelf"],
-html.sd-mobile:not(.sd-size-wide) .sd-root section[data-testid="component-shelf"] > * {
+html.sd-mobile .sd-root section[data-testid="component-shelf"],
+html.sd-mobile .sd-root section[data-testid="component-shelf"] > * {
   height: auto !important;
   min-height: 0 !important;
 }
@@ -125,7 +172,7 @@ html.sd-mobile:not(.sd-size-wide) .sd-root section[data-testid="component-shelf"
 /* Le bas de page (publicités, pieds de page) n'a pas sa place dans
    l'application : il est déjà masqué par la feuille d'origine, on garde la
    dernière rangée collée au mini-lecteur sans bande vide. */
-html.sd-mobile:not(.sd-size-wide) .sd-root section[data-testid="home-page"] {
+html.sd-mobile .sd-root section[data-testid="home-page"] {
   padding-bottom: calc(8px * var(--sd-u)) !important;
   margin-bottom: 0 !important;
 }

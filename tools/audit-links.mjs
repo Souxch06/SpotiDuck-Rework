@@ -318,10 +318,13 @@ if (!contentPassSource) {
   errors.push("la passe de mise en page du contenu pour téléphone (77-content.css) a disparu : l'accueil redevient une page de bureau");
 } else {
   const contentPass = contentPassSource;
-  if (!/:not\(\.sd-size-wide\)/.test(contentPass)) {
-    errors.push("la passe de contenu n'est plus réservée aux téléphones : elle écraserait la mise en page d'origine sur les écrans larges");
+  /* Elle doit traiter les **deux** familles d'appareils : la capture du 24/09
+     vient d'un appareil large, et une passe réservée aux écrans étroits ne
+     faisait rien chez lui. */
+  if (!/html\.sd-mobile \.sd-root section\[data-testid="component-shelf"\]/.test(contentPass)) {
+    errors.push("la passe de contenu ne s'applique plus à tous les appareils (elle était réservée aux écrans étroits, ce qui n'a rien changé sur l'appareil de l'utilisateur)");
   }
-  for (const needle of ["component-shelf", "grid-container", "aspect-ratio"]) {
+  for (const needle of ["component-shelf", "carousel-scroller", "aspect-ratio", "img[width]"]) {
     if (!contentPass.includes(needle)) {
       errors.push(`la passe de contenu ne traite plus « ${needle} »`);
     }
