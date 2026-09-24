@@ -405,25 +405,37 @@ redessiner — **elle affiche la page mobile de Spotify**.
 | Navigation | onglets Accueil / Rechercher / Bibliothèque | celle de Spotify |
 | Écrans maison | file d'attente, paramètres, hors ligne, accueil | aucun |
 | Réglages | + thème, densité, taille de l'interface | ceux de Spotify |
-| Connexion | formulaire e-mail/mot de passe (CTA « Se connecter ») | boutons sociaux de Spotify, qui échouent souvent dans une WebView |
+| Connexion | formulaire e-mail/mot de passe (CTA « Se connecter ») | la page de connexion de Spotify (voir la mesure ci-dessous) |
 
-### Pourquoi l'interface injectée est le défaut
+### §10, suite : ce que valaient les objections (mesuré en v2.7.3)
 
-Essayer la page web mobile a montré ses limites, toutes mesurables :
+L'interface injectée avait été mise par défaut, à l'époque, à cause de quatre
+objections. Trois ont été vérifiées depuis, et **deux étaient fausses** :
 
-* ce n'est **pas** l'application mobile (pas de barre d'onglets, pas de file
-  d'attente) — Spotify sert une page web simplifiée ;
-* Spotify décide de sa mise en page au chargement d'après l'agent utilisateur,
-  et une WebView n'est pas détectée comme Chrome : la page peut rester en
-  disposition « bureau » dans un écran de téléphone ;
-* la connexion y passe par les boutons Google/Apple/Facebook, refusés dans une
-  WebView ; le formulaire e-mail/mot de passe n'est pas proposé par défaut ;
-* les liens « ouvrir dans l'application » (`spotify:…`) n'ont pas d'application
-  vers laquelle aller.
+* ce n'est **pas** l'application mobile — vrai, et sans remède : Spotify sert
+  une page web mobile (barre basse, listes compactes, lecteur plein écran), pas
+  la navigation de son application. C'est la limite du procédé, elle est
+  assumée : c'est la page mobile de Spotify, pas une imitation.
+* « la page peut rester en disposition bureau dans un écran de téléphone » —
+  **faux** : l'application annonce explicitement Chrome Android (c'est tout le
+  mécanisme du mode), et la page servie en CI à cet agent fait 306 465 octets
+  contre 162 688 pour l'agent bureau, avec des repères différents (0 trace de la
+  coquille bureau dans les deux cas : tout est monté par le JS).
+* « la connexion passe par les boutons sociaux, le formulaire e-mail n'est pas
+  proposé » — **non mesuré** : en CI, `accounts.spotify.com/fr/login` est servi
+  **au même octet** à un agent bureau et à un agent Android (28 012 octets,
+  2 occurrences du bouton Google, aucun `type="password"` dans le document
+  livré). Le formulaire est donc rendu par le JS de la page, pas décidé par
+  l'agent — autrement dit, ce que voit le mode mobile est la même page de
+  connexion que le mode bureau. Reste ce qui est vrai de toute WebView : Google
+  refuse d'y dérouler son OAuth (« disallowed_useragent »). Si la page refuse le
+  chemin e-mail/mot de passe, la sortie est écrite plus bas.
+* les liens « ouvrir dans l'application » (`spotify:…`) : c'est `native-mode.js`
+  qui les masque, pas un manque d'application cible.
 
 L'interface injectée, elle, pilote le web player **bureau** (connexion
-e-mail/mot de passe, lecture complète) et l'habille aux métriques mobiles. Le
-mode bêta reste accessible pour comparer.
+e-mail/mot de passe, lecture complète) et l'habille aux métriques mobiles — elle
+reste accessible, comme l'affichage d'origine.
 
 ### Comment on bascule
 
@@ -736,3 +748,51 @@ initial-scale=1, maximum-scale=1` pour l'agent bureau, et `width=device-width,
 initial-scale=1` pour l'agent Android. Le commentaire de `MainActivity` qui
 affirmait l'inverse a été corrigé ; le meta forcé reste, comme filet, hors du
 mode d'origine.
+
+## 15. L'affichage mobile par défaut (v2.7.3)
+
+Demande, telle quelle : « *fais en sorte que l'affichage mobile soit par défaut
+sur le projet* ». C'est ce qui est livré.
+
+### Ce qui change
+
+* `MODE_DEFAULT = MODE_NATIVE` (`MainActivity`) : l'application s'ouvre sur la
+  page web mobile de Spotify — navigation basse, listes compactes, lecteur plein
+  écran, rien de redessiné.
+* `UI_MODE_REV` passe à 4 : un mode enregistré par une version dont le défaut
+  était autre n'est **pas** un choix, il est oublié une fois. Au-delà de cette
+  révision, un choix explicite est respecté.
+* Le sélecteur d'interface liste le défaut en tête : *affichage mobile*,
+  *interface d'origine*, *habillage SpotiDuck*.
+* `npm run audit` surveille les deux côtés de la décision : le défaut doit être
+  l'affichage mobile (et **jamais** notre habillage, c'est précisément ce que
+  l'utilisateur avait refusé), et le mode livré doit rester quittable **depuis
+  lui-même** — `native-mode.js` doit toujours pouvoir ouvrir le sélecteur.
+
+### Pourquoi ce mode avait été retiré, et pourquoi il peut revenir
+
+La 2.6.0 l'avait livré par défaut **sans aucun moyen d'en sortir** : les
+installations mises à jour restaient dessus, et il a fallu deux versions pour
+revenir en arrière. Les deux raisons de ce retrait sont traitées :
+
+* **la sortie** : l'appui long de 3 secondes est installé par `native-mode.js`
+  lui-même (au niveau du document, 12 px de tolérance pour ne pas se déclencher
+  pendant un défilement), donc le sélecteur est joignable dans les trois modes ;
+* **la connexion** : mesurée, elle vaut celle du mode bureau (voir §10, suite).
+  Et si un jour elle échoue — page de connexion refusée, région, panne — la
+  sortie est le sélecteur : *interface d'origine* → se connecter → revenir à
+  l'affichage mobile. Les cookies appartiennent à la WebView, pas au mode : la
+  session suit le changement d'interface.
+
+### Ce que l'affichage mobile fait de plus
+
+`native-mode.js` (17 629 caractères, vérifié par `sync:android`) :
+
+1. pose le `<meta name="viewport">` (`width=device-width`, zoom verrouillé) —
+   filet, la page servie en déclare un ;
+2. masque les bandeaux que Spotify réserve aux navigateurs mobiles ;
+3. expose un `window.SpotiDuckUI` minimal qui **clique les vrais boutons de
+   Spotify** (notification Android, écran verrouillé, boutons d'écouteurs) ;
+4. alimente la notification par le pont `AndBridge` (titre, artiste, pochette,
+   position) ;
+5. ouvre le sélecteur d'interface sur appui long.
