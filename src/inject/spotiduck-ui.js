@@ -144,6 +144,13 @@
       noTrack: "Aucun titre en lecture",
       volume: "Volume",
       karaoke: "Karaoké",
+      blankTitle: "La page n'a rien affiché",
+      blankText:
+        "Spotify a bien répondu, mais son contenu est resté vide (%s). C'est presque toujours un chargement qui n'a pas abouti : rechargez. Si ça recommence, copiez le diagnostic et envoyez-le.",
+      reload: "Recharger",
+      reloading: "Rechargement…",
+      copyDiagnostic: "Copier le diagnostic",
+      diagnosticCopied: "Diagnostic copié",
       close: "Fermer",
       queueEmpty: "La file d'attente est vide",
       /* sheets */
@@ -2090,6 +2097,130 @@
       html.classList.toggle("sd-content-hidden", fixed === 0 && !!anchor && anchor.getBoundingClientRect().height < 4);
       return fixed;
     },
+    /** Le contenu attendu est-il là, et visible ? */
+    state: function () {
+      var anchor = pick(CONTENT_ANCHORS);
+      if (!anchor) return { ok: false, why: "aucun élément de contenu" };
+      var rect = anchor.getBoundingClientRect();
+      var text = (anchor.textContent || "").replace(/\s+/g, " ").trim();
+      var hasMedia = !!anchor.querySelector("input, button, img, iframe, a[href]");
+      if (rect.height < 20 || rect.width < 40) {
+        return { ok: false, why: "contenu " + Math.round(rect.width) + "×" + Math.round(rect.height) };
+      }
+      if (text.length < 20 && !hasMedia) return { ok: false, why: "contenu vide" };
+      return { ok: true, why: "contenu " + Math.round(rect.width) + "×" + Math.round(rect.height) };
+    },
+
+    /**
+     * Si l'écran reste vide, on le **dit** — au lieu de laisser un écran noir
+     * muet (« on voit rien »). Le panneau nomme l'état mesuré, propose de
+     * recharger, et sait copier le diagnostic (une seule ligne à coller pour
+     * savoir ce qui se passe sur un téléphone qu'on n'a pas sous la main).
+     */
+    alertIfBlank: function () {
+      var state = this.state();
+      var html = document.documentElement;
+      if (state.ok) {
+        this.hideAlert();
+        return false;
+      }
+      html.classList.add("sd-content-blank");
+      this.showAlert(state.why);
+      return true;
+    },
+
+    hideAlert: function () {
+      document.documentElement.classList.remove("sd-content-blank");
+      if (this.alert) this.alert.hidden = true;
+    },
+
+    showAlert: function (why) {
+      if (!this.alert) {
+        var el = document.createElement("div");
+        el.className = "sd-content-alert";
+        el.setAttribute("role", "alert");
+        el.innerHTML =
+          '<div class="sd-content-alert-card">' +
+          '<span class="sd-content-alert-title"></span>' +
+          '<p class="sd-content-alert-text"></p>' +
+          '<pre class="sd-content-alert-diag"></pre>' +
+          '<div class="sd-content-alert-actions">' +
+          '<button class="sd-content-alert-reload" type="button"></button>' +
+          '<button class="sd-content-alert-copy" type="button"></button>' +
+          '<button class="sd-content-alert-close" type="button"></button>' +
+          "</div></div>";
+        this.alert = el;
+        UI.layer.appendChild(el);
+        var self = this;
+        $(".sd-content-alert-reload", el).addEventListener("click", function () {
+          Toast.show(Settings.labels.reloading);
+          try {
+            location.reload();
+          } catch (e) {
+            /* rien de plus */
+          }
+        });
+        $(".sd-content-alert-copy", el).addEventListener("click", function () {
+          var text = self.diagnose();
+          var done = function () {
+            Toast.show(Settings.labels.diagnosticCopied);
+          };
+          try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(text).then(done, function () {
+                Toast.show(text.slice(0, 120));
+              });
+              return;
+            }
+          } catch (e) {
+            /* repli ci-dessous */
+          }
+          Toast.show(text.slice(0, 120));
+        });
+        $(".sd-content-alert-close", el).addEventListener("click", function () {
+          self.hideAlert();
+        });
+      }
+      $(".sd-content-alert-title", this.alert).textContent = Settings.labels.blankTitle;
+      $(".sd-content-alert-text", this.alert).textContent = Settings.labels.blankText.replace("%s", why);
+      $(".sd-content-alert-diag", this.alert).textContent = this.diagnose();
+      $(".sd-content-alert-reload", this.alert).textContent = Settings.labels.reload;
+      $(".sd-content-alert-copy", this.alert).textContent = Settings.labels.copyDiagnostic;
+      $(".sd-content-alert-close", this.alert).textContent = Settings.labels.close;
+      this.alert.hidden = false;
+      /* Le contenu peut encore arriver (un chargement lent, pas un échec) : on
+         revérifie sans boucle serrée, et le panneau s'efface tout seul. */
+      var self = this;
+      var tries = 0;
+      (function recheck() {
+        if (++tries > 10) return;
+        window.setTimeout(function () {
+          if (self.alert && !self.alert.hidden && self.state().ok) {
+            self.hideAlert();
+            return;
+          }
+          if (self.alert && self.alert.hidden) return;
+          recheck();
+        }, 2000);
+      })();
+    },
+
+    /** Une ligne à coller : ce qu'un écran qu'on ne voit pas dit de lui-même. */
+    diagnose: function () {
+      var s = this.state();
+      var vp = Viewport.measure();
+      return (
+        "SpotiDuck " + VERSION +
+        " · interface " + (Bridge.has("uiMode") ? Bridge.call("uiMode") : "coque SpotiDuck") +
+        " · vue " + vp.layout + "×" + viewH() + " px (écran " + (vp.device || "?") + ")" +
+        " · unité " + Device.base.toFixed(2) +
+        " · contenu " + s.why +
+        " · " + Content.describe() +
+        " · page " + location.pathname +
+        " · lecteur " + (Spotify.ready() ? "prêt" : "absent")
+      );
+    },
+
     /** Une ligne pour le diagnostic : ce qui a dû être rétabli, et pourquoi. */
     describe: function () {
       if (!Content.restored.length) return "contenu : rien à rétablir";
@@ -3765,6 +3896,12 @@
         Content.apply();
       }, ms);
     });
+    /* …et à neuf secondes, si l'écran est toujours vide, on le dit (le contenu
+       d'une page Spotify met quelques secondes à apparaître sur un téléphone,
+       mais pas neuf). */
+    window.setTimeout(function () {
+      Content.alertIfBlank();
+    }, 9000);
 
     if (Spotify.ready()) {
       startPlayer();

@@ -891,6 +891,51 @@ await checkAsync("the shell can never blank the page it dresses", async () => {
   return "#global-nav-bar (ancêtre du contenu) rétabli ✓";
 });
 
+await checkAsync("a blank page says so instead of showing an empty screen", async () => {
+  /* La capture du téléphone était un écran entièrement noir sous notre barre :
+     impossible de savoir si la page n'avait rien affiché ou si c'était nous.
+     Quand le contenu attendu est absent ou vide, la coque le dit maintenant —
+     avec un bouton de rechargement et le diagnostic à copier. */
+  const dom = new JSDOM("<!doctype html><html><body><main></main></body></html>", {
+    url: "https://open.spotify.com/",
+    pretendToBeVisual: true,
+    runScripts: "dangerously",
+  });
+  dom.window.AndBridge = new Proxy({}, { get: () => () => undefined });
+  /* jsdom ne calcule aucune mise en page : on lui donne une géométrie
+     synthétique — un élément qui porte du texte a une taille, un élément vide
+     n'en a pas. C'est ce que le garde-fou mesure dans un vrai navigateur. */
+  dom.window.Element.prototype.getBoundingClientRect = function () {
+    const text = (this.textContent || "").trim();
+    const height = text.length > 10 ? 600 : 0;
+    return { width: text ? 400 : 0, height, top: 0, left: 0, right: 400, bottom: height, x: 0, y: 0 };
+  };
+  dom.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(200);
+
+  const api = dom.window.SpotiDuckUI;
+  assert(api && api.content && typeof api.content.alertIfBlank === "function", "garde-fou absent");
+  const shown = api.content.alertIfBlank();
+  assert(shown === true, "un écran vide n'a rien signalé");
+  const panel = dom.window.document.querySelector(".sd-content-alert");
+  assert(panel && panel.hidden === false, "le panneau n'est pas affiché");
+  assert(dom.window.document.documentElement.className.includes("sd-content-blank"), "l'état n'est pas marqué");
+  for (const cls of [".sd-content-alert-reload", ".sd-content-alert-copy", ".sd-content-alert-close"]) {
+    assert(panel.querySelector(cls), `bouton manquant dans le panneau : ${cls}`);
+  }
+  const diag = panel.querySelector(".sd-content-alert-diag").textContent;
+  assert(/SpotiDuck /.test(diag) && /unité/.test(diag) && /contenu/.test(diag), "diagnostic incomplet : " + diag);
+
+  /* Le contenu revient : le panneau doit disparaître de lui-même. */
+  const main = dom.window.document.querySelector("main");
+  main.innerHTML = "<section data-testid=\"home-page\">Bonjour, voici vos playlists et vos podcasts du moment</section>";
+  assert(api.content.alertIfBlank() === false, "le panneau reste alors que le contenu est revenu");
+  assert(panel.hidden === true, "le panneau n'est pas masqué");
+  assert(!dom.window.document.documentElement.className.includes("sd-content-blank"), "l'état est resté marqué");
+  dom.window.close();
+  return "écran vide signalé (recharger · copier) puis masqué au retour du contenu ✓";
+});
+
 await checkAsync("the interface unit follows the device, not a fixed guess", async () => {
   /* « Fais en sorte que l'affichage s'adapte automatiquement à l'appareil. »
      L'unité `--sd-u` dimensionne toute la coque ; elle doit se déduire de la

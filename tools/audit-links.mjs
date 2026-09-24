@@ -270,6 +270,25 @@ for (const anchor of ["data-testid=\"home-page\"", "#main-view", "main[data-test
   }
 }
 
+/* **Le panneau « la page n'a rien affiché ».** Sans lui, une page qui ne rend
+   rien redonne un écran noir muet : plus rien ne distingue « Spotify n'a pas
+   chargé » de « notre feuille a tout masqué ». */
+for (const part of ["sd-content-alert", "alertIfBlank", "sd-content-blank"]) {
+  const inJs = shellJs.includes(part);
+  const inCss = css.includes(part);
+  if (!inJs && !inCss) {
+    errors.push(`le panneau « page vide » a disparu (${part}) : un écran noir redeviendrait muet`);
+  }
+}
+if (!/data-sd-unhidden/.test(shellJs) || !/Content\.apply\(\)/.test(shellJs)) {
+  errors.push("le garde-fou de contenu a disparu : notre feuille peut de nouveau effacer la page");
+}
+for (const anchor of ["data-testid=\"home-page\"", "#main-view", "main[data-testid]"]) {
+  if (!shellJs.includes(anchor)) {
+    errors.push(`le garde-fou de contenu ne cherche plus « ${anchor} » : il ne trouverait plus le contenu à protéger`);
+  }
+}
+
 /* 2-ter-ter. Deux défauts qui ont coûté une version chacun, et qui ne se voient
    qu'à l'usage : l'écran d'accueil qui restait posé par-dessus le lecteur (il
    n'était réévalué que sur les mutations du `<body>`), et un appui d'onglet qui

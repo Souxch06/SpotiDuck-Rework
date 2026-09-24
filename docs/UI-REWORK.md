@@ -2017,3 +2017,49 @@ coque), à chaque changement de vue et à chaque redimensionnement.
   noir sans que rien ne le signale ;
 * sonde : `Structure` (quels conteneurs contiennent le contenu, lesquels ont été
   rétablis) et `Contenu` (taille du contenu, chaîne des ancêtres masqués).
+
+---
+
+## §32 — Un écran noir n'est plus muet (v2.9.10)
+
+La capture du 24/09 à 21 h 16 montre notre barre du haut et, en dessous, du
+noir. Ce que la sonde mesure sur la page réelle (conditions de WebView, cinq
+profils d'appareils) :
+
+    Contenu - accueil : contenu=412x667 flex . aucun ancetre masque
+    Structure - accueil : #main-view=412x667 flex/visible CONTIENT-LE-CONTENU
+                          #global-nav-bar=0x0 none/visible (masquée par nous, ne contient pas le contenu)
+                          [data-testid=home-page]=412x958 block/visible
+
+Autrement dit : **le contenu est là, et notre feuille ne le masque pas** (le
+garde-fou du §31 n'a même rien eu à rétablir). Un écran noir vient donc d'ailleurs
+— un chargement de page qui n'a pas abouti, ou un état de la WebView — et, jusqu'ici,
+rien ne le distinguait d'un défaut de notre côté : la coque affichait son chrome
+et se taisait.
+
+### Ce qui change
+
+`Content.alertIfBlank()`, appelé neuf secondes après le démarrage : si l'élément
+de contenu est **absent ou vide** (ni texte, ni contrôle), la coque affiche un
+panneau qui dit ce qu'elle mesure :
+
+* « La page n'a rien affiché » + l'état mesuré (« aucun élément de contenu »,
+  « contenu 0×0 », « contenu vide ») ;
+* **Recharger** — le geste utile quand c'est un chargement qui n'a pas abouti ;
+* **Copier le diagnostic** — une ligne à coller : version de la coque, mode
+  d'interface, taille de vue et d'écran, unité calculée, état du contenu, ancêtres
+  rétablie, chemin de la page, état du lecteur. C'est ce qui remplace « je ne peux
+  pas savoir ce qui se passe sur un téléphone que je n'ai pas » ;
+* **Fermer**, et l'effacement automatique dès que le contenu revient (revérifié
+  toutes les 2 s pendant 20 s, sans boucle serrée).
+
+Le panneau n'apparaît **que** si l'écran serait de toute façon vide : un contenu
+lent qui arrive après le panneau l'efface de lui-même.
+
+### Vérifications
+
+* banc : « un écran vide le dit au lieu de rester muet » — page sans contenu :
+  panneau affiché, trois commandes présentes, diagnostic complet ; contenu
+  revenu : panneau masqué, état retiré (99/99) ;
+* audit : le panneau, son marqueur d'état et le garde-fou de contenu sont exigés
+  (0/0).

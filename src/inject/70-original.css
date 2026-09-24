@@ -347,6 +347,94 @@ html.sd-mobile .sd-layer .sd-mini-volume.is-muted .sd-mini-volicon {
   opacity: 0.6;
 }
 
+/* --------------------------------------------------------------------------
+   2-ter. « La page n'a rien affiché » — au lieu d'un écran noir muet
+   C'est le panneau qui a remplacé une capture d'écran entièrement noire : il
+   nomme l'état mesuré, propose de recharger et sait copier le diagnostic.
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile .sd-layer .sd-content-alert {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: calc(var(--sd-safe-t) + 20px) 20px calc(var(--sd-safe-b) + 20px);
+  background: var(--sd-surface, #121212);
+}
+html.sd-mobile .sd-layer .sd-content-alert[hidden] {
+  display: none;
+}
+html.sd-mobile .sd-layer .sd-content-alert-card {
+  display: flex;
+  flex-direction: column;
+  gap: calc(10px * var(--sd-u));
+  width: 100%;
+  max-width: calc(420px * var(--sd-u));
+  padding: calc(18px * var(--sd-u));
+  border: 1px solid var(--sd-border);
+  border-radius: calc(16px * var(--sd-u));
+  background: var(--sd-bg-elev, #1e1e1e);
+  color: var(--sd-text);
+}
+html.sd-mobile .sd-layer .sd-content-alert-title {
+  font-size: var(--sd-fs-title-lg, calc(20px * var(--sd-u)));
+  font-weight: 700;
+}
+html.sd-mobile .sd-layer .sd-content-alert-text {
+  margin: 0;
+  font-size: var(--sd-fs-body, calc(14px * var(--sd-u)));
+  line-height: 1.45;
+  color: var(--sd-sub);
+}
+html.sd-mobile .sd-layer .sd-content-alert-diag {
+  margin: 0;
+  padding: calc(10px * var(--sd-u));
+  border-radius: calc(10px * var(--sd-u));
+  background: var(--sd-bg-tint);
+  font-size: calc(11px * var(--sd-u));
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--sd-sub);
+}
+html.sd-mobile .sd-layer .sd-content-alert-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(8px * var(--sd-u));
+}
+html.sd-mobile .sd-layer .sd-content-alert-actions > button {
+  flex: 1 1 auto;
+  min-height: var(--sd-tap);
+  padding: 0 calc(14px * var(--sd-u));
+  border: 1px solid var(--sd-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--sd-text);
+  font-size: var(--sd-fs-label, calc(13px * var(--sd-u)));
+  font-weight: 600;
+}
+/* Les deux boutons secondaires du panneau : bordure, fond transparent. */
+html.sd-mobile .sd-layer .sd-content-alert-copy,
+html.sd-mobile .sd-layer .sd-content-alert-close {
+  border: 1px solid var(--sd-border);
+  background: transparent;
+  color: var(--sd-sub);
+}
+html.sd-mobile .sd-layer .sd-content-alert-reload {
+  border-color: transparent !important;
+  background: var(--sd-accent) !important;
+  color: var(--sd-bg) !important;
+}
+html.sd-mobile .sd-layer .sd-content-alert-actions > button:active {
+  opacity: 0.75;
+}
+/* Le panneau ne doit pas masquer la coque quand le contenu est revenu. */
+html.sd-mobile.sd-content-blank .sd-layer .sd-mini,
+html.sd-mobile.sd-content-blank .sd-layer .sd-nav {
+  display: none !important;
+}
+
 /* Sans titre : le lecteur dit ce qu'il en est, sans disparaître. */
 html.sd-mobile.sd-mini-empty .sd-layer .sd-mini-art {
   background: var(--sd-bg-tint);
