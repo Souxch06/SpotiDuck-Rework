@@ -32,7 +32,7 @@
 
   if (window.SpotiDuckUI && window.SpotiDuckUI.version) return; // idempotent
 
-  var VERSION = "2.7.5";
+  var VERSION = "2.7.6";
   var STYLE_ID = "spotiduck-ui-style";
   var BODY_CLASS = "sd-mobile";
 

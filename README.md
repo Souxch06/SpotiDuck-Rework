@@ -87,6 +87,19 @@ the app” prompts, promo banners, tooltips, browser long-press menus and
 scrollbars. The choice is stored in `SharedPreferences` and survives restarts;
 installing an update does not silently keep an old default with it.
 
+### Premium features, and what a free account already has
+
+The app ships an ad/tracker host blocklist (1 314 hosts) and strips the
+subscription prompts, but **it does not unlock Premium** — and no other app can:
+audio quality, downloads and the skip/on-demand allowances are decided by
+Spotify's servers for the account that is signed in. What *is* worth knowing:
+a **free** account gets on-demand playback on the **desktop web player** (the
+*Original* and *Our shell* modes), while Spotify's **mobile** page runs the
+mobile allowances (daily on-demand time, then shuffle and six skips an hour).
+The interface chooser says so out loud.
+**[docs/PREMIUM.md](./docs/PREMIUM.md)** has the feature-by-feature table and
+the three things this project will not do.
+
 ## 🧩 The injected layer (development)
 
 The layer above (mode *SpotiDuck*) that turns the desktop Spotify web player into

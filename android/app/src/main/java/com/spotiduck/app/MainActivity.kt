@@ -528,6 +528,7 @@ class MainActivity : AppCompatActivity() {
         val checked = modes.indexOf(uiMode).coerceAtLeast(0)
         AlertDialog.Builder(this)
             .setTitle(getString(R.string.ui_mode_title))
+            .setMessage(getString(R.string.ui_mode_note))
             .setSingleChoiceItems(labels, checked) { dialog, which ->
                 switchUiMode(modes[which])
                 dialog.dismiss()

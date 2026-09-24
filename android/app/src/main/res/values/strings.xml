@@ -11,6 +11,10 @@
     <string name="msg_unlock">Lecture débloquée</string>
     <string name="msg_reload">Session expirée — rechargement…</string>
     <string name="ui_mode_title">Interface de l\'application</string>
+    <!-- Ce que le choix change pour un compte *gratuit* : c'est là que se
+         décide « quelles fonctions Premium j'ai », parce que Spotify n'accorde
+         pas les mêmes libertés à la page bureau et à la page mobile. -->
+    <string name="ui_mode_note">Sur un compte gratuit, l\'interface d\'origine (lecteur web du bureau) laisse choisir les titres ; l\'affichage mobile suit les règles mobiles de Spotify (écoute à la demande limitée par jour, six sauts par heure). Aucune interface ne débloque la qualité 320 kbps, le téléchargement ni les sauts illimités : ces décisions-là appartiennent au compte, pas à l\'application.</string>
     <!-- Trois interfaces :
          · « native » = la page web mobile de Spotify — l'affichage mobile,
            livré par défaut ;
