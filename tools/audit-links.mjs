@@ -382,6 +382,17 @@ if (!/connectTimeout = 1200/.test(blockerKt)) {
   errors.push("AdBlocker : le reniflage attend de nouveau 3,5 s — la lecture s'arrête avant la publicité");
 }
 
+/* aapt2 refuse une apostrophe non échappée dans une chaîne (`unescaped apostrophe
+   in string`) : le fichier de ressources ne compile plus du tout, et la CI — le
+   seul compilateur disponible ici — le découvre après trois minutes. Le test est
+   donc fait ici, en une seconde. */
+const stringsXml = read("android/app/src/main/res/values/strings.xml");
+for (const m of stringsXml.matchAll(/<string name="([^"]+)"[^>]*>([\s\S]*?)<\/string>/g)) {
+  if (/[^\\]'/.test(m[2])) {
+    errors.push(`strings.xml : « ${m[1]} » contient une apostrophe non échappée — aapt2 refuse le fichier (\')`);
+  }
+}
+
 if (!/input\[type='password'\]/.test(nativeAsset)) {
   errors.push("native-mode.js : le lien de connexion n'est plus conditionné à l'absence du formulaire");
 }

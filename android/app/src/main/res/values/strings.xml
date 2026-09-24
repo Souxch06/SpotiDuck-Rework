@@ -31,7 +31,7 @@
     <string name="login_window_title">Connexion</string>
     <string name="close">Fermer</string>
     <string name="login_blocked_title">Google refuse la connexion depuis une application</string>
-    <string name="login_blocked_text">Google n'autorise pas sa page de connexion dans un navigateur embarqué (c'est une règle de Google, pas un défaut de SpotiDuck), et Apple fait de même. Passez par l'e-mail et le mot de passe : l'application affiche le formulaire directement, et la session est gardée sur le téléphone — les prochaines mises à jour ne vous redemanderont rien.</string>
+    <string name="login_blocked_text">Google n\'autorise pas sa page de connexion dans un navigateur embarqué (c\'est une règle de Google, pas un défaut de SpotiDuck), et Apple fait de même.\n\nPassez par l\'e-mail et le mot de passe : l\'application affiche le formulaire directement, et la session est gardée sur le téléphone — les prochaines mises à jour ne vous redemanderont rien.</string>
     <string name="login_blocked_action">Utiliser mon e-mail et mon mot de passe</string>
     <string name="session_restore">Rétablir la session</string>
     <string name="session_restored">Session rétablie</string>

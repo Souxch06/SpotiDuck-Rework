@@ -1361,3 +1361,14 @@ nettoyage ciblé après une erreur de formulaire, `window.open` laissé intact),
 audit 0 erreur / 0 avertissement, et les nouveaux garde-fous : écriture
 synchrone, absence de doublons, copie jetée quand elle ne ramène rien,
 `window.open` jamais remplacé, refus de Google expliqué.
+
+Deux outils gagnés au passage, parce que les deux erreurs de cette passe ont été
+payées en CI avant d'être comprises :
+
+* **aapt2 en local** (`npm i --no-save aaptjs3`, le binaire est dans le paquet :
+  `bin/x64/linux/aapt2`) : `aapt2 compile --dir android/app/src/main/res -o /tmp/res.zip`
+  dit en une seconde ce que la CI disait en trois minutes. C'est lui qui a montré
+  la vraie faute : `unescaped apostrophe in string` — dans ce fichier, une
+  apostrophe doit s'écrire `\'`, sinon le fichier ne compile plus du tout ;
+* **un garde-fou d'audit** qui refuse désormais une apostrophe non échappée dans
+  `strings.xml`, pour ne plus jamais l'apprendre par un échec de build.
