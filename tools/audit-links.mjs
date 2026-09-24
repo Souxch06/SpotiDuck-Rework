@@ -181,6 +181,32 @@ if (/MODE_DEFAULT\s*=\s*MODE_INJECT/.test(activity)) {
 if (!/MODE_NATIVE,\s*MODE_ORIGINAL,\s*MODE_INJECT/.test(activity.replace(/\s+/g, " "))) {
   errors.push("MainActivity : le sélecteur d'interface ne propose plus les trois modes");
 }
+/* Le blocage des publicités audio passe par `assets/silent.mp3` : la musique est
+   servie en Ogg/AAC, les annonces en `audio/mpeg` — c'est ce qui distingue les
+   deux. On vérifie donc que le fichier est là, que le code le sert, et surtout
+   que `podz-content` / `gew4-spclient` (les serveurs de lecture) restent
+   intouchables : les bloquer, c'est faire taire toutes les musiques. */
+const adBlocker = read("android/app/src/main/java/com/spotiduck/app/AdBlocker.kt");
+const silentAsset = "android/app/src/main/assets/silent.mp3";
+try {
+  const silent = readFileSync(join(root, silentAsset));
+  if (silent.length < 8_000) errors.push(`${silentAsset} est trop petit pour être un MP3 de silence`);
+} catch {
+  errors.push(`${silentAsset} est absent — les publicités audio ne seraient plus remplacées`);
+}
+if (!/silent\.mp3/.test(adBlocker) || !/fun silentResponse/.test(adBlocker)) {
+  errors.push("AdBlocker : le remplacement des publicités audio n'est plus en place");
+}
+if (!/podz-content\|gew4-spclient/.test(adBlocker)) {
+  errors.push("AdBlocker : les serveurs de lecture ne sont plus exclus du blocage");
+}
+if (!/audio\/mpeg/.test(adBlocker)) {
+  errors.push("AdBlocker : rien ne distingue plus une annonce audio d'une musique");
+}
+if (!/isAdAudio/.test(activity) || !/sniffContentType/.test(activity)) {
+  errors.push("MainActivity : les publicités audio ne sont plus détectées avant blocage");
+}
+
 const nativeAsset = read("android/app/src/main/assets/native-mode.js");
 if (!/showUiChooser/.test(nativeAsset)) {
   errors.push("native-mode.js : plus rien n'ouvre le sélecteur d'interface (appui long)");

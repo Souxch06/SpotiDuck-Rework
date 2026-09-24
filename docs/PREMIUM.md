@@ -22,6 +22,7 @@ Ce qui suit distingue trois choses très différentes :
 | | |
 | --- | --- |
 | **Publicité et pistage** | 1 314 hôtes bloqués (régies publicitaires, mesure d'audience, `adeventtracker`, `ads-akp`, `ads-fa`, `adstudio`, `aet`, `pixel`…). Le blocage se fait au niveau réseau, dans la WebView, avant même que la requête ne parte. |
+| **Annonces audio** | Une publicité audio est **remplacée par du silence** (`assets/silent.mp3`, 22 s) au lieu d'être bloquée sèchement : le lecteur reçoit le fichier qu'il attend, la publicité ne s'entend pas. C'est la méthode de l'application d'origine (voir plus bas). |
 | **Invitations à l'abonnement** | fenêtres, encarts et le bouton Premium de la barre du bas sont retirés (§17 de `docs/UI-REWORK.md`). Plus aucune relance d'abonnement dans l'interface. |
 | **Bandeaux « application »** | « Ouvrir dans l'application », liens Play Store / App Store : retirés. |
 | **Confort** | paroles (gratuites chez Spotify), file d'attente, recherche, bibliothèque, navigation complète, notification Android et écran verrouillé. |
@@ -94,3 +95,59 @@ Trois raisons, dans l'ordre d'importance :
 
 Les trois sont légitimes, aucune ne demande de forcer quoi que ce soit. Il
 suffit de le dire.
+
+---
+
+## 6. « Alors pourquoi l'application d'origine avait des fonctions Premium ? »
+
+Question posée telle quelle. Réponse : **elle n'en avait pas non plus**. Ce
+qu'elle avait, et qu'on a repris, c'est un **bloqueur**. La confusion est
+naturelle — « pas de publicité » et « réglage de la qualité » sont deux choses
+qui *ressemblent* à Premium — mais elles ont deux explications différentes, et
+aucune ne passe par un déblocage de compte.
+
+### « Pas de publicité » = un bloqueur, pas un abonnement
+
+L'application d'origine (SpotiFuck, puis SpotiDuck) est décrite par sa propre
+documentation comme un **« fake spotify web player without ads »**. Ce qu'elle
+fait, et qu'on retrouve dans son code décompilé :
+
+* une liste d'hôtes publicitaires (`doubleclick.net`, `googlesyndication.com`,
+  `fastly-insights.com`, `sentry.io`…) répondue par une **réponse vide** ;
+* pour les annonces **audio** (`akamaized.net/audio/`, `scdn.co/audio`,
+  `mp3ad.scdn.co`, `spotifycdn.com/audio/`, `amillionads.com`, `2mdn.net`,
+  `adxcel.com`, `adstudio-assets.scdn.co`) : le type de contenu est regardé, et
+  s'il s'agit bien d'audio (`audio/mpeg`), la réponse est remplacée par
+  **`assets/silent.mp3`** — le fichier de silence embarqué dans son APK ;
+* deux adresses ne sont **jamais** bloquées : `podz-content` et
+  `gew4-spclient`, les serveurs de lecture.
+
+C'est exactement ce que fait SpotiDuck aujourd'hui (§19 de `docs/UI-REWORK.md`).
+Un bloqueur de publicité n'est pas un abonnement : il empêche une régie de
+livrer son annonce, il ne demande rien à Spotify.
+
+Et la propre page de l'application d'origine le dit noir sur blanc, dans ses
+avertissements : *« Free accounts may experience playback loading errors on
+mobile WebViews »* — les comptes gratuits **subissent** les limites de leur
+compte, elles ne sont pas levées.
+
+### « Choix du son » = le réglage de Spotify, affiché tel quel
+
+Le sélecteur de qualité existe parce que l'application **affiche le lecteur web
+de Spotify**, qui a ses propres réglages. Ce n'est pas l'application qui les
+ajoute. Et ces réglages ne dépendent pas de l'application : la qualité
+« très élevée (320 kbit/s) » est réservée à Premium par Spotify, sur le web
+comme dans ses applications — un compte gratuit s'arrête au palier normal
+(≈ 160 kbit/s). L'application affiche le menu ; c'est le compte qui décide ce
+qu'il contient.
+
+### Ce que ça change pour nous
+
+Rien à débloquer, mais deux choses à faire, et elles sont faites :
+
+1. **Le blocage, jusqu'au bout** : les annonces audio passent en silence au lieu
+   de laisser un trou dans la lecture (v2.7.8) ;
+2. **Ne pas se raconter d'histoires** : quand un utilisateur voit « Premium »
+   quelque part dans l'application, c'est un réglage de Spotify affiché tel
+   quel, ou une invitation à l'abonnement qu'on retire — jamais une fonction
+   débloquée.

@@ -196,12 +196,30 @@ class MainActivity : AppCompatActivity() {
     private fun installWebViewClient() {
         webView.webViewClient = object : WebViewClient() {
 
-            /** Ad blocking: the same hosts list the project publishes. */
+            /**
+             * Publicités et traqueurs — deux réponses différentes selon ce que
+             * la page attend.
+             *
+             *  · **Publicité audio** : le lecteur attend un flux et lui servir
+             *    « rien » le laisse devant un fichier manquant. On regarde donc
+             *    le type de contenu (`audio/mpeg` = annonce, la musique n'est pas
+             *    servie ainsi) et on répond **du silence**, comme l'application
+             *    d'origine.
+             *  · **Traqueurs et régies** : réponse vide, la requête n'aboutit
+             *    pas.
+             */
             override fun shouldInterceptRequest(
                 view: WebView,
                 request: WebResourceRequest
             ): WebResourceResponse? {
                 val url = request.url?.toString() ?: return null
+                if (adBlocker.isAdAudio(url)) {
+                    val type = adBlocker.sniffContentType(url, request.requestHeaders)
+                    if (type != null && type.startsWith("audio/")) {
+                        Log.v(TAG, "ad audio silenced: $url ($type)")
+                        return adBlocker.silentResponse()
+                    }
+                }
                 return if (adBlocker.isBlocked(url)) {
                     Log.v(TAG, "blocked: $url")
                     adBlocker.emptyResponse()
@@ -381,7 +399,17 @@ class MainActivity : AppCompatActivity() {
             /* Ce que l'application a fait du dernier lien non-web : converti, ou
                avalé (donc inerte pour l'utilisateur). */
             val link = if (lastHandledLink.isEmpty()) "" else "\n\ndernier lien : $lastHandledLink"
-            val text = probe + link
+            /* Ce que le blocage a réellement fait : combien de publicités sont
+               passées en silence, et sur quel hôte. C'est la seule trace d'un
+               blocage qui aurait touché autre chose que de la publicité. */
+            val ad = buildString {
+                append("\n\npublicités muettes : ").append(adBlocker.silenced.get())
+                append(" · hôtes bloqués : ").append(adBlocker.ruleCount)
+                if (adBlocker.lastSilenced.isNotEmpty()) {
+                    append("\nblocage : ").append(adBlocker.lastSilenced)
+                }
+            }
+            val text = probe + link + ad
             AlertDialog.Builder(this)
                 .setTitle(getString(R.string.diagnostic_title))
                 .setMessage(text)

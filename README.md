@@ -89,8 +89,10 @@ installing an update does not silently keep an old default with it.
 
 ### Premium features, and what a free account already has
 
-The app ships an ad/tracker host blocklist (1 314 hosts) and strips the
-subscription prompts, but **it does not unlock Premium** — and no other app can:
+The app ships an ad/tracker host blocklist (1 314 hosts), answers ad **audio**
+with silence (`assets/silent.mp3`, the same trick as the original app) and
+strips the subscription prompts, but **it does not unlock Premium** — and no
+other app can:
 audio quality, downloads and the skip/on-demand allowances are decided by
 Spotify's servers for the account that is signed in. What *is* worth knowing:
 a **free** account gets on-demand playback on the **desktop web player** (the

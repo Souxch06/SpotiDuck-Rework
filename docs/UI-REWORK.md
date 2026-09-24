@@ -1021,3 +1021,63 @@ récent, et un agent périmé n'obtient pas forcément les mêmes ressources. L'
 du mode mobile suit maintenant la version avec laquelle la page a été mesurée.
 L'agent de bureau, lui, ne bouge pas : l'interface d'origine et l'empreinte
 1920×1080 s'appuient dessus.
+
+## 19. Les annonces audio, passées en silence (v2.7.8)
+
+Un utilisateur demande pourquoi l'application d'origine « avait des fonctions
+Premium ». Elle n'en avait pas : elle avait un **bloqueur**, et il était
+meilleur que le nôtre sur un point.
+
+### Ce que faisait l'application d'origine
+
+Sa documentation est explicite (`DOCS.md`, bloc `classic mode`) :
+
+* régies et traqueurs (`doubleclick.net`, `googlesyndication.com`,
+  `fastly-insights.com`, `sentry.io`…) → **réponse vide** ;
+* annonces **audio** (`akamaized.net/audio/`, `scdn.co/audio`,
+  `mp3ad.scdn.co`, `spotifycdn.com/audio/`, `amillionads.com`, `2mdn.net`,
+  `adxcel.com`, `adstudio-assets.scdn.co`) → le type de contenu est regardé, et
+  si c'est de l'audio (`audio/mpeg`), la réponse est remplacée par
+  **`assets/silent.mp3`** — le fichier de silence embarqué dans son APK ;
+* `podz-content` et `gew4-spclient` ne sont **jamais** bloqués : ce sont les
+  serveurs de lecture.
+
+Le détail qui compte : la musique n'est pas servie en `audio/mpeg`. Ce
+content-type est celui des annonces, et c'est lui qui distingue les deux — pas
+l'adresse.
+
+### Ce qui change ici
+
+Jusqu'ici, une annonce audio se voyait répondre « rien ». Le lecteur attendait
+un fichier : il pouvait rester en attente, réessayer, ou sauter. Maintenant :
+
+1. `AdBlocker.isAdAudio(url)` reconnaît les adresses d'annonces (et **exclut
+   toujours** `podz-content` / `gew4-spclient`) ;
+2. `sniffContentType()` va voir le type de contenu — la réponse est jetée, la
+   WebView refait la sienne, exactement comme l'original ;
+3. si c'est de l'audio, `silentResponse()` sert `assets/silent.mp3` : 22 secondes
+   de silence, 90 396 octets, 22,05 kHz mono 24 kbit/s, fabriqué par
+   `tools/make-silence.mjs` (lamejs, dev uniquement) ;
+4. sinon — et si la vérification n'a pas pu aboutir (réseau, délai) — on bloque
+   comme avant. **Rien n'est remplacé sur une incertitude.**
+
+Les réponses vides portent désormais `Access-Control-Allow-Origin: *`, comme
+celles de l'original : sans cet en-tête, la page laisse une erreur dans la
+console à chaque requête bloquée.
+
+`tools/sync-android.mjs` refuse un `silent.mp3` qui n'est pas un MP3 ou qui
+sort de 8–400 ko ; `tools/audit-links.mjs` refuse un `AdBlocker` qui ne sert
+plus le silence, qui ne distingue plus `audio/mpeg`, ou qui a perdu l'exclusion
+des serveurs de lecture (les bloquer, c'est faire taire toutes les musiques).
+
+### Ce que la sonde en dit
+
+`Diagnostic` (sélecteur d'interface) affiche maintenant, à la fin :
+
+* **publicités muettes** — le nombre d'annonces réellement remplacées ;
+* **hôtes bloqués** — la taille de la liste chargée ;
+* **blocage** — le dernier remplacement, avec son type de contenu et son
+  adresse.
+
+C'est la trace qui permet de voir si le blocage touche autre chose que de la
+publicité : si une musique se taisait, elle apparaîtrait ici.

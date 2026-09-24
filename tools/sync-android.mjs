@@ -93,3 +93,15 @@ if (native.length < 3_000 || missing.length) {
 } else {
   console.log(`native-mode.js checked (${native.length} chars)`);
 }
+
+/* Et le silence servi à la place des publicités audio : un fichier MP3, pas
+   vide, pas énorme. Un fichier tronqué ou absent ramènerait le comportement
+   d'avant (blocage sec), ce qui n'est pas ce qu'on veut. */
+const silent = readFileSync(join(assets, "silent.mp3"));
+const isMp3 = silent.length > 4 && silent[0] === 0xff && (silent[1] & 0xe0) === 0xe0;
+if (!isMp3 || silent.length < 8_000 || silent.length > 400_000) {
+  console.error("silent.mp3 looks invalid — refusing to keep it (" + silent.length + " bytes)");
+  process.exitCode = 1;
+} else {
+  console.log(`silent.mp3 checked (${silent.length} bytes)`);
+}
