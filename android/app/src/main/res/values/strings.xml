@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">SpotiDuck</string>
+    <string name="widget_description">Lecture en cours, avec les commandes</string>
+    <string name="widget_idle">Aucune lecture — toucher pour ouvrir</string>
     <string name="channel_playback">Lecture</string>
     <string name="channel_playback_desc">Titre en cours et commandes de lecture</string>
     <string name="action_play">Lecture</string>

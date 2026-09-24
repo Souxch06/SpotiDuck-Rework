@@ -1072,6 +1072,27 @@ check("native mode: no login help outside the login pages", () => {
   return "rien sur le lecteur ✓";
 });
 
+await checkAsync("native mode: the logged-out home page offers the e-mail way too", async () => {
+  const home = new JSDOM(
+    '<!doctype html><html><body><div id="root"><button>Se connecter</button></div></body></html>',
+    { url: "https://open.spotify.com/", pretendToBeVisual: true, runScripts: "dangerously" }
+  );
+  home.window.__calls = [];
+  home.window.AndBridge = new Proxy({}, { get: () => () => {} });
+  home.window.eval(natScript);
+  const bar = home.window.document.querySelector("#sd-login-help");
+  assert(bar, "the logged-out home page got no e-mail help");
+  const button = bar.querySelector("a[data-sd='login-help-button']");
+  assert(button && /allow_password=1/.test(button.getAttribute("href")), "the button must ask for the password form");
+  /* Une fois le lecteur en place (barre de navigation), le raccourci s'efface. */
+  const nav = home.window.document.createElement("nav");
+  nav.innerHTML = "<a href='/'>Accueil</a>";
+  home.window.document.body.appendChild(nav);
+  home.window.__sdLoginTick();
+  assert(!home.window.document.querySelector("#sd-login-help"), "the help stayed on the player page");
+  return "page déconnectée oui · lecteur non ✓";
+});
+
 check("native mode: the notification controls press Spotify's buttons", () => {
   natClicks.length = 0;
   nSD.playPause();

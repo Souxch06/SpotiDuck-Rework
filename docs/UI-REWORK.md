@@ -1150,3 +1150,73 @@ disparition dès que le champ apparaît, rien sur la page du lecteur). Audit
 `Diagnostic` finit maintenant par l'état de la session : **`sp_dc` présent ou
 absent**, et **copie de secours oui ou non**. C'est la réponse directe à « est-ce
 que je vais devoir me reconnecter après la prochaine mise à jour ? ».
+
+## 21. Les fonctionnalités de SpotiDuck : widget et Android Auto (v2.8.0)
+
+Demande : « reprends toutes les fonctionnalités de SpotiDuck ». Sa propre page
+en annonce cinq, plus deux réglages. Voici où chacune en est, sans arrondir.
+
+| Fonctionnalité annoncée | État |
+| --- | --- |
+| Blocage de publicité intégré | déjà là : 1 314 hôtes au niveau réseau, et les annonces **audio** remplacées par du silence (§19) |
+| Contrôles média | déjà là : notification (précédent, lecture/pause, suivant) et mini-lecteur dans l'habillage |
+| Session média sur l'écran verrouillé | déjà là : `MediaSessionCompat` (pochette, titre, artiste, avance) |
+| Service d'arrière-plan | déjà là : service de premier plan + verrous d'éveil, démarrés par la page |
+| **Widget** | **ajouté** : `PlayerWidget` |
+| **Android Auto** | **ajouté** : `PlaybackService` est un `MediaBrowserServiceCompat` |
+| Réglages de compatibilité / échelle de l'agent | le sélecteur d'interface **est** ce réglage : chaque mode est un agent et une mise en page |
+| Liste de blocage personnalisée | **ajouté** : `custom_blocklist.txt` dans les fichiers privés |
+
+### Le widget
+
+`res/layout/widget_player.xml` : pochette, titre, artiste, et trois boutons
+(précédent, lecture/pause, suivant). Le quatrième quart du travail est ailleurs :
+
+* **une seule route** — les boutons du widget envoient les **mêmes actions** que
+  la notification, au même service (`ACTION_PLAY`, `ACTION_PAUSE`…). Deux chemins
+  différents seraient deux endroits où ça casse ;
+* **le service redessine** — `PlaybackService.render()` appelle
+  `PlayerWidget.refresh()`, au même moment qu'il met à jour la notification. Le
+  widget ne se réveille donc jamais tout seul (`updatePeriodMillis = 0`) ;
+* **l'état vient de la page** — la musique est décodée par le lecteur web : ni le
+  widget ni le service ne lisent quoi que ce soit ;
+* la pochette n'est affichée que si elle est **déjà en mémoire** (elle est chargée
+  pour la notification) : pas de téléchargement déclenché par un widget.
+
+### Android Auto
+
+Auto ne cherche pas une application : il cherche un **service de navigation
+média**. `PlaybackService` étend donc `MediaBrowserServiceCompat`, publie le
+jeton de sa session (`sessionToken = session.sessionToken`) — la même session que
+l'écran verrouillé — et répond « rien » à la navigation (`onGetRoot` /
+`onLoadChildren`) : la file d'attente appartient à la page, pas au service.
+Le manifeste déclare l'action `android.media.browse.MediaBrowserService` et le
+`automotive_app_desc.xml` (`<uses name="media" />`).
+
+Ce qui n'est pas vérifiable ici : Auto n'existe pas dans un émulateur sans son
+application. Ce qui est vérifié : le service, la session publiée, la déclaration
+au manifeste, et le fait que le build passe.
+
+### La liste de blocage personnalisée
+
+Un fichier `custom_blocklist.txt` déposé dans le dossier privé de
+l'application (même format que la liste publiée : un hôte par ligne, `#` pour
+les commentaires) **ajoute** des hôtes. Deux garde-fous :
+
+* une liste ne peut **pas retirer** un hôte de la liste publiée — elle ajoute,
+  c'est tout ;
+* `podz-content` et `gew4-spclient` sont exclus dans le code (`isBlocked`), pas
+  dans le fichier : **aucune** liste, même la plus agressive, ne peut couper la
+  musique. C'est exactement l'avertissement que SpotiDuck donne à ses
+  utilisateurs (« des filtres trop agressifs peuvent bloquer des adresses
+  essentielles ») — ici, c'est impossible par construction.
+
+### La connexion, encore
+
+Le raccourci « e-mail et mot de passe » (§20) vaut maintenant pour **les deux**
+portes d'entrée de Spotify : `accounts.spotify.com/fr/login`, et
+`open.spotify.com/login` — plus la page d'accueil déconnectée de
+`open.spotify.com`, qui n'affiche qu'un bouton « Se connecter ». Il s'efface dès
+qu'un champ de mot de passe ou la barre de navigation apparaît. La session est
+enregistrée sur les deux domaines (c'est `accounts.spotify.com` qui pose le
+cookie, `open.spotify.com` qui s'en sert).

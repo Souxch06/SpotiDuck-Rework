@@ -89,6 +89,19 @@ installing an update does not silently keep an old default with it.
 
 ### Premium features, and what a free account already has
 
+### Feature list (what SpotiDuck announced, where each one stands)
+
+| SpotiDuck feature | Here |
+| --- | --- |
+| Built-in ad-blocking | 1 314 hosts blocked at the network layer, plus ad **audio** replaced with silence (`assets/silent.mp3`) — §19 |
+| Media controls | notification with play/pause/next/previous, and the mini player in the injected shell |
+| Lock-screen media session | `PlaybackService` publishes a `MediaSessionCompat` — artwork, title, artist, seek |
+| Background service control | foreground service + wake locks, started on demand by the page |
+| **Widget** | `PlayerWidget`: artwork, title, artist, previous / play-pause / next on the home screen — v2.8.0 |
+| **Android Auto** | `PlaybackService` is a `MediaBrowserServiceCompat`: Auto shows the same session as the lock screen — v2.8.0 |
+| Platform compatibility settings | the interface chooser (bottom nav, original, our shell) *is* the compatibility setting — each mode is a user agent and a layout |
+| Custom blocklist | drop a `custom_blocklist.txt` in the app's private files; it **adds** hosts, and playback hosts stay unblockable — v2.8.0 |
+
 The app ships an ad/tracker host blocklist (1 314 hosts), answers ad **audio**
 with silence (`assets/silent.mp3`, the same trick as the original app) and
 strips the subscription prompts, but **it does not unlock Premium** — and no

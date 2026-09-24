@@ -4,13 +4,13 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
-import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Build
-import android.os.IBinder
+import android.os.Bundle
+import android.support.v4.media.MediaBrowserCompat
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
@@ -18,6 +18,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import androidx.media.MediaBrowserServiceCompat
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.ConcurrentHashMap
@@ -30,8 +31,14 @@ import java.util.concurrent.ConcurrentHashMap
  * attach to — the service mirrors the state the injected layer reports
  * (`recMediaStatus` / `recMediaPosition`) into a `MediaSessionCompat`, and sends
  * every user action back into the page through [SpotiDuckUI]'s public API.
+ *
+ * C'est un `MediaBrowserServiceCompat` et non un `Service` : c'est ce que
+ * **Android Auto** interroge pour retrouver les applications média. La session
+ * publiée est exactement celle de l'écran verrouillé — Auto n'a donc rien de
+ * plus à savoir, et la file d'attente n'est pas exposée (elle appartient à la
+ * page, pas au service : on répond « rien » à la navigation).
  */
-class PlaybackService : Service() {
+class PlaybackService : MediaBrowserServiceCompat() {
 
     data class Status(
         val title: String,
@@ -62,7 +69,26 @@ class PlaybackService : Service() {
             })
             isActive = true
         }
+        /* Ce que Android Auto cherche : le jeton de session média. Sans lui,
+           l'application apparaîtrait dans la liste d'Auto mais sans rien à
+           afficher. */
+        sessionToken = session.sessionToken
         current = lastStatus
+    }
+
+    /** Racine de navigation média : identifiant arbitraire, aucune arborescence. */
+    override fun onGetRoot(
+        clientPackageName: String,
+        clientUid: Int,
+        rootHints: Bundle?
+    ): MediaBrowserServiceCompat.BrowserRoot = MediaBrowserServiceCompat.BrowserRoot(ROOT_ID, null)
+
+    /** Aucune liste à naviguer : la file d'attente vit dans la page. */
+    override fun onLoadChildren(
+        parentId: String,
+        result: MediaBrowserServiceCompat.Result<MutableList<MediaBrowserCompat.MediaItem>>
+    ) {
+        result.sendResult(mutableListOf())
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -89,8 +115,6 @@ class PlaybackService : Service() {
         return START_STICKY
     }
 
-    override fun onBind(intent: Intent?): IBinder? = null
-
     override fun onDestroy() {
         instance = null
         session.isActive = false
@@ -115,6 +139,8 @@ class PlaybackService : Service() {
             ?.let { manager ->
                 runCatching { manager.notify(NOTIFICATION_ID, buildNotification(status)) }
             }
+        // Le widget affiche le même état : il est redessiné ici, au même moment.
+        runCatching { PlayerWidget.refresh(this) }
     }
 
     private fun updateSession(status: Status) {
@@ -241,11 +267,16 @@ class PlaybackService : Service() {
         private const val CHANNEL_ID = "spotiduck_playback"
         private const val NOTIFICATION_ID = 42
 
-        private const val ACTION_PLAY = "com.spotiduck.app.PLAY"
-        private const val ACTION_PAUSE = "com.spotiduck.app.PAUSE"
-        private const val ACTION_NEXT = "com.spotiduck.app.NEXT"
-        private const val ACTION_PREVIOUS = "com.spotiduck.app.PREVIOUS"
-        private const val ACTION_STOP = "com.spotiduck.app.STOP"
+        /** Racine de navigation média (Android Auto). */
+        const val ROOT_ID = "spotiduck"
+
+        /* Les actions de la notification **et du widget** : une seule route,
+           un seul endroit où ça peut casser. */
+        const val ACTION_PLAY = "com.spotiduck.app.PLAY"
+        const val ACTION_PAUSE = "com.spotiduck.app.PAUSE"
+        const val ACTION_NEXT = "com.spotiduck.app.NEXT"
+        const val ACTION_PREVIOUS = "com.spotiduck.app.PREVIOUS"
+        const val ACTION_STOP = "com.spotiduck.app.STOP"
 
         @Volatile
         private var instance: PlaybackService? = null
@@ -264,6 +295,12 @@ class PlaybackService : Service() {
         var jsExecutor: ((String) -> Unit)? = null
 
         private fun emptyStatus() = Status("", "", "", 0L, 0L, false)
+
+        /** Ce que le lecteur joue en ce moment (null si rien n'a encore été dit). */
+        fun currentStatus(): Status? = lastStatus
+
+        /** Pochette déjà téléchargée, si elle est en mémoire (widget). */
+        fun coverFor(url: String): Bitmap? = iconCache[url]
 
         /** Called by the bridge on every meaningful playback change. */
         fun update(context: Context, status: Status) {

@@ -296,7 +296,9 @@ class MainActivity : AppCompatActivity() {
                    posés ou rafraîchis. On les écrit sur le disque **tout de
                    suite** (la WebView le fait paresseusement, et une mise à jour
                    tue le processus avant) et on garde une copie de secours. */
-                if (url != null && url.contains("open.spotify.com")) {
+                /* La session se pose sur `accounts.spotify.com` et vit sur
+                   `open.spotify.com` : les deux pages méritent l'enregistrement. */
+                if (url != null && (url.contains("open.spotify.com") || url.contains("accounts.spotify.com"))) {
                     flushCookies()
                     saveCookies()
                 }

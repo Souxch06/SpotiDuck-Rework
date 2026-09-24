@@ -238,6 +238,35 @@ if (!/url\.contains\("open\.spotify\.com"\)[\s\S]{0,300}?saveCookies/.test(activ
   errors.push("MainActivity : la session n'est plus enregistrée en fin de chargement du lecteur");
 }
 
+/* Les fonctionnalités que SpotiDuck annonce : blocage de publicité (fait),
+   contrôles média et écran verrouillé (fait), **widget**, **Android Auto**,
+   service d'arrière-plan. Un widget ou un Auto qui disparaîtrait ne casserait
+   rien visiblement — d'où ces vérifications. */
+const appManifest = read("android/app/src/main/AndroidManifest.xml");
+const service = read("android/app/src/main/java/com/spotiduck/app/PlaybackService.kt");
+const widget = read("android/app/src/main/java/com/spotiduck/app/PlayerWidget.kt");
+if (!/PlayerWidget/.test(appManifest) || !/appwidget\.action\.APPWIDGET_UPDATE/.test(appManifest)) {
+  errors.push("AndroidManifest : le widget n'est plus déclaré");
+}
+for (const res of [
+  "android/app/src/main/res/layout/widget_player.xml",
+  "android/app/src/main/res/xml/widget_player_info.xml",
+]) {
+  if (!existsSync(join(root, res))) errors.push(`le widget a perdu ${res}`);
+}
+if (!/class PlayerWidget : AppWidgetProvider/.test(widget) || !/PlaybackService\.ACTION_/.test(widget)) {
+  errors.push("PlayerWidget : le widget n'est plus un widget, ou n'utilise plus les actions du service");
+}
+if (!/MediaBrowserServiceCompat/.test(service) || !/onGetRoot/.test(service) || !/sessionToken = session\.sessionToken/.test(service)) {
+  errors.push("PlaybackService : Android Auto ne trouverait plus la lecture (plus de service de navigation média)");
+}
+if (!/android\.media\.browse\.MediaBrowserService/.test(appManifest) || !/automotive_app_desc/.test(appManifest)) {
+  errors.push("AndroidManifest : Android Auto n'est plus déclaré");
+}
+if (!/PlayerWidget\.refresh/.test(service)) {
+  errors.push("PlaybackService : le widget n'est plus redessiné quand la lecture change");
+}
+
 const nativeAsset = read("android/app/src/main/assets/native-mode.js");
 if (!/showUiChooser/.test(nativeAsset)) {
   errors.push("native-mode.js : plus rien n'ouvre le sélecteur d'interface (appui long)");

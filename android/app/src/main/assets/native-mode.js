@@ -566,8 +566,23 @@
    *
    * Rien n'est envoyé nulle part : le bouton est un lien vers la même page.
    * ------------------------------------------------------------------ */
-  var LOGIN_HOST = /(^|\.)accounts\.spotify\.com$/i;
-  var LOGIN_PATH = /\/(login|signup|password|reset|fr\/login|intl-[a-z-]+\/login)/i;
+  var LOGIN_HOST = /(^|\.)(accounts|open)\.spotify\.com$/i;
+  /* Spotify a deux portes : `accounts.spotify.com/fr/login` et, depuis le
+     lecteur, `open.spotify.com/login` (ou `/intl-xx/login`). Les deux mènent au
+     même endroit et les deux méritent le même raccourci. */
+  var LOGIN_PATH = /\/(login|signup|sign-up|password|reset|mot-de-passe|fr\/login|intl-[a-z-]+\/login)/i;
+
+  /** La page est-elle une porte de connexion ? */
+  function isLoginPage() {
+    if (!LOGIN_HOST.test(window.location.hostname)) return false;
+    if (LOGIN_PATH.test(window.location.pathname)) return true;
+    /* `open.spotify.com` sans barre de navigation ni lecteur : c'est la page
+       d'accueil déconnectée, qui propose déjà « Se connecter ». */
+    return (
+      window.location.hostname === "open.spotify.com" &&
+      !document.querySelector("[data-testid='now-playing-widget'],nav,[role='navigation']")
+    );
+  }
 
   function emailField() {
     try {
@@ -598,7 +613,7 @@
   }
 
   function showLoginHelp() {
-    if (!LOGIN_HOST.test(window.location.hostname) || !LOGIN_PATH.test(window.location.pathname)) {
+    if (!isLoginPage()) {
       removeLoginHelp();
       return;
     }

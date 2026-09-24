@@ -41,9 +41,38 @@
             </intent-filter>
         </activity>
 
+        <!--
+          Le service de lecture. Exporté parce que deux clients extérieurs
+          l'interrogent : Android Auto (qui cherche l'action
+          `android.media.browse.MediaBrowserService`) et le système, pour la
+          session média. Il n'expose qu'un jeton de session et une arborescence
+          vide — la file d'attente vit dans la page.
+        -->
         <service
             android:name=".PlaybackService"
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="android.media.browse.MediaBrowserService" />
+            </intent-filter>
+        </service>
+
+        <!-- Le widget de l'écran d'accueil : pochette, titre, commandes. -->
+        <receiver
+            android:name=".PlayerWidget"
             android:exported="false"
-            android:foregroundServiceType="mediaPlayback" />
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_player_info" />
+        </receiver>
+
+        <!-- Android Auto : ce que l'application fournit (un lecteur média). -->
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
     </application>
 </manifest>

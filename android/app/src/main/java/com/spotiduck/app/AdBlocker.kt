@@ -68,6 +68,27 @@ class AdBlocker(private val context: Context) {
         } catch (_: Exception) {
             // Sans ce fichier, on bloque comme avant : réponse vide.
         }
+        /* Liste personnalisée (fonctionnalité annoncée par SpotiDuck) : un
+           fichier `custom_blocklist.txt` déposé dans le dossier privé de
+           l'application, même format que la liste publiée — un hôte par ligne,
+           `#` pour les commentaires. Il **ajoute** des hôtes, il n'en retire
+           aucun, et les serveurs de lecture restent hors de portée du blocage
+           quelle que soit la liste : c'est écrit dans `isBlocked`, pas dans le
+           fichier, pour qu'aucun fichier ne puisse couper la musique. */
+        try {
+            val custom = java.io.File(context.filesDir, CUSTOM_LIST)
+            if (custom.isFile) {
+                custom.readLines().forEach { line ->
+                    val cleaned = line.substringBefore('#').trim()
+                    if (cleaned.isEmpty()) return@forEach
+                    val host = cleaned.split(Regex("\\s+")).lastOrNull()?.lowercase() ?: return@forEach
+                    if (host.contains('.')) blocked.add(host)
+                }
+                Log.i(TAG, "liste personnalisée : ${blocked.size} règles")
+            }
+        } catch (_: Exception) {
+            // Un fichier illisible ne doit pas empêcher le blocage de la liste publiée.
+        }
         loaded = true
     }.also { it.isDaemon = true }.start()
 
@@ -75,6 +96,9 @@ class AdBlocker(private val context: Context) {
     fun isBlocked(url: String): Boolean {
         if (!loaded) return false
         if (url.startsWith("data:") || url.startsWith("blob:")) return false
+        /* Les serveurs de lecture ne sont **jamais** bloqués, même par une liste
+           personnalisée : les couper, c'est faire taire toute la musique. */
+        if (NEVER_BLOCK.containsMatchIn(url)) return false
         val host = hostOf(url) ?: return false
         if (blocked.contains(host)) return true
         // Sub-domains: a rule for `doubleclick.net` also blocks
@@ -191,6 +215,11 @@ class AdBlocker(private val context: Context) {
     }
 
     companion object {
+        private const val TAG = "SpotiDuck"
+
+        /** Nom du fichier de liste personnalisée, dans les fichiers privés. */
+        const val CUSTOM_LIST = "custom_blocklist.txt"
+
         /** Ce que même un bloqueur ne doit pas toucher. */
         private val NEVER_BLOCK = Regex("podz-content|gew4-spclient", RegexOption.IGNORE_CASE)
 
