@@ -44,11 +44,13 @@ jobs:
       - name: Le banc de démonstration (notre interface sur le faux lecteur)
         run: |
           node tools/serve.mjs 5173 > /tmp/serve.log 2>&1 &
+          # Le banc est dans demo/ : `/player.html` à la racine répond 404, et la
+          # première version de cette sonde mesurait donc une page d'erreur.
           for i in $(seq 1 20); do
-            curl -sf http://127.0.0.1:5173/player.html -o /dev/null && break
+            curl -sf http://127.0.0.1:5173/demo/player.html -o /dev/null && break
             sleep 0.5
           done
-          curl -sf -o /dev/null http://127.0.0.1:5173/player.html && echo "banc prêt" || echo "banc injoignable"
+          curl -sf -o /dev/null http://127.0.0.1:5173/demo/player.html && echo "banc prêt" || echo "banc injoignable"
       - name: Charger la coque sur la vraie page
         run: node tools/probe-coop.mjs
       - uses: actions/upload-artifact@v4

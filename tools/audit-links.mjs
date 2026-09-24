@@ -213,6 +213,13 @@ if (!/welcomeObs\.observe\(document\.documentElement,\s*\{\s*childList:\s*true,\
 if (!/location\.assign\(name === "search" \? "\/search" : "\/"\)/.test(shellJs)) {
   errors.push("un appui d'onglet n'est plus vérifié : un bouton inerte laisserait l'appui sans effet");
 }
+/* Le piège du lien de connexion : `a[href*="/login"]` compte aussi les liens de
+   la coque, qui en porte plusieurs. L'écran d'accueil se rendait alors vrai
+   **tout seul** sur toute page sans lecteur, et masquait la coque entière. Le
+   calcul doit trier les nœuds qui sont à nous. */
+if (!/function spotifyLoginLink\(\)/.test(shellJs) || !/spotifyLoginLink\(\)/.test(shellJs.replace(/function spotifyLoginLink\(\)/, ""))) {
+  errors.push("le lien de connexion de Spotify n'est plus distingué des nôtres : l'écran d'accueil peut se rendre vrai tout seul");
+}
 
 /* 2-quater. Le mode livré par défaut. C'est une décision surveillée, et elle a
    changé de sens une fois, pour une raison **mesurée** (sonde `probe-playback`,

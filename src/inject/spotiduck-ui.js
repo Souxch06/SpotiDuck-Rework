@@ -2669,7 +2669,7 @@
       return !!(pick(SEL.mainView) || pick(SEL.npBar));
     },
     signedOut: function () {
-      return !this.signedIn() && !!$('a[href^="/login"], a[href*="/login"]');
+      return !this.signedIn() && !!spotifyLoginLink();
     },
     report: function () {
       var state = this.isLoginPage() ? "login" : this.signedIn() ? "in" : this.signedOut() ? "out" : null;
@@ -2695,12 +2695,41 @@
    * (logo, texte, bouton) par-dessus, avec l'accès à la connexion classique
    * par e-mail/mot de passe.
    * ------------------------------------------------------------------ */
+  /* Un lien de connexion **de Spotify**, pas le nôtre.
+     Le calcul naïf (`a[href*="/login"]`) comptait aussi les liens de notre
+     propre coque — son écran d'accueil en contient deux, et la barre du haut un
+     troisième. Résultat : sur toute page sans lecteur, la coque se « prouvait »
+     à elle-même que la page était la page marketing de Spotify, son écran
+     d'accueil se rendait vrai tout seul… et il ne se retirait plus, masquant la
+     coque entière (mesuré sur le banc : `haut/bas/mini/en-tête = MASQUÉ 0×0`,
+     classe `sd-welcome-on`, alors que la coque était construite). C'est le
+     « c'est le bordel » reproduit au laboratoire.
+     Même piège pour l'état de session : compter notre propre lien faisait
+     rapporter « déconnecté » à l'application pendant un chargement, donc une
+     session valable pouvait être jetée. */
+  function spotifyLoginLink() {
+    var links = document.querySelectorAll('a[href^="/login"], a[href*="/login"]');
+    for (var i = 0; i < links.length; i++) {
+      var node = links[i];
+      var ours = false;
+      while (node && node.nodeType === 1) {
+        if (node.classList && node.classList.contains("sd-layer")) {
+          ours = true;
+          break;
+        }
+        node = node.parentNode;
+      }
+      if (!ours) return links[i];
+    }
+    return null;
+  }
+
   var Welcome = {
     apply: function () {
       var html = document.documentElement;
       var login = html.classList.contains("sd-login");
       var app = !!(pick(SEL.mainView) || pick(SEL.npBar));
-      var marketing = !!$('a[href^="/login"], a[href*="/login"]');
+      var marketing = !!spotifyLoginLink();
       /* **Jamais** sur la page de connexion. C'était le défaut : la coque
          s'installe aussi sur `accounts.spotify.com`, y reconnaît une page de
          connexion (`sd-login`) et posait l'écran d'accueil **par-dessus le

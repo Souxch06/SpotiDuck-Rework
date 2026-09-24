@@ -238,7 +238,12 @@ async function main() {
        (`demo/player.html`) est le DOM pour lequel la coque est écrite — c'est
        l'affichage de référence, celui des captures du projet. Le serveur est
        lancé par le workflow. */
-    { label: "notre", url: "http://127.0.0.1:5173/player.html", mode: "notre" },
+    /* **Le chemin compte** : `/player.html` (racine) n'existe pas — le banc est
+       dans `demo/`. La première version de cette sonde mesurait donc une page
+       *404* : tout y était « masqué », et la conclusion qu'on en avait tirée
+       (« la coque n'habille pas la vraie page ») portait sur une page d'erreur.
+       Mesurer le banc, c'est mesurer `/demo/player.html`. */
+    { label: "notre", url: "http://127.0.0.1:5173/demo/player.html", mode: "notre" },
   ];
 
   const lines = [];

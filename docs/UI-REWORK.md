@@ -1666,3 +1666,40 @@ d'origine et la page mobile restent sélectionnables.
 La lecture ne change pas : `MODE_INJECT` s'appuie sur le **moteur d'origine**
 (empreinte navigateur « bureau » + page bureau, voir §24) — c'est le même moteur
 qui lit la musique, avec notre couche d'interface par-dessus.
+
+### Deuxième couche : l'écran d'accueil se rendait vrai tout seul
+
+Le banc a permis de voir, dans la coque elle-même, ce que la vraie page montrait
+déjà : l'écran d'accueil restait posé. La cause n'était pas la surveillance, mais
+le **critère** :
+
+```js
+var marketing = !!$('a[href^="/login"], a[href*="/login"]');
+```
+
+L'écran d'accueil de la coque contient lui-même des liens `/login` (son bouton
+« Se connecter »), et la barre du haut aussi. Sur toute page **sans lecteur**, la
+coque se « prouvait » donc à elle-même qu'elle était sur la page marketing de
+Spotify : `show` devenait vrai, et l'écran d'accueil — qui masque la barre du
+bas, le mini-lecteur et l'en-tête — recouvrait la coque définitivement. Mesuré au
+laboratoire, en local, sur une page nue : `.sd-layer` construit, classe
+`sd-welcome-on`, `haut/bas/mini/en-tête = MASQUÉ 0×0`. C'est exactement la
+photographie que la sonde avait prise.
+
+Le calcul passe désormais par `spotifyLoginLink()`, qui écarte les liens
+appartenant à `.sd-layer` : seuls les liens **de Spotify** comptent. Le même
+correctif vaut pour l'état de session (`LoginState.signedOut()`), où un faux
+« déconnecté » pendant un chargement pouvait faire jeter une session valable —
+ce que la 2.7.9 s'interdit.
+
+### Et une erreur de mesure, corrigée
+
+La sonde visait `http://127.0.0.1:5173/player.html` : ce chemin **n'existe pas**
+(le banc est `demo/player.html`). Elle mesurait donc une page **404**, où — faute
+de lecteur — l'écran d'accueil restait posé ; la conclusion du §26 (« la coque ne
+laisse voir qu'une barre du haut ») portait ainsi, en partie, sur une page
+d'erreur. Le banc du §26 n'était pas mesuré : il était inventé.
+
+Leçon pour la suite, du même genre que celles du §26 : **une sonde doit vérifier
+qu'elle mesure bien la page voulue** — un chemin faux, une redirection ou une
+page d'erreur rendent des chiffres plausibles et une conclusion fausse.

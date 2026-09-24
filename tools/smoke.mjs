@@ -724,6 +724,28 @@ checkAsync("the welcome screen retires when the player appears inside a containe
   return "retiré dès que le lecteur apparaît, sans mutation du body ✓";
 });
 
+await checkAsync("our own login links never keep the welcome screen on", async () => {
+  /* Le défaut trouvé au banc : `marketing` était calculé avec
+     `a[href*="/login"]`, ce qui comptait **nos propres** liens — l'écran
+     d'accueil en contient, la barre du haut aussi. Sur une page sans lecteur
+     (chargement, page d'erreur, banc), la coque se prouvait donc à elle-même
+     qu'elle était sur la page marketing de Spotify : l'écran d'accueil se
+     rendait vrai **tout seul** et masquait la coque entière. */
+  const bare = new JSDOM("<!doctype html><html><body><pre>page sans lecteur</pre></body></html>", {
+    url: "http://127.0.0.1:5173/player.html",
+    pretendToBeVisual: true,
+    runScripts: "dangerously",
+  });
+  bare.window.AndBridge = new Proxy({}, { get: () => () => undefined });
+  bare.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(900);
+  const owner = bare.window.document.querySelector('.sd-layer a[href*="/login"]');
+  assert(owner, "le banc devrait porter au moins un lien /login : c'est le piège à couvrir");
+  const cls = bare.window.document.documentElement.className;
+  assert(!cls.includes("sd-welcome-on"), "l'écran d'accueil se rend vrai tout seul, il masque la coque : " + cls);
+  return "seuls les liens de Spotify comptent ✓";
+});
+
 check("the welcome CTA is handed to the app, not just a link", () => {
   const calls = [];
   early.window.AndBridge = new Proxy(
