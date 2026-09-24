@@ -203,6 +203,17 @@ if (!/welcome-cta[\s\S]{0,600}openLogin/.test(shellJs)) {
   errors.push("le bouton de l'écran d'accueil n'est plus relié à la connexion native");
 }
 
+/* 2-ter-ter. Deux défauts qui ont coûté une version chacun, et qui ne se voient
+   qu'à l'usage : l'écran d'accueil qui restait posé par-dessus le lecteur (il
+   n'était réévalué que sur les mutations du `<body>`), et un appui d'onglet qui
+   ne produisait rien quand le bouton de Spotify n'obéissait pas. */
+if (!/welcomeObs\.observe\(document\.documentElement,\s*\{\s*childList:\s*true,\s*subtree:\s*true/.test(shellJs)) {
+  errors.push("l'écran d'accueil n'est plus surveillé sur toute la page : il resterait posé par-dessus le lecteur");
+}
+if (!/location\.assign\(name === "search" \? "\/search" : "\/"\)/.test(shellJs)) {
+  errors.push("un appui d'onglet n'est plus vérifié : un bouton inerte laisserait l'appui sans effet");
+}
+
 /* 2-quater. Le mode livré par défaut. C'est une décision surveillée, et elle a
    changé de sens une fois, pour une raison **mesurée** (sonde `probe-playback`,
    run 36028586893) : le message « Lecture désactivée » — « Spotify ne
@@ -217,20 +228,23 @@ const activity = read("android/app/src/main/java/com/spotiduck/app/MainActivity.
 for (const stale of ["the two interfaces", "MODE_INJECT is the default"]) {
   if (activity.includes(stale)) errors.push(`MainActivity : commentaire périmé (« ${stale} »)`);
 }
-/* Mesuré par la sonde `probe-coop` : sur la vraie page, l'interface d'origine
-   se construit entièrement, la coque maison n'y laisse qu'une barre du haut, et
-   la page mobile ne lit rien. Le défaut est donc l'interface d'origine. */
-if (!/MODE_DEFAULT\s*=\s*MODE_ORIGINAL/.test(activity)) {
-  errors.push("MainActivity : le mode par défaut n'est plus l'interface d'origine");
+/* Le défaut est **notre coque**, demandée explicitement : « réutilise
+   exactement notre UI qui était sur notre projet ». La 2.9.3 avait livré
+   l'interface d'origine par défaut sur la foi d'une mesure de sonde ; cette
+   mesure relevait en réalité l'**écran d'accueil de la coque**, qui ne se
+   retirait jamais lorsqu'un lecteur se construisait dans un conteneur déjà en
+   place, et masquait donc la coque entière. Corrigé (voir 2-ter-ter). */
+if (!/MODE_DEFAULT\s*=\s*MODE_INJECT/.test(activity)) {
+  errors.push("MainActivity : le mode par défaut n'est plus la coque SpotiDuck");
 }
-for (const wrong of ["MODE_NATIVE", "MODE_INJECT"]) {
+for (const wrong of ["MODE_NATIVE", "MODE_ORIGINAL"]) {
   if (new RegExp(`MODE_DEFAULT\\s*=\\s*${wrong}`).test(activity)) {
-    errors.push(`MainActivity : le défaut est repassé sur ${wrong} — mesuré incomplet sur la vraie page`);
+    errors.push(`MainActivity : le défaut est repassé sur ${wrong} — ce n'est plus notre interface`);
   }
 }
 /* …et le mode par défaut doit rester quittable **depuis lui-même**, sans
    réinstaller : c'est ce qui manquait à la 2.6.0. */
-if (!/MODE_ORIGINAL,\s*MODE_INJECT,\s*MODE_NATIVE/.test(activity.replace(/\s+/g, " "))) {
+if (!/MODE_INJECT,\s*MODE_ORIGINAL,\s*MODE_NATIVE/.test(activity.replace(/\s+/g, " "))) {
   errors.push("MainActivity : le sélecteur d'interface ne propose plus les trois modes, défaut en tête");
 }
 /* L'identité « bureau » de la coque : agent annoncé **et** `navigator`

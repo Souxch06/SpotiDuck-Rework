@@ -697,6 +697,33 @@ check("logged-out landing page shows the native welcome screen", () => {
   return "logo + titre + bouton « Se connecter »";
 });
 
+checkAsync("the welcome screen retires when the player appears inside a container", async () => {
+  /* Le défaut mesuré : l'écran d'accueil n'était réévalué que sur les mutations
+     du **body**. Un lecteur qui se construit dans un conteneur déjà en place ne
+     produit aucune mutation à ce niveau — l'écran d'accueil restait donc posé
+     par-dessus, indéfiniment. */
+  const host = new JSDOM(
+    '<!doctype html><html><body><div id="global-nav-bar"><a href="/login">Log in</a></div><div id="root"></div></body></html>',
+    { url: "https://open.spotify.com/", pretendToBeVisual: true, runScripts: "dangerously" }
+  );
+  host.window.AndBridge = new Proxy({}, { get: () => () => undefined });
+  host.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(200);
+  assert(host.window.document.documentElement.classList.contains("sd-welcome-on"), "l'écran d'accueil devrait être affiché au départ");
+
+  /* Le lecteur arrive… dans #root, sans toucher aux enfants directs de <body>. */
+  host.window.document.querySelector("#root").innerHTML =
+    '<div class="main-view-container"><div class="main-view-container__scroll-node">' +
+    '<div id="main-view"></div></div></div>' +
+    '<aside data-testid="now-playing-bar"><button data-testid="control-button-playpause"></button></aside>';
+  await tick(900); /* au-delà du débounce, en deçà du filet de sécurité (2 s) */
+  assert(
+    !host.window.document.documentElement.classList.contains("sd-welcome-on"),
+    "l'écran d'accueil recouvre encore le lecteur"
+  );
+  return "retiré dès que le lecteur apparaît, sans mutation du body ✓";
+});
+
 check("the welcome CTA is handed to the app, not just a link", () => {
   const calls = [];
   early.window.AndBridge = new Proxy(

@@ -2912,6 +2912,7 @@
         return;
       }
       emit({ tab: name }, "route");
+      var before = location.pathname + "|" + Spotify.route();
       if (name === "home") {
         Spotify.goHome();
         UI.el.tabbar.classList.remove("is-library");
@@ -2920,6 +2921,22 @@
         setTimeout(function () {
           Spotify.focusSearch();
         }, 350);
+      }
+      /* Le clic sur un bouton de Spotify ne suffit pas toujours (bouton absent,
+         désactivé ou remplacé d'une version à l'autre) : un appui qui ne produit
+         **rien** est exactement ce que l'utilisateur appelle « rien n'est relié ».
+         On vérifie donc, et à défaut l'application navigue elle-même — c'est ce
+         que fait déjà le mode mobile (`native-mode.js`). */
+      if (name === "home" || name === "search") {
+        setTimeout(function () {
+          if (location.pathname + "|" + Spotify.route() === before) {
+            try {
+              location.assign(name === "search" ? "/search" : "/");
+            } catch (e) {
+              /* navigation refusée : on ne fait pas pire */
+            }
+          }
+        }, 900);
       }
       // 'library' needs no navigation: it is Spotify's own sidebar, shown
       // full-screen by CSS (§3 of the stylesheet).
@@ -3459,15 +3476,31 @@
     }
 
     /* L'écran marketing / la page de connexion n'ont pas de #main-view : on
-       surveille le body pour l'écran d'accueil maison. */
+       surveille la **page entière** pour l'écran d'accueil maison. Le body seul
+       ne suffisait pas : quand Spotify (ou le banc de démonstration) remplit un
+       conteneur déjà en place, aucune mutation n'atteint <body>, l'écran
+       d'accueil n'était donc **jamais retiré** et restait posé par-dessus le
+       lecteur — « c'est le bordel ». `apply()` ne fait que quelques
+       `querySelector`, le débounce suffit à le rendre inoffensif. */
     if (window.MutationObserver) {
       var welcomeObs = new MutationObserver(
         debounce(function () {
           Welcome.apply();
         }, 300)
       );
-      welcomeObs.observe(document.body, { childList: true, subtree: false });
+      welcomeObs.observe(document.documentElement, { childList: true, subtree: true });
     }
+    /* Filet de sécurité, **borné** : si aucune mutation n'est observée (page
+       servie d'un bloc), on réévalue dix fois sur les vingt premières secondes,
+       en chaîne de `setTimeout` — jamais un intervalle qui tourne sans fin (le
+       banc refuse les boucles de sondage, et il a raison : elles vidaient la
+       batterie dans les versions précédentes). */
+    var welcomeTries = 0;
+    (function welcomeWatch() {
+      var shown = Welcome.apply();
+      if (++welcomeTries >= 10 || (Spotify.ready() && !shown)) return;
+      window.setTimeout(welcomeWatch, 2000);
+    })();
 
     /* Re-apply the theme + repaint after a rotation or a keyboard resize.
        (Everything else adapts through CSS: the shell is sized in `vh`/`%` so

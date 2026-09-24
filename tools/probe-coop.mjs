@@ -395,6 +395,9 @@ async function main() {
           : `coque=${after && after.layer ? "construite" : "ABSENTE"} / ` +
             `haut=${visible("barre du haut (.sd-nav)")} bas=${visible("barre du bas (.sd-tabbar)")} ` +
             `mini=${visible("mini-lecteur (.sd-mini)")} en-tête=${visible("en-tête (.sd-topbar)")} ` +
+            `écran-accueil=${
+              after && after.classes && after.classes.indexOf("sd-welcome-on") >= 0 ? "POSÉ (masque la coque)" : "retiré"
+            } ` +
             `spotify-restant=${after && after.spotifyChrome
               ? Object.entries(after.spotifyChrome)
                   .filter(([, v]) => v.indexOf("visible") === 0)

@@ -1587,3 +1587,82 @@ reprise de ses styles **contre le DOM réel** de Spotify, pas un abandon.
   une chaîne hostile aux annotations) ;
 * **un appui peut naviguer** : toute mesure doit être protégée, sinon le contexte
   est détruit et c'est justement le résultat intéressant qui disparaît.
+
+## 27. « Réutilise exactement notre UI » — la coque était cachée par son propre écran d'accueil (v2.9.4)
+
+### Le reproche
+
+> « Fais un ui propre là c'est le bordel. Réutilise exactement notre ui qui était
+> sur notre projet. »
+
+La 2.9.3 venait de livrer l'**interface d'origine** par défaut, sur la foi d'une
+mesure de sonde (§26). L'utilisateur la refuse : il veut **notre** interface,
+celle du projet — barre du haut (accueil · bibliothèque · recherche, logo au
+centre, notifications · amis · profil), mini-lecteur complet à trois rangées,
+raccourcis en deux colonnes, exactement comme `screenshots/` et `70-original.css`.
+
+### La cause : ce n'est pas la mise en page, c'est l'écran d'accueil
+
+Le §26 concluait « la coque ne laisse voir qu'une barre du haut ». C'était vrai,
+mais la conclusion qu'on en a tirée était fausse. La mesure relevait en réalité
+trois choses : l'écran d'accueil de la coque était **posé**, la classe
+`sd-welcome-on` était présente, et cette classe — par conception — masque la
+barre du bas, le mini-lecteur et l'en-tête :
+
+```css
+html.sd-mobile.sd-welcome-on .sd-layer .sd-mini,
+html.sd-mobile.sd-welcome-on .sd-layer .sd-tabbar,
+html.sd-mobile.sd-welcome-on .sd-layer > .sd-topbar { display: none; }
+```
+
+Autrement dit : la sonde mesurait la coque **recouverte par son propre écran
+d'accueil**, et non une coque incapable de s'habiller. Pourquoi l'écran d'accueil
+ne se retirait-il pas ? Parce qu'il n'était réévalué que sur les mutations du
+**`<body>`** :
+
+```js
+welcomeObs.observe(document.body, { childList: true, subtree: false });
+```
+
+Or Spotify (comme le banc de démonstration) construit son lecteur **dans un
+conteneur déjà en place**. Aucune mutation n'atteint alors les enfants directs de
+`<body>` : l'observateur ne se réveille jamais, `Welcome.apply()` n'est plus
+appelé, et l'écran d'accueil reste posé indéfiniment — par-dessus le lecteur. Le
+même défaut frappait déjà la page de connexion en 2.9.2 (§25), il restait une
+seconde moitié du problème.
+
+### Le correctif
+
+1. **Surveillance de toute la page** (`documentElement`, `subtree: true`) au lieu
+   du seul `<body>` — un lecteur qui se construit dans un conteneur existant est
+   désormais vu ;
+2. **filet de sécurité borné** : dix réévaluations sur les vingt premières
+   secondes, en chaîne de `setTimeout` (jamais un intervalle perpétuel — le banc
+   refuse les boucles de sondage, et il a raison : elles vidaient la batterie
+   dans les versions précédentes) ;
+3. **appui d'onglet vérifié** : après un appui sur Accueil ou Recherche, si ni le
+   chemin ni la route n'ont bougé au bout de 900 ms, la coque navigue elle-même
+   (`location.assign("/search")` ou `"/"`), comme le fait déjà `native-mode.js`.
+   C'est la réponse directe à « rien n'est relié » : un appui qui ne produit
+   **rien** est traité comme une panne, plus comme un cas particulier.
+
+Deux tests et deux garde-fous d'audit sont ajoutés, parce que leur absence est
+exactement ce qui a laissé passer le défaut :
+
+* `smoke` — le banc monte la coque **avant** le lecteur, dans un conteneur : la
+  classe `sd-welcome-on` doit disparaître dès que le lecteur apparaît (90/90) ;
+* `audit-links` — refuse que l'écran d'accueil cesse d'être surveillé sur toute
+  la page, et qu'un appui d'onglet cesse d'être vérifié.
+
+### La décision
+
+Le défaut redevient **notre coque** : `MODE_DEFAULT = MODE_INJECT`,
+`UI_MODE_REV = 7` — le passage à 7 fait que les installations existantes
+retrouvent le défaut sans rien réinstaller (le mode mémorisé est ignoré tant que
+sa révision est plus ancienne). Le sélecteur place la coque en tête, et son
+libellé ne dit plus « habillage à finir » mais « (défaut) ». L'interface
+d'origine et la page mobile restent sélectionnables.
+
+La lecture ne change pas : `MODE_INJECT` s'appuie sur le **moteur d'origine**
+(empreinte navigateur « bureau » + page bureau, voir §24) — c'est le même moteur
+qui lit la musique, avec notre couche d'interface par-dessus.

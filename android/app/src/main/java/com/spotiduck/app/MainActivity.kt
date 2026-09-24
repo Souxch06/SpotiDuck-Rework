@@ -946,11 +946,11 @@ class MainActivity : AppCompatActivity() {
         /* Le mode livré par défaut est en tête : c'est celui qu'on cherche en
            ouvrant ce sélecteur, et c'est celui que la version a choisi. */
         val labels = arrayOf(
-            getString(R.string.ui_mode_original),
             getString(R.string.ui_mode_inject),
+            getString(R.string.ui_mode_original),
             getString(R.string.ui_mode_native)
         )
-        val modes = arrayOf(MODE_ORIGINAL, MODE_INJECT, MODE_NATIVE)
+        val modes = arrayOf(MODE_INJECT, MODE_ORIGINAL, MODE_NATIVE)
         val checked = modes.indexOf(uiMode).coerceAtLeast(0)
         AlertDialog.Builder(this)
             .setTitle(getString(R.string.ui_mode_title))
@@ -1446,30 +1446,30 @@ class MainActivity : AppCompatActivity() {
         const val MODE_INJECT = "inject"
 
         /**
-         * Interface livrée par défaut : **l'interface d'origine de SpotiDuck**
-         * (`MODE_ORIGINAL`) — le code d'origine tel quel, que l'utilisateur
-         * connaît et sur lequel la lecture fonctionne.
+         * Interface livrée par défaut : **la coque SpotiDuck**
+         * (`MODE_INJECT`) — la nôtre, celle du projet, posée par-dessus le
+         * moteur d'origine (empreinte navigateur « bureau » + page bureau),
+         * donc la lecture continue de fonctionner.
          *
-         * Ce n'est pas un repli mais une mesure (sonde `probe-coop`, runs
-         * 36033504237 et 36034083349) : sur la **vraie** page, l'interface
-         * d'origine se construit entièrement (`firstFuck`, `actPlayPause`, sa
-         * feuille de style posée, 110 Ko de styles), tandis que la coque maison
-         * n'y laisse visible que sa barre du haut — ses onglets du bas, son
-         * mini-lecteur et son en-tête restent masqués par sa propre mise en
-         * page, et le contenu de Spotify n'est pas habillé. C'est ce que
-         * l'utilisateur a vu : « les boutons ne sont pas comme notre version,
-         * rien n'est relié ».
+         * L'interface d'origine avait été livrée par défaut en 2.9.3 sur la foi
+         * d'une mesure de sonde : la coque n'y laissait voir que sa barre du
+         * haut. La cause a été trouvée depuis, et ce n'était pas la mise en page
+         * de la coque : son **écran d'accueil** ne se retirait jamais quand la
+         * page était construite dans un conteneur déjà en place (il n'était
+         * réévalué que sur les mutations du `<body>`), si bien qu'il restait
+         * posé par-dessus la coque et la masquait — la mesure relevait cet
+         * écran, pas la coque. Corrigé et vérifié : `sd-welcome-on` disparaît
+         * dès que le lecteur apparaît, la coque réapparaît.
          *
-         * La coque reste sélectionnable (appui long) : elle demande une reprise
-         * de ses styles contre la vraie page, pas un abandon. La page mobile
-         * aussi, avec un libellé qui dit qu'elle ne lit pas. L'écueil déjà payé,
-         * à ne pas repayer : la 2.6.0 avait livré la page mobile par défaut sans
-         * aucun moyen d'en sortir.
+         * L'interface d'origine et la page mobile restent sélectionnables
+         * (appui long de 3 s, ou rangée des paramètres), le défaut en tête.
+         * L'écueil déjà payé, à ne pas repayer : la 2.6.0 avait livré un défaut
+         * sans aucun moyen d'en sortir.
          */
-        const val MODE_DEFAULT = MODE_ORIGINAL
+        const val MODE_DEFAULT = MODE_INJECT
 
         /** Incrémenter à chaque fois que `MODE_DEFAULT` change. */
-        const val UI_MODE_REV = 6
+        const val UI_MODE_REV = 7
 
         /** Types d'URL `spotify:` convertibles en lien web. */
         private val WEB_KINDS = setOf(
