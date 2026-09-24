@@ -848,6 +848,32 @@ await checkAsync("the nav bar and the title bar never cover each other", async (
   return "navigation (accueil/recherche) · titre (bibliothèque/sous-page) ✓";
 });
 
+await checkAsync("the content is laid out for a phone, not for a desktop", async () => {
+  /* Capture du 24/09 : des pochettes de 59 px dans des cellules de 95, des
+     gouttières de 36 px, 85 px entre deux rangées. La feuille d'origine fait
+     tenir la page dans l'écran ; elle ne la met pas en page pour un téléphone.
+     Cette passe-là s'en charge — et seulement sur un téléphone. */
+  const src = await read("src/inject/77-content.css");
+  assert(src.length > 800, "la passe de contenu est vide ou absente");
+  assert(
+    /:not\(\.sd-size-wide\)/.test(src),
+    "la passe de contenu n'est pas réservée aux téléphones"
+  );
+  for (const need of ["component-shelf", "grid-container", "aspect-ratio: 1 / 1"]) {
+    assert(src.includes(need), `la passe de contenu ne traite plus « ${need} »`);
+  }
+  const bundle = await read("dist/spotiduck-ui.js");
+  assert(
+    bundle.includes("[data-testid=component-shelf]") || bundle.includes('[data-testid="component-shelf"]'),
+    "la passe de contenu n'est pas dans le paquet livré"
+  );
+  assert(
+    !/border-radius:\s*6px[^}]*img/i.test(src),
+    "la passe de contenu impose un rayon : les pochettes rondes des artistes redeviendraient carrées"
+  );
+  return "pochettes pleines · gouttières 12 · rangées 14 (téléphone seulement) ✓";
+});
+
 await checkAsync("the shell can never blank the page it dresses", async () => {
   /* La capture du téléphone, le 24/09 : notre barre du haut, et un écran noir
      en dessous. La cause est une règle de notre propre feuille — masquer

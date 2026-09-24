@@ -304,6 +304,30 @@ if (!/showUiChooser\(\)/.test(activitySource)) {
   errors.push("le sélecteur d'interface n'est plus joignable (sortie de secours perdue)");
 }
 
+/* **Le contenu doit rester mis en page pour un téléphone.** La feuille de
+   l'application d'origine fait *tenir* la page dans l'écran, elle ne la met pas
+   en page pour un téléphone : pochettes de 59 px dans des cellules de 95,
+   gouttières de 36 px, rangées espacées de 85 (capture du 24/09 à 21 h 47).
+   La passe 77 s'en occupe, et elle doit rester **hors des écrans larges**, où la
+   mise en page d'origine est la bonne. */
+const contentPassFile = "77-content.css";
+const contentPassSource = cssFiles.includes(contentPassFile)
+  ? read(join("src/inject", contentPassFile))
+  : "";
+if (!contentPassSource) {
+  errors.push("la passe de mise en page du contenu pour téléphone (77-content.css) a disparu : l'accueil redevient une page de bureau");
+} else {
+  const contentPass = contentPassSource;
+  if (!/:not\(\.sd-size-wide\)/.test(contentPass)) {
+    errors.push("la passe de contenu n'est plus réservée aux téléphones : elle écraserait la mise en page d'origine sur les écrans larges");
+  }
+  for (const needle of ["component-shelf", "grid-container", "aspect-ratio"]) {
+    if (!contentPass.includes(needle)) {
+      errors.push(`la passe de contenu ne traite plus « ${needle} »`);
+    }
+  }
+}
+
 /* 2-ter-ter. Deux défauts qui ont coûté une version chacun, et qui ne se voient
    qu'à l'usage : l'écran d'accueil qui restait posé par-dessus le lecteur (il
    n'était réévalué que sur les mutations du `<body>`), et un appui d'onglet qui

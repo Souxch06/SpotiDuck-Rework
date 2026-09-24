@@ -224,6 +224,50 @@ const MEASURE = async () => {
     );
   })();
 
+  /* **Ce qui pilote la taille du contenu.** « Ca rends pas tres beau » : sur le
+     telephone, les pochettes de l'accueil mesurent ~59 px avec des gouttières de
+     ~36 px. Il faut savoir QUI décide de ces tailles (la grille ? une variable
+     CSS ? un style en ligne ?) avant d'écrire la moindre règle. */
+  out.content = (function () {
+    var rows = [];
+    var shelf = document.querySelector('section[data-testid=component-shelf]');
+    if (!shelf) return "aucune shelf";
+    var grid = shelf.querySelector('div[data-testid=grid-container]');
+    var cards = (grid || shelf).children;
+    var first = cards[0];
+    var second = cards[1];
+    var r1 = first ? first.getBoundingClientRect() : { width: 0, height: 0, right: 0 };
+    var r2 = second ? second.getBoundingClientRect() : { right: 0 };
+    var inner = first ? first.querySelector("img, [data-testid=card-image]") : null;
+    var ri = inner ? inner.getBoundingClientRect() : { width: 0 };
+    var gap = second && first ? Math.round(r2.left - r1.right) : -1;
+    var cs = grid ? window.getComputedStyle(grid) : window.getComputedStyle(shelf);
+    var h2 = shelf.querySelector("h2");
+    var h2cs = h2 ? window.getComputedStyle(h2) : null;
+    rows.push(
+      "grille=" + (grid ? cs.display + " cols=" + cs.gridTemplateColumns : "absente") +
+        " gap=" + cs.columnGap + "/" + cs.rowGap +
+        " cellules=" + cards.length
+    );
+    rows.push(
+      "cellule=" + Math.round(r1.width) + "x" + Math.round(r1.height) +
+        " image=" + Math.round(ri.width) +
+        " gouttiere=" + gap +
+        " en-ligne=" + JSON.stringify((first && first.getAttribute("style")) || "")
+    );
+    rows.push(
+      "titre=" + (h2cs ? h2cs.fontSize + " " + (h2.textContent || "").trim().slice(0, 18) : "?") +
+        " marge-shelf=" + window.getComputedStyle(shelf).marginTop + "/" + window.getComputedStyle(shelf).marginBottom
+    );
+    var all = document.querySelectorAll('section[data-testid=component-shelf]');
+    if (all.length > 1) {
+      var a = all[0].getBoundingClientRect();
+      var b = all[1].getBoundingClientRect();
+      rows.push("entre-shelves=" + Math.round(b.top - a.bottom));
+    }
+    return rows.join(" . ");
+  })();
+
   out.tapTargets = (function () {
     var els = document.querySelectorAll(".sd-layer .sd-nav-item, .sd-layer .sd-iconbtn, .sd-layer .sd-tab");
     var min = 999;
@@ -670,6 +714,7 @@ async function main() {
           .join(", ")}`;
       if (after && after.contentVisible) lines.push(`Contenu - ${target.label} : ${after.contentVisible}`);
       if (after && after.structure) lines.push(`Structure - ${target.label} : ${after.structure}`);
+      if (after && after.content) lines.push(`Contenu-te tailles - ${target.label} : ${after.content}`);
       lines.push(summary);
       console.log(`[Sonde coque] ${summary}`);
       note(`Mesure — ${target.label}`, summary);
