@@ -1495,7 +1495,10 @@ class MainActivity : AppCompatActivity() {
          */
         const val MODE_DEFAULT = MODE_INJECT
 
-        /** Incrémenter à chaque fois que `MODE_DEFAULT` change. */
+        /* Version de la préférence enregistrée : à incrémenter quand
+           `MODE_DEFAULT` change — pas à chaque changement de la coque, sinon
+           le choix explicite de l'utilisateur (« interface d'origine ») serait
+           écrasé au moment d'une mise à jour. */
         const val UI_MODE_REV = 7
 
         /** Types d'URL `spotify:` convertibles en lien web. */

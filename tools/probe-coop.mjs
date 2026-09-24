@@ -165,6 +165,25 @@ const MEASURE = async () => {
     }
     return found.slice(0, 8).join(", ");
   })();
+  /* « Adapté à l'appareil » se mesure aussi : un contrôle plus petit que 44 px
+     n'est pas touchable au doigt (la cible Material minimale). */
+  out.tapTargets = (function () {
+    var els = document.querySelectorAll(".sd-layer .sd-nav-item, .sd-layer .sd-iconbtn, .sd-layer .sd-tab");
+    var min = 999;
+    var count = 0;
+    var small = 0;
+    for (var i = 0; i < els.length; i++) {
+      var r = els[i].getBoundingClientRect();
+      if (r.width === 0 && r.height === 0) continue;
+      count++;
+      var s = Math.min(r.width, r.height);
+      if (s < min) min = s;
+      if (s < 44) small++;
+    }
+    return count ? Math.round(min) + "px (" + small + "/" + count + " sous 44)" : "aucun";
+  })();
+  out.unit = getComputedStyle(root).getPropertyValue("--sd-u").trim();
+
   out.layout = {
     innerWidth: window.innerWidth,
     innerHeight: window.innerHeight,
@@ -459,7 +478,7 @@ async function main() {
       /* Une seule capture, sur la page choisie : les places d'annotation sont
          comptées (GitHub en garde une poignée), et l'image coûte à elle seule
          plusieurs morceaux. */
-      if (["banc-tel"].includes(target.label)) await miniature(target.label);
+      if (["telephone"].includes(target.label)) await miniature(target.label);
 
       /* Les trois vues de la barre du haut : état intérieur + ce que la page
          affiche, avant et après un appui réel. (L'interface d'origine a sa
@@ -506,6 +525,51 @@ async function main() {
             `en-tête=${box("en-tête (.sd-topbar)")} · classes="${after && after.classes ? after.classes : "?"}"`
         );
       }
+      /* **Chaque appareil.** L'interface doit s'adapter toute seule : on la
+         mesure donc sur cinq profils — téléphone étroit, référence, grand
+         téléphone, paysage, tablette — et on relève l'unité calculée, les
+         barres, le débordement et la taille des cibles tactiles. */
+      const deviceRows = [];
+      if (target.label === "banc-tel") {
+        const profiles = [
+          { name: "360×800", width: 360, height: 800, deviceScaleFactor: 2 },
+          { name: "412×915", width: 412, height: 915, deviceScaleFactor: 2.625 },
+          { name: "480×1040", width: 480, height: 1040, deviceScaleFactor: 2.5 },
+          { name: "paysage", width: 915, height: 412, deviceScaleFactor: 2.625 },
+          { name: "tablette", width: 800, height: 1280, deviceScaleFactor: 2 },
+        ];
+        for (const profile of profiles) {
+          await safely(() =>
+            page.setViewport({
+              width: profile.width,
+              height: profile.height,
+              deviceScaleFactor: profile.deviceScaleFactor,
+              isMobile: true,
+              hasTouch: true,
+            })
+          );
+          await sleep(900);
+          const m = await safely(() => page.evaluate(MEASURE));
+          const box = (sel) => {
+            const entry = m && m.controls ? m.controls[sel] : null;
+            if (!entry) return "?";
+            const px = /(\d+)×(\d+)/.exec(entry);
+            return px ? px[1] + "×" + px[2] : "?";
+          };
+          deviceRows.push(
+            `${profile.name} u=${m && m.unit ? m.unit : "?"} nav=${box("barre du haut (.sd-nav)")} ` +
+              `mini=${box("mini-lecteur (.sd-mini)")} déb=${m && m.layout ? m.layout.debordement : "?"} ` +
+              `cibles=${m && m.tapTargets ? m.tapTargets : "?"}`
+          );
+        }
+        note("Appareils — notre interface", deviceRows.join("  ||  "));
+        /* Retour au profil de référence pour la suite (appuis, captures). */
+        await safely(() =>
+          page.setViewport({ width: 412, height: 915, deviceScaleFactor: 2.625, isMobile: true, hasTouch: true })
+        );
+        await sleep(500);
+      }
+
       const visible = (sel) => {
         const entry = after && after.controls ? after.controls[sel] : null;
         return entry ? (entry.indexOf("visible") === 0 ? "visible" : "masqué") : "?";

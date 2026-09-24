@@ -26,10 +26,21 @@
 
 html.sd-mobile {
   /* Échelle globale : c'est le seul levier qui change la taille de TOUTE
-     l'interface (réglage « Taille de l'interface » dans les paramètres).
-     Les appareils Android n'ont pas tous la même densité de rendu dans la
-     WebView : 86 % / 100 % / 112 %. */
-  --sd-u: 1;
+     l'interface. Elle a deux facteurs, et dans cet ordre :
+
+       · `--sd-u-base` — **mesurée sur l'appareil** (largeur de mise en page et
+         hauteur, voir `Device.apply` dans la coque) : 0,92 sur un 360×800,
+         1,00 sur un 412×915 (la référence du projet), 1,15 sur un écran large,
+         0,92 en paysage. C'est ce qui fait que l'interface s'adapte **toute
+         seule** à l'appareil, au lieu de supposer un téléphone de 412 px ;
+       · `--sd-density` — le réglage manuel « Taille de l'interface »
+         (0,8 / 1 / 1,12), qui reste disponible par-dessus.
+
+     Avant, seul le second existait et valait 1 : la même interface pour un
+     téléphone étroit et une tablette. */
+  --sd-u-base: 1;
+  --sd-density: 1;
+  --sd-u: calc(var(--sd-u-base) * var(--sd-density));
 
   /* Roboto d'abord : c'est la police système d'Android (et de Chrome/WebView).
      Spotify sert sa police « Circular » via une webfont ; on garde la sienne
@@ -595,13 +606,13 @@ html.sd-mobile.sd-welcome-on body {
    -------------------------------------------------------------------------- */
 
 html.sd-mobile.sd-density-compact {
-  --sd-u: 0.8;
+  --sd-density: 0.8;
 }
 html.sd-mobile.sd-density-normal {
-  --sd-u: 1;
+  --sd-density: 1;
 }
 html.sd-mobile.sd-density-large {
-  --sd-u: 1.12;
+  --sd-density: 1.12;
 }
 
 /* Les icônes suivent la densité, mais plus doucement que le texte : elles

@@ -203,6 +203,21 @@ if (!/welcome-cta[\s\S]{0,600}openLogin/.test(shellJs)) {
   errors.push("le bouton de l'écran d'accueil n'est plus relié à la connexion native");
 }
 
+/* L'unité de l'interface doit rester **déduite de l'appareil** : figée, elle
+   suppose un téléphone de 412 px et tout le reste se retrouve « pas adapté à
+   l'appareil » (le reproche, à chaque version). */
+if (!/--sd-u:\s*calc\(var\(--sd-u-base\)\s*\*\s*var\(--sd-density\)\)/.test(css)) {
+  errors.push("l'unité d'interface n'est plus le produit de la base mesurée et du réglage : l'affichage ne suivra plus l'appareil");
+}
+for (const part of ["sd-size-compact", "sd-size-wide", "sd-orient-landscape"]) {
+  if (!css.includes(part) || !shellJs.includes(part)) {
+    errors.push(`le palier d'appareil « ${part} » a disparu (feuille ou coque)`);
+  }
+}
+if (!/Device\.apply\(\)/.test(shellJs) || !/setProperty\("--sd-u-base"/.test(shellJs)) {
+  errors.push("la coque ne mesure plus l'appareil : l'unité retomberait sur une valeur fixe");
+}
+
 /* 2-ter-ter. Deux défauts qui ont coûté une version chacun, et qui ne se voient
    qu'à l'usage : l'écran d'accueil qui restait posé par-dessus le lecteur (il
    n'était réévalué que sur les mutations du `<body>`), et un appui d'onglet qui

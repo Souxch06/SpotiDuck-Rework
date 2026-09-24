@@ -19,9 +19,11 @@
 
 html.sd-mobile {
   --sd-nav-h: calc(56px * var(--sd-u));
-  /* Trois rangées : pochette 48 + contrôles 44 + progression 20, plus les
-     marges. C'est la hauteur que réserve le contenu du web player. */
-  --sd-mini-h: calc(120px * var(--sd-u));
+  /* Quatre rangées, comme dans l'application d'origine : pochette 44 +
+     contrôles 34 + progression 20 + rangée paroles/karaoké/file/appareils/
+     volume 32, plus les marges. Le contenu réserve exactement cette hauteur
+     (`--sd-bottom`), donc rien ne passe dessous. */
+  --sd-mini-h: calc(156px * var(--sd-u));
 }
 
 /* --------------------------------------------------------------------------
@@ -137,8 +139,18 @@ html.sd-mobile .sd-layer .sd-mini {
   min-height: var(--sd-mini-h-current);
   padding: calc(8px * var(--sd-u)) calc(12px * var(--sd-u)) calc(6px * var(--sd-u));
 }
+html.sd-mobile.sd-mini-on .sd-layer .sd-mini,
 html.sd-mobile.sd-has-track .sd-layer .sd-mini {
   display: flex;
+}
+/* Pochette un peu plus compacte qu'avant : la 4e rangée prend sa place. */
+html.sd-mobile .sd-layer .sd-mini-top .sd-mini-art {
+  width: calc(44px * var(--sd-u));
+  height: calc(44px * var(--sd-u));
+  flex: 0 0 calc(44px * var(--sd-u));
+}
+html.sd-mobile .sd-layer .sd-mini-row {
+  height: calc(34px * var(--sd-u));
 }
 
 html.sd-mobile .sd-layer .sd-mini-top {
@@ -221,6 +233,130 @@ html.sd-mobile .sd-layer .sd-mini-seek-row {
   display: flex;
   align-items: center;
   gap: calc(8px * var(--sd-u));
+}
+
+/* --------------------------------------------------------------------------
+   2-bis. Rangée bonus du mini-lecteur — celle de l'application d'origine :
+   paroles · karaoké · file d'attente · appareils · volume
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile .sd-layer .sd-mini-row2 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(6px * var(--sd-u));
+  height: calc(32px * var(--sd-u));
+  padding: 0 calc(2px * var(--sd-u));
+}
+html.sd-mobile .sd-layer .sd-mini-row2 .sd-iconbtn {
+  width: calc(32px * var(--sd-u));
+  height: calc(32px * var(--sd-u));
+  color: var(--sd-sub);
+}
+/* Chaque commande de la rangée porte son nom : c'est ce qui permet de la
+   styler (et l'audit vérifie qu'aucune classe du runtime n'est orpheline). */
+html.sd-mobile .sd-layer .sd-mini-row2 .sd-mini-lyrics,
+html.sd-mobile .sd-layer .sd-mini-row2 .sd-mini-karaoke,
+html.sd-mobile .sd-layer .sd-mini-row2 .sd-mini-queue,
+html.sd-mobile .sd-layer .sd-mini-row2 .sd-mini-devices {
+  flex: 0 0 auto;
+}
+/* Paroles / karaoké actifs : la pastille verte, comme partout ailleurs. */
+html.sd-mobile .sd-layer .sd-mini-row2 .sd-mini-lyrics[aria-pressed="true"],
+html.sd-mobile .sd-layer .sd-mini-row2 .sd-mini-karaoke[aria-pressed="true"],
+html.sd-mobile .sd-layer .sd-mini-row2 .sd-mini-lyrics.is-active,
+html.sd-mobile .sd-layer .sd-mini-row2 .sd-mini-karaoke.is-active {
+  color: var(--sd-accent);
+}
+html.sd-mobile .sd-layer .sd-mini-row2 .sd-iconbtn svg {
+  width: calc(19px * var(--sd-u));
+  height: calc(19px * var(--sd-u));
+  fill: currentColor;
+}
+html.sd-mobile .sd-layer .sd-mini-row2 .sd-iconbtn:active {
+  color: var(--sd-text);
+}
+/* Le volume occupe la place qui reste : c'est un vrai curseur, branché sur
+   celui de Spotify (deux volumes divergeraient). */
+html.sd-mobile .sd-layer .sd-mini-volume {
+  display: flex;
+  align-items: center;
+  gap: calc(6px * var(--sd-u));
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 46%;
+  margin-left: auto;
+}
+html.sd-mobile .sd-layer .sd-mini-volume[hidden] {
+  display: none;
+}
+html.sd-mobile .sd-layer .sd-mini-volicon {
+  width: calc(24px * var(--sd-u));
+  height: calc(24px * var(--sd-u));
+  color: var(--sd-sub);
+  flex: 0 0 auto;
+}
+html.sd-mobile .sd-layer .sd-mini-volicon svg {
+  width: calc(18px * var(--sd-u));
+  height: calc(18px * var(--sd-u));
+  fill: currentColor;
+}
+html.sd-mobile .sd-layer .sd-mini-vol {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: calc(20px * var(--sd-u));
+  background: transparent;
+  touch-action: none;
+}
+html.sd-mobile .sd-layer .sd-mini-vol::-webkit-slider-runnable-track {
+  height: calc(4px * var(--sd-u));
+  border-radius: 2px;
+  background: var(--sd-bg-tint);
+}
+html.sd-mobile .sd-layer .sd-mini-vol::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  margin-top: calc(-4px * var(--sd-u));
+  width: calc(12px * var(--sd-u));
+  height: calc(12px * var(--sd-u));
+  border-radius: 50%;
+  background: var(--sd-text);
+}
+html.sd-mobile .sd-layer .sd-mini-vol::-moz-range-track {
+  height: calc(4px * var(--sd-u));
+  border-radius: 2px;
+  background: var(--sd-bg-tint);
+}
+html.sd-mobile .sd-layer .sd-mini-vol::-moz-range-thumb {
+  width: calc(12px * var(--sd-u));
+  height: calc(12px * var(--sd-u));
+  border: 0;
+  border-radius: 50%;
+  background: var(--sd-text);
+}
+html.sd-mobile .sd-layer .sd-mini-volume.is-muted .sd-mini-volicon {
+  color: var(--sd-sub);
+  opacity: 0.6;
+}
+
+/* Sans titre : le lecteur dit ce qu'il en est, sans disparaître. */
+html.sd-mobile.sd-mini-empty .sd-layer .sd-mini-art {
+  background: var(--sd-bg-tint);
+  display: grid;
+  place-items: center;
+}
+html.sd-mobile.sd-mini-empty .sd-layer .sd-mini-art img {
+  display: none;
+}
+html.sd-mobile.sd-mini-empty .sd-layer .sd-mini-title {
+  color: var(--sd-sub);
+  font-weight: 500;
+}
+html.sd-mobile.sd-mini-empty .sd-layer .sd-mini-row2,
+html.sd-mobile.sd-mini-empty .sd-layer .sd-mini-seek-row {
+  opacity: 0.55;
 }
 html.sd-mobile .sd-layer .sd-mini-time {
   flex: 0 0 auto;

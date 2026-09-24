@@ -392,10 +392,13 @@ await checkAsync("interface size setting scales the whole shell", async () => {
   try {
     const seg = sheet.querySelector('[data-seg="density"]');
     assert(seg, "density segment missing from the settings sheet");
+    /* `--sd-u` est maintenant le **produit** de deux facteurs : la base
+       mesurée sur l'appareil (`--sd-u-base`) et le réglage manuel
+       (`--sd-density`). jsdom n'évalue pas `calc()` pour une propriété
+       personnalisée : on lit donc le facteur du réglage, et on vérifie que les
+       jetons le multiplient bien (fin du test). */
     const u = () =>
-      parseFloat(window.getComputedStyle(doc.documentElement).getPropertyValue("--sd-u"));
-    /* jsdom does not evaluate calc() for custom properties, so the check reads
-       the scale factor itself — the tokens multiply by it (verified below). */
+      parseFloat(window.getComputedStyle(doc.documentElement).getPropertyValue("--sd-density"));
     assert(u() === 1, `normal density should be 1, got ${u()}`);
     seg.querySelector('button[data-value="compact"]').click();
     await tick(40);
@@ -418,6 +421,10 @@ await checkAsync("interface size setting scales the whole shell", async () => {
     assert(
       /--sd-tap:\s*calc\(48px \* var\(--sd-u\)\)/.test(css),
       "the tap target is not tied to the scale factor"
+    );
+    assert(
+      /--sd-u:\s*calc\(var\(--sd-u-base\)\s*\*\s*var\(--sd-density\)\)/.test(css),
+      "l'unité n'est plus le produit de la base appareil et du réglage"
     );
     return "compact 0.8 · normal 1 · large 1.12 (cibles 48 dp × facteur)";
   } finally {
@@ -780,6 +787,109 @@ await checkAsync("the WebView is allowed to open Widevine (protected media)", as
   assert(/request\.grant\(/.test(activity), "la permission du contenu protégé n'est jamais accordée");
   assert(/request\.deny\(\)/.test(activity), "les autres permissions ne sont plus refusées");
   return "contenu protégé accordé, le reste refusé ✓";
+});
+
+check("the mini player exists even before anything plays (empty state)", () => {
+  /* « Des trucs qui n'apparaissent pas » : le mini-lecteur n'existait qu'avec
+     une piste en cours ; sans titre, tout le bas de l'écran restait vide alors
+     que le contenu réservait la place. Il doit être là, avec son état vide. */
+  assert(doc.documentElement.classList.contains("sd-mini-on"), "sd-mini-on absent");
+  const mini = q(".sd-mini");
+  assert(mini, "mini-lecteur introuvable");
+  const css = Array.from(doc.querySelectorAll("style"))
+    .map((st) => st.textContent)
+    .join("");
+  assert(
+    /sd-mini-on[^{]*\.sd-mini\s*\{[^}]*display:\s*flex/.test(css),
+    "la feuille n'affiche pas le mini-lecteur dès qu'un lecteur existe"
+  );
+  assert(
+    doc.documentElement.classList.contains("sd-mini-empty") ||
+      doc.documentElement.classList.contains("sd-has-track"),
+    "l'état (vide / avec titre) n'est pas signalé au CSS"
+  );
+  assert(q(".sd-mini-title"), "titre du mini-lecteur introuvable");
+  return "présent, avec état vide ✓";
+});
+
+await checkAsync("the mini player carries the original app's fourth row", async () => {
+  /* Paroles · karaoké · file d'attente · appareils · volume, comme dans
+     l'application d'origine — chaque commande branchée sur celle de Spotify. */
+  const row = q(".sd-mini-row2");
+  assert(row, "la 4e rangée du mini-lecteur est absente");
+  for (const cls of [
+    "sd-mini-lyrics",
+    "sd-mini-karaoke",
+    "sd-mini-queue",
+    "sd-mini-devices",
+    "sd-mini-vol",
+  ]) {
+    assert(row.querySelector("." + cls), `commande manquante dans le mini-lecteur : ${cls}`);
+  }
+  const src = await read("src/inject/spotiduck-ui.js");
+  assert(/miniQueue\.addEventListener/.test(src), "le bouton file d'attente n'est pas câblé");
+  assert(/miniVol\.addEventListener|miniVol\.addEventListener/.test(src), "le volume n'est pas câblé");
+  assert(
+    /volumeInput: function/.test(src) && /volume-bar/.test(src),
+    "le volume ne suit pas celui de Spotify"
+  );
+  assert(/karaokeButton: function/.test(src), "le karaoké ne suit pas le bouton de Spotify");
+  return "paroles · karaoké · file · appareils · volume ✓";
+});
+
+await checkAsync("the nav bar and the title bar never cover each other", async () => {
+  /* Les deux sont collées en haut : quand la barre de navigation est là, la
+     barre de titre est dessous — invisible, donc « rien ne s'affiche ». */
+  const src = await read("src/inject/spotiduck-ui.js");
+  assert(
+    /var navOn = !isSubPage && !isLibrary;/.test(src),
+    "la barre de navigation et la barre de titre se recouvrent encore"
+  );
+  return "navigation (accueil/recherche) · titre (bibliothèque/sous-page) ✓";
+});
+
+await checkAsync("the interface unit follows the device, not a fixed guess", async () => {
+  /* « Fais en sorte que l'affichage s'adapte automatiquement à l'appareil. »
+     L'unité `--sd-u` dimensionne toute la coque ; elle doit se déduire de la
+     largeur **et** de la hauteur de mise en page, et se remesurer quand
+     l'appareil change (rotation, pliage, redimensionnement). */
+  const device = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "https://open.spotify.com/",
+    pretendToBeVisual: true,
+    runScripts: "dangerously",
+  });
+  device.window.AndBridge = new Proxy({}, { get: () => () => undefined });
+  const setSize = (w, h) => {
+    device.window.eval(`
+      Object.defineProperty(document.documentElement, "clientWidth", { get: () => ${w}, configurable: true });
+      Object.defineProperty(document.documentElement, "clientHeight", { get: () => ${h}, configurable: true });
+    `);
+  };
+  setSize(360, 800);
+  device.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(150);
+  const unitOf = () => device.window.document.documentElement.style.getPropertyValue("--sd-u-base");
+  const classes = () => device.window.document.documentElement.className;
+  assert(Math.abs(parseFloat(unitOf()) - 0.92) < 0.001, "un 360×800 doit donner 0,92 : " + unitOf());
+  assert(classes().includes("sd-size-compact"), "le palier « étroit » n'est pas posé : " + classes());
+
+  setSize(412, 915);
+  device.window.dispatchEvent(new device.window.Event("resize"));
+  await tick(320);
+  assert(Math.abs(parseFloat(unitOf()) - 1) < 0.001, "un 412×915 doit donner 1,00 : " + unitOf());
+
+  setSize(915, 412); /* rotation : la hauteur compte aussi */
+  device.window.dispatchEvent(new device.window.Event("resize"));
+  await tick(320);
+  assert(parseFloat(unitOf()) <= 0.93, "en paysage, l'unité doit redescendre : " + unitOf());
+  assert(classes().includes("sd-orient-landscape"), "le palier paysage n'est pas posé");
+
+  setSize(800, 1280);
+  device.window.dispatchEvent(new device.window.Event("resize"));
+  await tick(320);
+  assert(parseFloat(unitOf()) >= 1.14, "un écran large doit monter l'unité : " + unitOf());
+  assert(classes().includes("sd-size-wide"), "le palier « large » n'est pas posé");
+  return "0,92 → 1,00 → 0,92 (paysage) → 1,15 selon l'appareil ✓";
 });
 
 check("the original app's fit-to-screen sheet is carried over", () => {

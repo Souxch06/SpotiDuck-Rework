@@ -1847,3 +1847,90 @@ garde-fou d'audit.
 La leçon rejoint celle des §26-28 : **avant de corriger l'interface, il faut
 savoir qui parle**. Ici, l'écran venait de Spotify, mais la décision venait de
 notre `WebChromeClient`.
+
+---
+
+## §30 — L'affichage suit l'appareil, et rien ne reste invisible (v2.9.7)
+
+Deux reproches, une seule passe :
+
+> « L'affichage général de l'application est pas encore adapté à l'appareil. »
+> « Il y a aussi plein de bugs d'affichage : des trucs qui n'apparaissent pas. »
+
+### 1. L'unité d'interface était figée
+
+`--sd-u` dimensionne **tout** : hauteurs de barres, typographie, pochette du
+mini-lecteur, feuilles, lecteur plein écran. Elle valait `1` — la même interface
+pour un téléphone de 360 px et une tablette de 800 px, avec un réglage manuel
+(compact / normal / large) pour compenser les écarts entre appareils.
+
+Elle est maintenant **mesurée** à chaque démarrage :
+
+    --sd-u = --sd-u-base × --sd-density
+    base   = clamp(0,92 ; min(largeur / 412 ; hauteur / 915) ; 1,15)
+
+| appareil          | base |
+| ----------------- | ---- |
+| 360×800           | 0,92 |
+| 412×915           | 1,00 (référence du projet) |
+| 480×1040          | 1,14 |
+| 800×1280          | 1,15 |
+| 915×412 (paysage) | 0,92 |
+
+La **hauteur** compte autant que la largeur : sans elle, un téléphone en paysage
+aurait des barres plus hautes que le tiers de son écran. Le plancher (0,92)
+existe pour la même raison : sur un petit écran on resserre la mise en page, on
+ne rétrécit pas le texte sous les cibles Material.
+
+Trois paliers, posés par la coque (mesurés, jamais devinés en CSS) et consommés
+par `src/inject/76-device.css` :
+
+* `sd-size-compact` (< 380 px) — barres plus fines, texte intact ;
+* `sd-size-wide` (≥ 600 px) — barres qui respirent, gouttières plus larges ;
+* `sd-orient-landscape` — barres amincies, mini-lecteur resserré (mais **rien ne
+  disparaît** : « les boutons en bas de l'écran disparaissent » a déjà été le
+  reproche d'une version précédente).
+
+`Device.apply()` est appelé au démarrage (`boot`), au redimensionnement
+(débounce 200 ms) et à la rotation. Le réglage manuel « Taille de l'interface »
+reste disponible : il est devenu un **facteur** de cette base.
+
+### 2. Ce qui n'apparaissait jamais
+
+* **Le mini-lecteur n'existait qu'avec une piste en cours.** Sur un compte qui
+  n'avait rien lancé, tout le bas de l'écran restait vide — alors que le contenu
+  réservait déjà la hauteur (`--sd-bottom`). Désormais il suit le **lecteur** :
+  présent dès qu'un lecteur existe, avec son état vide (« Aucun titre en
+  lecture », pochette neutre, commandes de transport **désactivées** — on voit
+  ce que l'application sait faire).
+* **Sa quatrième rangée manquait.** L'application d'origine met sous la
+  progression : paroles · karaoké · file d'attente · appareils · volume. C'est
+  ajouté, et chaque commande pilote celle de Spotify (`lyrics-button`,
+  `karaoke-button`, `devices-button`) ; celles que la page n'expose pas ne
+  s'affichent pas du tout (plutôt qu'un bouton mort). Le volume est un vrai
+  curseur, branché sur celui de Spotify — **un seul** volume, pas deux.
+* **La barre de navigation recouvrait la barre de titre.** Toutes deux collées en
+  haut, fixes, à un pixel près : sur la bibliothèque et les sous-pages, la barre
+  de titre (retour + nom de la page) était *derrière* la barre de navigation —
+  donc invisible. Une seule des deux maintenant, comme dans l'application
+  d'origine : navigation sur l'accueil et la recherche, barre de titre (avec
+  « Fermer »/retour) sur la bibliothèque et les sous-pages.
+* **L'écran d'accueil SpotiDuck restait par-dessus la coque** quand le lecteur
+  arrivait après coup : il était décidé une seule fois, à un moment où `body`
+  pouvait déjà contenir l'application. `Welcome.apply()` est ré-évalué après le
+  montage du lecteur, et sur redimensionnement. C'est aussi ce qui masquait la
+  barre du haut, le mini-lecteur et la barre d'onglets sur le banc de mesure.
+
+### 3. Garde-fous
+
+* banc : « l'unité d'interface suit l'appareil » (0,92 → 1,00 → 0,92 en paysage
+  → 1,15, à chaque redimensionnement) ; « le mini-lecteur existe avant même
+  qu'un titre joue » ; « la quatrième rangée de l'application d'origine » ;
+  « la barre de navigation et la barre de titre ne se recouvrent jamais » ;
+* audit : l'unité doit rester le produit de la base mesurée et du réglage, les
+  trois paliers doivent exister **dans la feuille et dans la coque**, la coque
+  doit continuer de mesurer l'appareil, et aucune classe du runtime ne reste
+  sans style ;
+* sonde : sur le banc en conditions de WebView (`banc-tel`), cinq profils
+  d'appareils sont mesurés (unité calculée, barres, débordement, plus petite
+  cible tactile) — « adapté à l'appareil » est une mesure, pas une impression.

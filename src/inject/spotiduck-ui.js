@@ -143,6 +143,7 @@
       nowPlaying: "Lecture en cours",
       noTrack: "Aucun titre en lecture",
       volume: "Volume",
+      karaoke: "Karaoké",
       close: "Fermer",
       queueEmpty: "La file d'attente est vide",
       /* sheets */
@@ -280,6 +281,14 @@
       'aside input[type="range"][max]',
     ],
     lyrics: ['button[data-testid="lyrics-button"]'],
+    /* Le micro « karaoké » et le curseur de volume : Spotify les expose dans
+       sa propre barre. On ne les invente pas — s'ils sont absents, le bouton
+       correspondant n'apparaît pas (plutôt qu'un bouton mort). */
+    karaoke: ['button[data-testid="karaoke-button"]', 'button[data-testid="mic-button"]'],
+    volume: [
+      'div[data-testid="volume-bar"] input[type="range"]',
+      '[data-testid="volume-bar"] input[type="range"]',
+    ],
     /* --- session extras (take control, links, login) --- */
     trackLink: ['a[data-testid="context-item-link"]', '[data-testid="context-item-link"]'],
     albumLink: [
@@ -523,6 +532,14 @@
     },
     lyricsButton: function () {
       return pick(SEL.lyrics);
+    },
+    karaokeButton: function () {
+      return pick(SEL.karaoke);
+    },
+    /** Le curseur de volume **de Spotify** : source de vérité unique, on ne
+        tient pas un second volume de notre côté (il divergerait). */
+    volumeInput: function () {
+      return pick(SEL.volume);
     },
     /** Absolute URL of the track that is playing (used by "Partager"). */
     trackHref: function () {
@@ -817,6 +834,10 @@
       '<g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><rect x="5" y="2.5" width="14" height="19" rx="1.5"/><circle cx="12" cy="9.5" r="2.6"/><circle cx="12" cy="16.5" r="1.6"/></g>',
     lyricsLine:
       '<g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5h8.5L18 7v13.5H6z"/><path d="M8.5 11h7M8.5 14.5h7M8.5 8h3.5"/></g>',
+    micLine:
+      '<path d="M12 1.8A3.2 3.2 0 0 0 8.8 5v6a3.2 3.2 0 0 0 6.4 0V5A3.2 3.2 0 0 0 12 1.8zm-6 9.2a1 1 0 0 1 1 1 5 5 0 0 0 10 0 1 1 0 1 1 2 0 7 7 0 0 1-6 6.93V21h2.6a1 1 0 1 1 0 2H10.4a1 1 0 1 1 0-2H13v-2.07A7 7 0 0 1 5 12a1 1 0 0 1 1-1z"/>',
+    speakerLine:
+      '<path d="M11.4 3.05a1 1 0 0 1 .6.92v16.06a1 1 0 0 1-1.62.78L6.1 17.4H4a1 1 0 0 1-1-1V7.6a1 1 0 0 1 1-1h2.1l4.28-3.41a1 1 0 0 1 1.02-.14zM15.7 8.1a1 1 0 0 1 1.4.08 5.6 5.6 0 0 1 0 7.64 1 1 0 1 1-1.49-1.33 3.6 3.6 0 0 0 0-4.98 1 1 0 0 1 .09-1.41zM18.6 5.1a1 1 0 0 1 1.41.02 9.6 9.6 0 0 1 0 13.76 1 1 0 0 1-1.44-1.39 7.6 7.6 0 0 0 0-10.98 1 1 0 0 1 .03-1.41z"/>',
     shareLine:
       '<g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5v11"/><path d="M8.5 7 12 3.5 15.5 7"/><path d="M5.5 11.5v8h13v-8"/></g>',
     plusLine:
@@ -985,6 +1006,40 @@
         "<i></i>" +
         "</div>" +
         '<span class="sd-mini-time sd-mini-dur">0:00</span>' +
+        "</div>" +
+        /* Ligne 4 · ce que l'application d'origine met sous la progression :
+           paroles, karaoké, file d'attente, appareils, volume. Rien n'est
+           décoratif : chaque commande pilote celle de Spotify, et disparaît
+           si Spotify ne l'expose pas sur la page courante. */
+        '<div class="sd-mini-row2">' +
+        '<button class="sd-iconbtn sd-mini-lyrics" type="button" aria-label="' +
+        Settings.labels.lyrics +
+        '">' +
+        svg(ICONS.lyricsLine) +
+        "</button>" +
+        '<button class="sd-iconbtn sd-mini-karaoke" type="button" aria-label="' +
+        Settings.labels.karaoke +
+        '" hidden>' +
+        svg(ICONS.micLine) +
+        "</button>" +
+        '<button class="sd-iconbtn sd-mini-queue" type="button" aria-label="' +
+        Settings.labels.queue +
+        '">' +
+        svg(ICONS.queueLine) +
+        "</button>" +
+        '<button class="sd-iconbtn sd-mini-devices" type="button" aria-label="' +
+        Settings.labels.devices +
+        '" hidden>' +
+        svg(ICONS.deviceLine) +
+        "</button>" +
+        '<div class="sd-mini-volume" hidden>' +
+        '<span class="sd-iconbtn sd-mini-volicon" aria-hidden="true">' +
+        svg(ICONS.speakerLine) +
+        "</span>" +
+        '<input class="sd-mini-vol" type="range" min="0" max="100" step="1" value="100" aria-label="' +
+        Settings.labels.volume +
+        '">' +
+        "</div>" +
         "</div>";
 
       /* ---- tab bar ---- */
@@ -1199,6 +1254,12 @@
         miniDur: $(".sd-mini-dur", mini),
         miniSeek: $(".sd-mini-seek", mini),
         miniProgress: $(".sd-mini-seek > i", mini),
+        miniLyrics: $(".sd-mini-lyrics", mini),
+        miniKaraoke: $(".sd-mini-karaoke", mini),
+        miniQueue: $(".sd-mini-queue", mini),
+        miniDevices: $(".sd-mini-devices", mini),
+        miniVolWrap: $(".sd-mini-volume", mini),
+        miniVol: $(".sd-mini-vol", mini),
         nav: nav,
         navItems: $$(".sd-nav-item", nav),
         navBell: $(".sd-nav-bell", nav),
@@ -1251,9 +1312,12 @@
       var e = this.el;
 
 
-      /* titles */
-      if (e.miniTitle.textContent !== s.title) e.miniTitle.textContent = s.title || "";
-      if (e.miniArtist.textContent !== s.artist) e.miniArtist.textContent = s.artist || "";
+      /* titles — sans titre, le mini-lecteur dit où il en est plutôt que de
+         rester vide (il reste affiché, c'est le lecteur de l'application). */
+      var miniTitle = s.title || Settings.labels.noTrack;
+      var miniArtist = s.artist || Settings.labels.app;
+      if (e.miniTitle.textContent !== miniTitle) e.miniTitle.textContent = miniTitle;
+      if (e.miniArtist.textContent !== miniArtist) e.miniArtist.textContent = miniArtist;
       if (e.track.textContent !== s.title) e.track.textContent = s.title || "";
       if (e.artist.textContent !== s.artist) e.artist.textContent = s.artist || "";
       var ctx = s.artist || Settings.labels.nowPlaying;
@@ -1275,6 +1339,13 @@
       var playGlyph = svg(s.playing ? ICONS.pause : ICONS.play);
       e.play.innerHTML = playGlyph;
       e.miniPlay.innerHTML = playGlyph;
+      /* Sans titre : les commandes de transport sont **désactivées**, pas
+         masquées — on voit ce que l'application sait faire. */
+      [e.miniPrev, e.miniPlay, e.miniNext, e.miniShuffle, e.miniRepeat, e.miniLike].forEach(
+        function (btn) {
+          if (btn) btn.disabled = !s.hasTrack;
+        }
+      );
       e.play.setAttribute("aria-label", s.playing ? Settings.labels.pause : Settings.labels.play);
       e.miniPlay.setAttribute("aria-label", s.playing ? Settings.labels.pause : Settings.labels.play);
 
@@ -1303,6 +1374,35 @@
       e.lyrics.hidden = !Spotify.lyricsButton();
       e.device.hidden = !Spotify.devicesButton();
       e.queue.hidden = !Spotify.queueButton() && !$("#Desktop_PanelContainer_Id");
+      /* … et la rangée bonus du mini-lecteur, qui suit les mêmes capacités :
+         un bouton qui ne peut rien faire ne s'affiche pas du tout. */
+      e.miniLyrics.hidden = !Spotify.lyricsButton();
+      e.miniKaraoke.hidden = !Spotify.karaokeButton();
+      e.miniDevices.hidden = !Spotify.devicesButton();
+      e.miniQueue.hidden = !Spotify.queueButton() && !$("#Desktop_PanelContainer_Id");
+      /* Paroles et karaoké : Spotify expose `aria-pressed` sur ses propres
+         boutons. On le reflète, sinon nos boutons ne diraient jamais qu'ils
+         sont actifs (et l'audit se plaint d'une classe jamais stylée). */
+      [
+        [e.miniLyrics, Spotify.lyricsButton()],
+        [e.miniKaraoke, Spotify.karaokeButton()],
+      ].forEach(function (pair) {
+        var btn = pair[0];
+        var src2 = pair[1];
+        var on =
+          !!src2 &&
+          (src2.getAttribute("aria-pressed") === "true" ||
+            src2.getAttribute("aria-checked") === "true");
+        toggle(btn, "is-active", on);
+        btn.setAttribute("aria-pressed", on ? "true" : "false");
+      });
+      var volInput = Spotify.volumeInput();
+      e.miniVolWrap.hidden = !volInput;
+      if (volInput) {
+        var vol = clamp(Math.round(Number(volInput.value) || 0), 0, 100);
+        if (e.miniVol.value !== String(vol)) e.miniVol.value = String(vol);
+        toggle(e.miniVolWrap, "is-muted", vol === 0);
+      }
 
       /* duration (feuille du lecteur + mini-lecteur) */
       e.tDur.textContent = fmtTime(s.duration);
@@ -1346,6 +1446,13 @@
 
       html.classList.toggle("sd-subpage", isSubPage && !isLibrary);
       html.classList.toggle("sd-has-track", !!s.hasTrack);
+      /* Le mini-lecteur suit le **lecteur**, pas la piste : dès qu'un lecteur
+         existe, il est là — avec l'état vide « Aucun titre en lecture ». Avant,
+         il n'existait qu'avec une piste : sur un compte qui n'a rien lancé,
+         l'écran restait vide en bas (le fameux « des trucs n'apparaissent
+         pas »). */
+      html.classList.toggle("sd-mini-on", !!s.hasTrack || Spotify.ready());
+      html.classList.toggle("sd-mini-empty", !s.hasTrack);
       /* The stylesheet keys the whole layout off these three classes
          (`html.sd-tab-search` restyles the desktop top bar into a mobile
          search field, `html.sd-tab-library` turns the desktop sidebar into a
@@ -1366,7 +1473,12 @@
          (accueil, recherche, bibliothèque). Sur une sous-page — playlist,
          album, artiste —, c'est la barre de titre ci-dessous qui prend la
          main, avec son bouton retour. */
-      var navOn = !isSubPage;
+      /* Barre de navigation ou barre de titre — jamais les deux : elles
+         occupent le **même** bord, collées en haut, donc l'une recouvrait
+         l'autre et la barre de titre (retour + nom de la page) était
+         invisible sur la bibliothèque. L'application d'origine fait pareil :
+         on quitte la bibliothèque par « Fermer », pas par l'onglet. */
+      var navOn = !isSubPage && !isLibrary;
       html.classList.toggle("sd-nav-on", navOn);
       e.navItems.forEach(function (item) {
         var name = item.getAttribute("data-tab");
@@ -1450,6 +1562,34 @@
       e.miniLike.addEventListener("click", function (ev) {
         ev.stopPropagation();
         Actions.like();
+      });
+      /* Rangée bonus : paroles, karaoké, file d'attente, appareils, volume.
+         `stopPropagation` partout : le mini-lecteur, lui, ouvre le lecteur
+         plein écran au moindre appui. */
+      e.miniLyrics.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        var b = Spotify.lyricsButton();
+        if (b) b.click();
+      });
+      e.miniKaraoke.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        var b = Spotify.karaokeButton();
+        if (b) b.click();
+      });
+      e.miniQueue.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        Queue.openSheet();
+      });
+      e.miniDevices.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        var b = Spotify.devicesButton();
+        if (b) b.click();
+      });
+      ["input", "change", "click", "pointerdown", "touchstart"].forEach(function (name) {
+        e.miniVol.addEventListener(name, function (ev) {
+          ev.stopPropagation();
+          if (name === "input" || name === "change") Volume.set(this.value);
+        });
       });
 
       /* player sheet */
@@ -1890,6 +2030,26 @@
   }
 
   /* ------------------------------------------------------------------ *
+   * 10-ter. Volume — celui de Spotify, pas un second
+   * ------------------------------------------------------------------ */
+  var Volume = {
+    get: function () {
+      var i = Spotify.volumeInput();
+      return i ? clamp(Math.round(Number(i.value) || 0), 0, 100) : 0;
+    },
+    set: function (value) {
+      var i = Spotify.volumeInput();
+      if (!i) return;
+      var v = clamp(Math.round(Number(value) || 0), 0, 100);
+      i.value = String(v);
+      /* Spotify écoute `input` ; `change` est là pour les moteurs qui ne
+         relâchent qu'au relâchement du doigt. */
+      i.dispatchEvent(new Event("input", { bubbles: true }));
+      i.dispatchEvent(new Event("change", { bubbles: true }));
+    },
+  };
+
+  /* ------------------------------------------------------------------ *
    * 11. Toast (tiny, replaces nothing but keeps feedback possible)
    * ------------------------------------------------------------------ */
   var Toast = {
@@ -2069,7 +2229,64 @@
     return txt;
   }
 
-  /** Applique la densité choisie (classe sur <html>, tout le reste est en CSS). */
+  /* ------------------------------------------------------------------ *
+   * 11h. Device — l'unité de l'interface, déduite de l'appareil
+   *
+   * `--sd-u` dimensionne **tout** : barres, typographie, pochette du
+   * mini-lecteur, feuilles, lecteur plein écran. Elle était figée à 1 — la même
+   * interface pour un téléphone de 360 px et une tablette de 800, avec un
+   * réglage manuel pour compenser les différences. Le réglage manuel reste
+   * (c'est devenu un *facteur*), mais la base est désormais **mesurée** :
+   *
+   *     base = clamp(0,92 ; min(largeur / 412 ; hauteur / 915) ; 1,15)
+   *
+   *   · 360×800   → 0,92   (plancher : le texte ne descend pas sous Material)
+   *   · 412×915   → 1,00   (la référence du projet)
+   *   · 480×1040  → 1,14
+   *   · 800×1280  → 1,15   (plafond : au-delà, c'est la place qui gagne)
+   *   · 915×412   → 0,92   (paysage : les barres restent fines)
+   *
+   * La hauteur compte autant que la largeur, sinon un téléphone en paysage
+   * aurait des barres plus hautes que le tiers de son écran. Le plancher existe
+   * pour la même raison : sur un petit écran on resserre la mise en page, on ne
+   * rétrécit pas le texte.
+   *
+   * Les paliers (`sd-size-compact`, `sd-size-normal`, `sd-size-wide`,
+   * `sd-orient-landscape`) sont posés ici et consommés par la feuille
+   * `76-device.css` : c'est là que se règlent les hauteurs de barres, pas dans
+   * le script.
+   * ------------------------------------------------------------------ */
+  var Device = {
+    base: 1,
+    apply: function () {
+      var html = document.documentElement;
+      var w = viewW();
+      var h = viewH();
+      var base = clamp(0.92, Math.min(w / 412, h / 915), 1.15);
+      base = Math.round(base * 1000) / 1000;
+      this.base = base;
+      html.style.setProperty("--sd-u-base", String(base));
+      var wide = w >= 600;
+      var compact = w < 380;
+      html.classList.toggle("sd-size-compact", compact && !wide);
+      html.classList.toggle("sd-size-normal", !compact && !wide);
+      html.classList.toggle("sd-size-wide", wide);
+      html.classList.toggle("sd-orient-landscape", w > h);
+    },
+    /** Une ligne pour le diagnostic : c'est ce qui explique un rendu. */
+    describe: function () {
+      var html = document.documentElement;
+      return (
+        "unité " + this.base.toFixed(2) +
+        " · " + viewW() + "×" + viewH() + " px" +
+        (html.classList.contains("sd-orient-landscape") ? " · paysage" : " · portrait") +
+        (html.classList.contains("sd-size-wide") ? " · écran large" : "")
+      );
+    },
+  };
+
+  /** Applique la densité choisie : un **facteur**, multiplié par la base
+      mesurée de l'appareil (voir `Device`). */
   function applyDensity(value) {
     var html = document.documentElement;
     html.classList.remove("sd-density-compact", "sd-density-normal", "sd-density-large");
@@ -3372,7 +3589,10 @@
         },
         true
       );
-      window.addEventListener("orientationchange", apply);
+      window.addEventListener("orientationchange", function () {
+      Device.apply();
+      apply();
+    });
       window.addEventListener("resize", apply);
       apply();
     },
@@ -3455,6 +3675,7 @@
        feuille sont calculées à partir de la largeur de mise en page. */
     Viewport.ensure();
     injectStyles();
+    Device.apply();
     markBody();
 
     /* La coque d'abord, toujours : barre d'onglets, mini-lecteur, feuilles,
@@ -3537,6 +3758,7 @@
     window.addEventListener(
       "resize",
       debounce(function () {
+        Device.apply();
         Theme.apply();
         UI.paintProgress();
         Welcome.apply();
@@ -3694,6 +3916,8 @@
       Polish: Polish,
       Back: Back,
       Viewport: Viewport,
+      Device: Device,
+      Volume: Volume,
       Icons: ICONS,
     },
   };

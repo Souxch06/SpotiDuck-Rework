@@ -184,6 +184,11 @@ html.sd-mobile .sd-mini {
   cursor: pointer;
   overscroll-behavior: contain;
 }
+/* Le mini-lecteur est **le lecteur** de l'application : il s'affiche dès
+   qu'un lecteur existe, avec ou sans piste en cours (état vide plus bas). Le
+   lier à la présence d'une piste faisait disparaître le bas de l'écran sur un
+   compte qui n'avait encore rien lancé. */
+html.sd-mobile.sd-mini-on .sd-mini,
 html.sd-mobile.sd-has-track .sd-mini {
   display: flex;
   animation: sd-slide-up 260ms var(--sd-ease);
