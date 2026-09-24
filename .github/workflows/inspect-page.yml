@@ -89,6 +89,27 @@ jobs:
             echo "::notice title=Connexion ($NAME) : bouton Google::occurrences : $N"
           done
 
+      - name: What Google answers to an embedded browser
+        # Question posée telle quelle : « le système de connexion Google
+        # fonctionne ? » Google refuse son OAuth aux navigateurs embarqués, et sa
+        # décision se prend sur l'agent annoncé. Reste à savoir ce qu'il répond à
+        # **notre** agent (celui du mode mobile : un Chrome Android, sans le
+        # marqueur `wv` des WebView), comparé à un vrai agent de WebView.
+        run: |
+          set +e -uo pipefail
+          MOBILE="Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Mobile Safari/537.36"
+          WEBVIEW="Mozilla/5.0 (Linux; Android 14; Pixel 7; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/150.0.0.0 Mobile Safari/537.36"
+          DESKTOP="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
+          for pair in "mobile|$MOBILE" "webview|$WEBVIEW" "desktop|$DESKTOP"; do
+            NAME="${pair%%|*}"; UA="${pair#*|}"
+            curl -sSL -o "/tmp/g-$NAME.html" -w "code=%{http_code}\n" -A "$UA" \
+              "https://accounts.google.com/signin/v2/identifier?flowName=GlifWebSignIn&flowEntry=ServiceLogin" || true
+            SIZE=$(wc -c < "/tmp/g-$NAME.html" 2>/dev/null || echo 0)
+            BLOCK=$(grep -o -i "disallowed_useragent\|may not be secure\|navigateur ou cette application" "/tmp/g-$NAME.html" 2>/dev/null | head -1)
+            TITLE=$(grep -o "<title>[^<]*</title>" "/tmp/g-$NAME.html" 2>/dev/null | head -1)
+            echo "::notice title=Google ($NAME)::$SIZE octets — ${TITLE:-sans titre} — blocage : ${BLOCK:-aucun}"
+          done
+
       - name: The page head, verbatim
         run: |
           set +e -uo pipefail   # GitHub lance les étapes en « -e » : un grep sans résultat tuait le diagnostic
