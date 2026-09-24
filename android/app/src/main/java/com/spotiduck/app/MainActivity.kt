@@ -374,14 +374,11 @@ class MainActivity : AppCompatActivity() {
      * connexion retombe alors dans la vue principale.
      */
     private fun installWebChromeClient() {
-        webView.webChromeClient = SpotiChrome(webView, isPopup = false)
+        webView.webChromeClient = SpotiChrome(isPopup = false)
     }
 
     /** Ce que la page a le droit de demander au navigateur. */
-    private inner class SpotiChrome(
-        private val host: WebView,
-        private val isPopup: Boolean
-    ) : WebChromeClient() {
+    private inner class SpotiChrome(private val isPopup: Boolean) : WebChromeClient() {
 
         override fun onCreateWindow(
             view: WebView,
@@ -412,7 +409,7 @@ class MainActivity : AppCompatActivity() {
 
         override fun onReceivedTitle(view: WebView, title: CharSequence?) {
             if (!isPopup) return
-            loginWindows.firstOrNull { it.web === view }?.title?.text = title ?: getString(R.string.login_window_title)
+            loginWindows.firstOrNull { it.web === view }?.title?.let { it.text = title ?: getString(R.string.login_window_title) }
         }
 
         /**
@@ -495,7 +492,7 @@ class MainActivity : AppCompatActivity() {
         setBackgroundColor(appBg)
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-        webChromeClient = SpotiChrome(this, isPopup = true)
+        webChromeClient = SpotiChrome(isPopup = true)
         webViewClient = object : WebViewClient() {
             /** Une fenêtre de connexion ne sort jamais de l'application. */
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {

@@ -1270,3 +1270,94 @@ Deux corrections, qui se complètent :
   définir un — ensuite tout passe par l'application ;
 * **une seule connexion suffit** : la session est écrite sur le disque et gardée
   en secours (§20), donc les mises à jour suivantes ne redemandent rien.
+
+## 23. La connexion refaite : ce qui la cassait, et ce qui la tient (v2.9.0)
+
+Constat utilisateur : « le système de connexion est vraiment bancal », avec deux
+symptômes précis — **déconnecté à chaque mise à jour**, et **« e-mail ou mot de
+passe incorrect »** avec une connexion qui rame.
+
+Rien de tout cela ne se répare à l'aveugle, alors les deux pages de connexion de
+Spotify ont d'abord été **mesurées** : un vrai Chrome sans tête, lancé en CI avec
+l'agent exact de l'application, qui remplit les formulaires, clique les boutons et
+lit la réponse HTTP du serveur.
+
+### Ce que la mesure a établi
+
+| Page | Ce qu'elle sert avec l'agent de l'application |
+| --- | --- |
+| `accounts.spotify.com/fr/login` | **pas de champ mot de passe** — l'e-mail seul, puis les boutons Google / Facebook / Apple, et l'encart « Ce site est protégé par reCAPTCHA » |
+| `accounts.spotify.com/fr/login?allow_password=1` | **les deux champs** (e-mail **et** mot de passe) |
+| `open.spotify.com/login` | **404** — l'adresse utilisée jusqu'ici par l'habillage maison menait à une page d'erreur |
+| Clic « Continuer avec Google » | ouvre `accounts.google.com/v3/signin/identifier?client_id=1046568431490-…&redirect_uri=https://accounts.spotify.com/login/google/redirect` |
+| `accounts.google.com/signin/v2/identifier`, agent de WebView | page de connexion **normale** (aucun `disallowed_useragent` sur cette page-là) |
+
+### Les quatre défauts trouvés dans le code
+
+1. **La copie de secours fabriquait des doublons.** Les cookies étaient
+   sauvegardés en **une seule chaîne** puis réinjectés sur chacune des trois
+   adresses avec `Domain=.spotify.com` : un cookie déjà présent sous une autre
+   portée (hôte seul d'un côté, `.spotify.com` de l'autre) devenait **deux
+   cookies du même nom** — et le serveur en lit un au hasard. C'est exactement le
+   mécanisme qui fait répondre « e-mail ou mot de passe incorrect » à une
+   connexion par ailleurs valable, et il explique le côté erratique
+   (« des erreurs à des moments »).
+2. **La copie était écrite avec `apply()`** — « plus tard ». Une mise à jour tue
+   le processus : le « plus tard » n'arrive jamais. La session est maintenant
+   écrite **par adresse**, en une fois, avec `commit()` (synchrone).
+3. **Une copie qui ne ramenait rien était gardée.** Réinjectée à chaque
+   lancement, elle rendait la panne permanente. Désormais : une copie qui ne
+   ramène pas la session est **jetée** — et une déconnexion demandée par
+   l'utilisateur jette la copie aussi, pour ne pas le reconnecter d'office.
+4. **`window.open` était remplacé** (le correctif 2.8.1). La mesure a montré que
+   la connexion Google passe par une **vraie fenêtre** : la page appelle
+   `window.open(...)` et attend que cette fenêtre lui rende la main par
+   `window.opener`. En chargeant l'adresse dans la vue courante, le lien entre
+   les deux pages était rompu, et le retour de connexion n'arrivait jamais.
+
+### La connexion telle qu'elle se comporte maintenant
+
+* **Une vraie fenêtre** pour Google, Apple et Facebook : une seconde WebView
+  posée par-dessus la première, même profil (donc mêmes cookies), même agent,
+  tiers cookies acceptés, refermée par la page elle-même (`onCloseWindow`), et
+  bouton *Fermer* + bouton retour matériel en secours ;
+* **le retour de connexion est repris** : dès qu'une fenêtre revient sur
+  `open.spotify.com`, la session est rangée, la fenêtre fermée et la vue
+  principale rechargée ;
+* **un refus de Google est expliqué en français**, avec la seule porte qui
+  reste — « Utiliser mon e-mail et mon mot de passe » — au lieu d'une page
+  d'erreur anglaise ;
+* **la page est juge de l'état de connexion** : `native-mode.js` annonce `in`,
+  `out` ou `login` à l'application (`AndBridge.loginState`). Le cookie dit qu'une
+  session a existé, la page dit si elle vaut encore quelque chose ;
+* **récupération automatique, une seule fois**, dans les 45 premières secondes
+  d'un lancement : si le pot a perdu la session et qu'une copie valable existe,
+  elle est remise et la page rechargée ;
+* **erreur du formulaire** : le bandeau propose « Réessayer proprement », qui
+  expire **uniquement** les cookies CSRF d'`accounts.spotify.com` (jamais `sp_dc`
+  ni `sp_key`) puis recharge — parce qu'un jeton de page périmé produit lui aussi
+  « e-mail ou mot de passe incorrect » ;
+* **les boîtes de la page** (`alert`, `confirm`, `prompt`) sont affichées : sans
+  client pour y répondre, une page qui en utilise une reste bloquée pour
+  toujours, sans rien dire à l'écran.
+
+### Et ce qui faisait « ramer »
+
+* **reCAPTCHA ne doit jamais pouvoir être bloqué.** La page de connexion s'en
+  sert (25 occurrences dans ses scripts) : une liste de filtres qui le coupe
+  transforme le formulaire en « e-mail ou mot de passe incorrect ». `NEVER_BLOCK`
+  couvre désormais reCAPTCHA, `gstatic.com/recaptcha` et `accounts.spotify.com` —
+  un garde-fou de l'audit le vérifie ;
+* **le reniflage de type des publicités audio** attendait jusqu'à 7 s et
+  recommençait à chaque passage. 1,2 s, et le résultat est mémorisé ;
+* **le balayage des encarts** tournait toutes les deux secondes quoi qu'il
+  arrive. Il ne tourne plus que si la page a bougé (au pire toutes les 12 s), et
+  jamais écran éteint — le contrôle de connexion non plus.
+
+### Vérifications
+
+84/84 tests (dont : le verdict de connexion sur les trois sortes de page, le
+nettoyage ciblé après une erreur de formulaire, `window.open` laissé intact),
+audit 0 erreur / 0 avertissement, et les nouveaux garde-fous : écriture
+synchrone, absence de doublons, copie jetée quand elle ne ramène rien,
+`window.open` jamais remplacé, refus de Google expliqué.
