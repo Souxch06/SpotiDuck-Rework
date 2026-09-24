@@ -228,44 +228,69 @@ const MEASURE = async () => {
      telephone, les pochettes de l'accueil mesurent ~59 px avec des gouttières de
      ~36 px. Il faut savoir QUI décide de ces tailles (la grille ? une variable
      CSS ? un style en ligne ?) avant d'écrire la moindre règle. */
+  /* **Ce qui pilote la taille du contenu, nommé précisément.** « Ca rends pas
+     tres beau » : sur le telephone, les pochettes de l'accueil paraissent
+     minuscules et tres espacees. Impossible d'ecrire la bonne regle sans savoir
+     quels elements portent la taille — et la premiere version de ce releve a
+     montre que la grille de l'accueil n'est pas `grid-container` (absent).
+     On descend donc la structure reelle de la premiere rangee, en nommant
+     chaque niveau : balise, identifiant de test, largeur, image. */
   out.content = (function () {
-    var rows = [];
     var shelf = document.querySelector('section[data-testid=component-shelf]');
     if (!shelf) return "aucune shelf";
-    var grid = shelf.querySelector('div[data-testid=grid-container]');
-    var cards = (grid || shelf).children;
-    var first = cards[0];
-    var second = cards[1];
-    var r1 = first ? first.getBoundingClientRect() : { width: 0, height: 0, right: 0 };
-    var r2 = second ? second.getBoundingClientRect() : { right: 0 };
-    var inner = first ? first.querySelector("img, [data-testid=card-image]") : null;
-    var ri = inner ? inner.getBoundingClientRect() : { width: 0 };
-    var gap = second && first ? Math.round(r2.left - r1.right) : -1;
-    var cs = grid ? window.getComputedStyle(grid) : window.getComputedStyle(shelf);
-    var h2 = shelf.querySelector("h2");
-    var h2cs = h2 ? window.getComputedStyle(h2) : null;
-    rows.push(
-      "grille=" + (grid ? cs.display + " cols=" + cs.gridTemplateColumns : "absente") +
-        " gap=" + cs.columnGap + "/" + cs.rowGap +
-        " cellules=" + cards.length
-    );
-    rows.push(
-      "cellule=" + Math.round(r1.width) + "x" + Math.round(r1.height) +
-        " image=" + Math.round(ri.width) +
-        " gouttiere=" + gap +
-        " en-ligne=" + JSON.stringify((first && first.getAttribute("style")) || "")
-    );
-    rows.push(
-      "titre=" + (h2cs ? h2cs.fontSize + " " + (h2.textContent || "").trim().slice(0, 18) : "?") +
-        " marge-shelf=" + window.getComputedStyle(shelf).marginTop + "/" + window.getComputedStyle(shelf).marginBottom
-    );
-    var all = document.querySelectorAll('section[data-testid=component-shelf]');
-    if (all.length > 1) {
-      var a = all[0].getBoundingClientRect();
-      var b = all[1].getBoundingClientRect();
-      rows.push("entre-shelves=" + Math.round(b.top - a.bottom));
+    var rows = [];
+    var describe = function (el, depth) {
+      var r = el.getBoundingClientRect();
+      var cs = window.getComputedStyle(el);
+      var img = el.querySelector("img");
+      var ir = img ? img.getBoundingClientRect() : null;
+      return (
+        new Array(depth + 1).join("  ") +
+        el.tagName.toLowerCase() +
+        (el.getAttribute("data-testid") ? "[" + el.getAttribute("data-testid") + "]" : "") +
+        (el.getAttribute("role") ? "{" + el.getAttribute("role") + "}" : "") +
+        (el.className && typeof el.className === "string"
+          ? "." + el.className.split(/\s+/).slice(0, 2).join(".")
+          : "") +
+        " " + Math.round(r.width) + "x" + Math.round(r.height) +
+        " " + cs.display +
+        (cs.gridTemplateColumns && cs.gridTemplateColumns !== "none" ? " cols=" + cs.gridTemplateColumns : "") +
+        (cs.columnGap && cs.columnGap !== "normal" ? " gap=" + cs.columnGap : "") +
+        (ir ? " img=" + Math.round(ir.width) : "")
+      );
+    };
+    /* Les deux premiers niveaux de la rangée : c'est là que Spotify décide. */
+    var kids = shelf.children;
+    rows.push("shelf " + Math.round(shelf.getBoundingClientRect().width) + "x" + Math.round(shelf.getBoundingClientRect().height) + " enfants=" + kids.length);
+    for (var i = 0; i < Math.min(kids.length, 4); i++) {
+      rows.push(describe(kids[i], 1));
+      var kk = kids[i].children;
+      for (var j = 0; j < Math.min(kk.length, 3); j++) {
+        rows.push(describe(kk[j], 2));
+        var kkk = kk[j].children;
+        for (var m = 0; m < Math.min(kkk.length, 3); m++) rows.push(describe(kkk[m], 3));
+      }
     }
-    return rows.join(" . ");
+    /* La carte : le premier descendant qui contient une image. */
+    var withImg = null;
+    var all = shelf.querySelectorAll("*");
+    for (var n = 0; n < all.length && !withImg; n++) {
+      if (all[n].querySelector("img")) withImg = all[n];
+    }
+    if (withImg) {
+      var r = withImg.getBoundingClientRect();
+      var im = withImg.querySelector("img").getBoundingClientRect();
+      var next = withImg.nextElementSibling;
+      var nr = next ? next.getBoundingClientRect() : null;
+      rows.push(
+        "CARTE " + describe(withImg, 0) +
+          " gouttiere=" + (nr ? Math.round(nr.left - r.right) : "?") +
+          " en-ligne=" + JSON.stringify((withImg.getAttribute("style") || "").slice(0, 90))
+      );
+      var par = withImg.parentElement;
+      if (par) rows.push("parent " + describe(par, 1) + " enfants=" + par.children.length);
+    }
+    return rows.join(" ~ ");
   })();
 
   out.tapTargets = (function () {
