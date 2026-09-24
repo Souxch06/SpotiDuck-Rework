@@ -74,6 +74,8 @@ class MainActivity : AppCompatActivity() {
     private var uiMode: String = MODE_DEFAULT
     /** Dernier lien non-web traité (converti, ou avalé) : affiché par la sonde. */
     private var lastHandledLink: String = ""
+    /** Horodatage du dernier enregistrement des cookies sur le disque. */
+    private var lastCookieFlush: Long = 0L
     private var powerManager: PowerManager? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var shutdownRunnable: Runnable? = null
@@ -159,6 +161,12 @@ class MainActivity : AppCompatActivity() {
         webView.addJavascriptInterface(bridge, "AndBridge")
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
+
+        /* La session d'abord : si la WebView a perdu ses cookies (mise à jour
+           qui tue le processus avant l'écriture sur disque, réinstallation,
+           nettoyage par le système), on remet celle qu'on avait sauvegardée.
+           Sans ça, chaque mise à jour demandait de se reconnecter. */
+        restoreCookies()
 
         /* La WebView est posée dans un conteneur : c'est ce conteneur qui
            reçoit la place des barres système dans le mode mobile (voir
@@ -284,6 +292,14 @@ class MainActivity : AppCompatActivity() {
              */
             override fun onPageFinished(view: WebView, url: String?) {
                 view.evaluateJavascript("window.__sdBridgeReady=true;", null)
+                /* Le lecteur est chargé : les cookies de session viennent d'être
+                   posés ou rafraîchis. On les écrit sur le disque **tout de
+                   suite** (la WebView le fait paresseusement, et une mise à jour
+                   tue le processus avant) et on garde une copie de secours. */
+                if (url != null && url.contains("open.spotify.com")) {
+                    flushCookies()
+                    saveCookies()
+                }
                 if (uiMode != MODE_ORIGINAL) view.evaluateJavascript(VIEWPORT_META_JS, null)
                 val script = scriptFor(uiMode)
                 if (script.isEmpty()) {
@@ -402,6 +418,16 @@ class MainActivity : AppCompatActivity() {
             /* Ce que le blocage a réellement fait : combien de publicités sont
                passées en silence, et sur quel hôte. C'est la seule trace d'un
                blocage qui aurait touché autre chose que de la publicité. */
+            /* Où en est la session : le cookie `sp_dc` est celui qui porte la
+               connexion. S'il est là, la mise à jour suivante ne demandera rien ;
+               s'il manque alors qu'une copie existe, c'est `restoreCookies` qui
+               travaille. */
+            val cookies = runCatching {
+                CookieManager.getInstance().getCookie(WEB_BASE) ?: ""
+            }.getOrDefault("")
+            val saved = prefs().getString(KEY_COOKIES, null)?.contains("sp_dc=") == true
+            val sessionLine = "\n\nsession : sp_dc " + (if (cookies.contains("sp_dc=")) "present" else "absent") +
+                " · copie de secours " + (if (saved) "oui" else "non")
             val ad = buildString {
                 append("\n\npublicités muettes : ").append(adBlocker.silenced.get())
                 append(" · hôtes bloqués : ").append(adBlocker.ruleCount)
@@ -409,7 +435,7 @@ class MainActivity : AppCompatActivity() {
                     append("\nblocage : ").append(adBlocker.lastSilenced)
                 }
             }
-            val text = probe + link + ad
+            val text = probe + link + ad + sessionLine
             AlertDialog.Builder(this)
                 .setTitle(getString(R.string.diagnostic_title))
                 .setMessage(text)
@@ -606,6 +632,81 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /* ------------------------------------------------------------------ *
+     * La session : écrite sur le disque, et gardée en secours
+     * ------------------------------------------------------------------ */
+
+    /**
+     * Force l'écriture des cookies sur le disque.
+     *
+     * La WebView garde ses cookies en mémoire et les écrit quand elle veut :
+     * un processus tué avant (mise à jour, arrêt forcé, gestionnaire de
+     * batterie) perd ce qui n'a pas été écrit — c'est-à-dire la connexion.
+     * Cette méthode est donc banale mais elle est **la** raison pour laquelle
+     * la session survit maintenant.
+     */
+    private fun flushCookies(force: Boolean = false) {
+        val now = System.currentTimeMillis()
+        /* `flush()` écrit tout le magasin sur le disque : inutile de le refaire
+           trois fois en une seconde (fin de page, pause, arrêt se suivent). */
+        if (!force && now - lastCookieFlush < 3_000L) return
+        runCatching {
+            CookieManager.getInstance().flush()
+            lastCookieFlush = now
+        }
+    }
+
+    /**
+     * Copie de secours des cookies de session, dans les préférences privées de
+     * l'application.
+     *
+     * Elle ne sert qu'au cas où la WebView n'a plus rien (voir
+     * `restoreCookies`). Le fichier n'est pas exporté et reste dans le dossier
+     * privé de l'application, comme le profil d'un navigateur — c'est la
+     * session de la personne qui l'a ouverte, sur son propre téléphone.
+     */
+    private fun saveCookies() {
+        runCatching {
+            val cm = CookieManager.getInstance()
+            val cookies = COOKIE_URLS.mapNotNull { url -> cm.getCookie(url)?.takeIf { it.isNotBlank() } }
+                .joinToString("; ")
+            if (!cookies.contains("sp_dc=")) return
+            prefs().edit().putString(KEY_COOKIES, cookies).apply()
+        }
+    }
+
+    /**
+     * Remet la session d'avant, **seulement** si la WebView n'en a plus.
+     *
+     * Un cookie est réécrit avec son domaine : `.spotify.com` pour tous, sinon
+     * il ne serait envoyé qu'à l'hôte exact. Rien n'est écrasé quand une session
+     * est déjà là — au pire, elle vient d'être rafraîchie par Spotify.
+     */
+    private fun restoreCookies() {
+        runCatching {
+            val cm = CookieManager.getInstance()
+            if (cm.getCookie(WEB_BASE)?.contains("sp_dc=") == true) return
+            val saved = prefs().getString(KEY_COOKIES, null) ?: return
+            if (!saved.contains("sp_dc=")) return
+            var restored = 0
+            saved.split("; ").forEach { pair ->
+                val name = pair.substringBefore("=").trim()
+                if (name.isEmpty() || !pair.contains("=")) return@forEach
+                val rules = if (name.startsWith("__Host-")) {
+                    "Path=/; Max-Age=31536000; Secure; SameSite=None"
+                } else {
+                    "Domain=.spotify.com; Path=/; Max-Age=31536000; Secure; SameSite=None"
+                }
+                COOKIE_URLS.forEach { url ->
+                    cm.setCookie(url, "$pair; $rules")
+                }
+                restored++
+            }
+            cm.flush()
+            Log.i(TAG, "session restaurée ($restored cookies)")
+        }
+    }
+
     private fun readAsset(name: String): String =
         runCatching { assets.open(name).bufferedReader().use { it.readText() } }
             .getOrElse {
@@ -665,6 +766,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     fun onLoggedIn() {
+        /* C'est le moment où la session vaut la peine d'être écrite : juste
+           après une connexion, avant que quoi que ce soit puisse la perdre. */
+        flushCookies()
+        saveCookies()
         Toast.makeText(this, R.string.logged_in, Toast.LENGTH_SHORT).show()
     }
 
@@ -740,7 +845,24 @@ class MainActivity : AppCompatActivity() {
         webView.evaluateJavascript("window.SpotiDuckUI&&SpotiDuckUI.sync()", null)
     }
 
+    /**
+     * Quitter l'application (ou la mettre en arrière-plan) est le dernier moment
+     * sûr pour écrire les cookies : après, le processus peut être tué sans
+     * préavis — c'est exactement ce qui arrive pendant une mise à jour.
+     */
+    override fun onPause() {
+        super.onPause()
+        flushCookies()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        flushCookies()
+        saveCookies()
+    }
+
     override fun onDestroy() {
+        flushCookies()
         shutdownRunnable?.let { ui.removeCallbacks(it) }
         PlaybackService.jsExecutor = null
         releaseWakeLock()
@@ -789,6 +911,14 @@ class MainActivity : AppCompatActivity() {
 
         private const val PREFS = "spotiduck"
         private const val KEY_UI_MODE = "ui_mode"
+        private const val KEY_COOKIES = "session_cookies"
+
+        /** Les hôtes dont on sauvegarde les cookies : le lecteur et la connexion. */
+        private val COOKIE_URLS = listOf(
+            "https://open.spotify.com",
+            "https://accounts.spotify.com",
+            "https://api.spotify.com"
+        )
         private const val KEY_UI_MODE_CHOSEN = "ui_mode_chosen"
         private const val KEY_UI_MODE_REV = "ui_mode_rev"
 

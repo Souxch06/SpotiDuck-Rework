@@ -1027,6 +1027,51 @@ await checkAsync("native mode: a tab that leads nowhere is navigated for it", as
   return "appui noté · navigation reprise par l'application ✓";
 });
 
+/* Le banc de la connexion : une deuxième page, sur le domaine de connexion de
+   Spotify, sans champ de mot de passe — c'est le cas où les boutons sociaux sont
+   les seuls proposés et où aucun ne peut fonctionner dans une WebView. */
+const loginDom = new JSDOM(
+  '<!doctype html><html><body><div id="root"><button>Continuer avec Google</button></div></body></html>',
+  { url: "https://accounts.spotify.com/fr/login", pretendToBeVisual: true, runScripts: "dangerously" }
+);
+const lw = loginDom.window;
+const ld = lw.document;
+lw.__bridgeCalls = [];
+lw.AndBridge = new Proxy({}, { get: () => () => {} });
+lw.eval(natScript);
+
+check("native mode: a social-only login page gets an e-mail way through", () => {
+  const bar = ld.querySelector("#sd-login-help");
+  assert(bar, "no e-mail help on a login page without a password field");
+  const button = bar.querySelector("a[data-sd='login-help-button']");
+  assert(button, "the help has no button");
+  assert(
+    button.getAttribute("href") === "?allow_password=1",
+    "the button must ask Spotify for the password form: " + button.getAttribute("href")
+  );
+  assert(
+    /e-?mail/i.test(button.textContent),
+    "the button should say it is about e-mail: " + button.textContent
+  );
+  assert(bar.querySelector("a[data-sd='login-help-hide']"), "the help cannot be dismissed");
+  return "bouton e-mail + mot de passe, masquable ✓";
+});
+
+check("native mode: the help disappears once the password form is there", () => {
+  const input = ld.createElement("input");
+  input.type = "password";
+  input.name = "password";
+  ld.querySelector("#root").appendChild(input);
+  lw.__sdLoginTick();
+  assert(!ld.querySelector("#sd-login-help"), "the help stayed after the form appeared");
+  return "champ mot de passe présent → aucun bandeau ✓";
+});
+
+check("native mode: no login help outside the login pages", () => {
+  assert(!nd.querySelector("#sd-login-help"), "the help must not appear on the player page");
+  return "rien sur le lecteur ✓";
+});
+
 check("native mode: the notification controls press Spotify's buttons", () => {
   natClicks.length = 0;
   nSD.playPause();

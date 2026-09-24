@@ -207,6 +207,37 @@ if (!/isAdAudio/.test(activity) || !/sniffContentType/.test(activity)) {
   errors.push("MainActivity : les publicités audio ne sont plus détectées avant blocage");
 }
 
+/* La session doit survivre à une mise à jour. Trois choses le garantissent, et
+   chacune peut disparaître sans que rien ne casse visiblement — jusqu'au jour où
+   l'utilisateur doit se reconnecter :
+     · les cookies ne sont **jamais** effacés (aucun `removeAllCookies`) ;
+     · ils sont **écrits sur le disque** au bon moment : fin de page du lecteur,
+       connexion détectée, pause, arrêt — la WebView le fait paresseusement, et
+       une mise à jour tue le processus avant ;
+     · une copie de secours est gardée et remise si la WebView n'a plus rien.
+   Enfin, un lien de connexion doit exister : les boutons sociaux ne fonctionnent
+   pas dans une WebView, et sans le bouton « e-mail et mot de passe » la page de
+   connexion de Spotify n'offre que des impasses. */
+if (/removeAllCookies|removeSessionCookies/.test(activity)) {
+  errors.push("MainActivity : la session est effacée (removeAllCookies) — plus rien ne survivra à une mise à jour");
+}
+for (const need of ["flushCookies", "saveCookies", "restoreCookies", "KEY_COOKIES"]) {
+  if (!new RegExp(need).test(activity)) errors.push(`MainActivity : ${need} a disparu — la session ne survivra plus à une mise à jour`);
+}
+if (!/restoreCookies\(\)[\s\S]{0,3000}?loadUrl\(/.test(activity)) {
+  errors.push("MainActivity : la session restaurée n'est plus remise avant le chargement de la page");
+}
+const lifecycle = activity.replace(/\s+/g, " ");
+if (!/override fun onPause[\s\S]{0,200}?flushCookies/.test(activity)) {
+  errors.push("MainActivity : les cookies ne sont plus écrits à la mise en arrière-plan");
+}
+if (!/override fun onStop[\s\S]{0,300}?saveCookies/.test(activity)) {
+  errors.push("MainActivity : la copie de secours n'est plus prise à l'arrêt");
+}
+if (!/url\.contains\("open\.spotify\.com"\)[\s\S]{0,300}?saveCookies/.test(activity)) {
+  errors.push("MainActivity : la session n'est plus enregistrée en fin de chargement du lecteur");
+}
+
 const nativeAsset = read("android/app/src/main/assets/native-mode.js");
 if (!/showUiChooser/.test(nativeAsset)) {
   errors.push("native-mode.js : plus rien n'ouvre le sélecteur d'interface (appui long)");
@@ -223,6 +254,12 @@ if (!/uiMode == MODE_NATIVE[\s\S]{0,400}root\.setPadding\(bars\.left, bars\.top/
 }
 if (!/data-sd-appprompt/.test(nativeAsset) || !/APP_PROMPT_TEXT/.test(nativeAsset)) {
   errors.push("native-mode.js : le bandeau « ouvrir dans l'application » n'est plus traqué");
+}
+if (!/allow_password=1/.test(nativeAsset) || !/sd-login-help/.test(nativeAsset)) {
+  errors.push("native-mode.js : plus rien n'offre la connexion par e-mail sur la page de connexion");
+}
+if (!/input\[type='password'\]/.test(nativeAsset)) {
+  errors.push("native-mode.js : le lien de connexion n'est plus conditionné à l'absence du formulaire");
 }
 /* …et les invitations à l'abonnement, encarts **et** bouton de la barre du bas. */
 if (!/data-sd-premium/.test(nativeAsset) || !/PREMIUM_TEXT/.test(nativeAsset)) {

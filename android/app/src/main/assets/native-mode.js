@@ -24,7 +24,10 @@
  *   4. installer un appui long de 3 secondes, invisible, qui rouvre le choix
  *      de l'interface (c'est le seul moyen de revenir en arrière puisque notre
  *      couche n'est plus là où sont ses paramètres) ;
- *   5. veiller sur les onglets de la barre du bas : si un appui ne produit rien
+ *   5. ne pas laisser une page de connexion sans issue : si Spotify n'affiche
+ *      que des boutons sociaux (qui ne marchent pas dans une WebView), un bouton
+ *      « e-mail et mot de passe » mène à la page qui affiche le formulaire ;
+ *   6. veiller sur les onglets de la barre du bas : si un appui ne produit rien
  *      (lien `spotify:` que la WebView ne sait pas ouvrir, routeur de Spotify
  *      inerte, page qui ne peint pas), l'application fait la navigation
  *      elle-même vers l'adresse que l'onglet désigne.
@@ -544,6 +547,137 @@
   /* Spotify repose son bandeau et ses encarts à chaque changement d'écran : le
      balayage est donc répété, mais borné (900 éléments, des motifs courts). */
   window.setInterval(sweepAll, 2000);
+
+  /* ------------------------------------------------------------------ *
+   * 2-bis. Connexion : ne jamais rester devant une page sans issue
+   *
+   * La page de connexion de Spotify met ses boutons sociaux en avant et
+   * n'affiche le formulaire e-mail/mot de passe que si on le lui demande. Dans
+   * une WebView, les boutons sociaux ne mènent nulle part : Google refuse
+   * d'ouvrir son OAuth depuis un navigateur embarqué (« disallowed_useragent »).
+   * Sans rien, on arrive donc sur une page où **aucun** des boutons proposés ne
+   * peut fonctionner.
+   *
+   * L'application d'origine réglait exactement ça, avec le même truc que le
+   * nôtre : un bouton « Email + Password Classic Login » inséré dans la page,
+   * pointant vers `?allow_password=1` — le paramètre qui force Spotify à
+   * afficher son formulaire. C'est repris ici, en français, et seulement quand
+   * il n'y a pas déjà un champ de mot de passe à l'écran.
+   *
+   * Rien n'est envoyé nulle part : le bouton est un lien vers la même page.
+   * ------------------------------------------------------------------ */
+  var LOGIN_HOST = /(^|\.)accounts\.spotify\.com$/i;
+  var LOGIN_PATH = /\/(login|signup|password|reset|fr\/login|intl-[a-z-]+\/login)/i;
+
+  function emailField() {
+    try {
+      return document.querySelector(
+        "input[type='password'],input[name='password'],input[autocomplete='current-password'],#login-password"
+      );
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function passwordAllowed() {
+    return /allow_password=1/.test(window.location.search);
+  }
+
+  function removeLoginHelp() {
+    var bar = document.getElementById("sd-login-help");
+    if (bar && bar.parentNode) bar.parentNode.removeChild(bar);
+  }
+
+  /** L'utilisateur a masqué le bandeau : on ne le lui remet pas de la session. */
+  function loginHelpHidden() {
+    try {
+      return window.sessionStorage.getItem("sd-login-help") === "hidden";
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function showLoginHelp() {
+    if (!LOGIN_HOST.test(window.location.hostname) || !LOGIN_PATH.test(window.location.pathname)) {
+      removeLoginHelp();
+      return;
+    }
+    /* Un champ de mot de passe est là : Spotify propose déjà le formulaire. */
+    if (emailField() || passwordAllowed()) {
+      removeLoginHelp();
+      return;
+    }
+    if (loginHelpHidden()) {
+      removeLoginHelp();
+      return;
+    }
+    if (document.getElementById("sd-login-help")) return;
+    var bar = document.createElement("div");
+    bar.id = "sd-login-help";
+    bar.setAttribute("data-sd", "login-help");
+    bar.style.cssText =
+      "position:fixed;left:0;right:0;bottom:0;z-index:2147483000;padding:12px 16px 20px;" +
+      "background:#121212;border-top:1px solid #2a2a2a;font-family:inherit;text-align:center";
+    var note = document.createElement("div");
+    note.style.cssText = "color:#a7a7a7;font-size:12px;line-height:1.4;margin-bottom:8px";
+    note.textContent =
+      "Les boutons Google/Apple/Facebook ne fonctionnent pas dans l'application. La connexion par e-mail, si.";
+    var link = document.createElement("a");
+    link.setAttribute("data-sd", "login-help-button");
+    link.href = "?allow_password=1";
+    link.textContent = "Utiliser mon e-mail et mon mot de passe";
+    link.style.cssText =
+      "display:block;padding:12px;border-radius:30px;background:#1ed760;color:#000;" +
+      "font-weight:700;text-decoration:none;font-size:15px";
+    /* Un « masquer » : c'est notre bandeau, pas celui de Spotify, et personne
+       n'a à le subir s'il ne veut pas. Masqué, il ne revient plus. */
+    var hide = document.createElement("a");
+    hide.setAttribute("data-sd", "login-help-hide");
+    hide.href = "#";
+    hide.textContent = "Masquer";
+    hide.style.cssText =
+      "display:inline-block;margin-top:8px;color:#a7a7a7;font-size:12px;text-decoration:underline";
+    hide.addEventListener("click", function (e) {
+      e.preventDefault();
+      try {
+        window.sessionStorage.setItem("sd-login-help", "hidden");
+      } catch (err) {}
+      removeLoginHelp();
+    });
+    bar.appendChild(note);
+    bar.appendChild(link);
+    bar.appendChild(hide);
+    (document.body || document.documentElement).appendChild(bar);
+  }
+
+  /**
+   * Consentement Facebook : quand on se connecte avec Facebook, Facebook affiche
+   * d'abord son propre écran de consentement, qu'il faut accepter à la main.
+   * L'application d'origine cliquait le premier bouton de cette page — même
+   * chose ici, sur cette page-là uniquement.
+   */
+  function acceptFacebookConsent() {
+    if (!/facebook\.com$/i.test(window.location.hostname)) return;
+    if (!/privacy\/consent/i.test(window.location.pathname)) return;
+    try {
+      var target = document.querySelector("#facebook div[role=button],div[role=button]");
+      if (target) target.click();
+    } catch (e) {}
+  }
+
+  var loginTick = function () {
+    acceptFacebookConsent();
+    showLoginHelp();
+  };
+
+  /* Pour le banc d'essai : la vérification du formulaire de connexion. */
+  window.__sdLoginTick = loginTick;
+
+  loginTick();
+  window.setTimeout(loginTick, 600);
+  window.setTimeout(loginTick, 1800);
+  window.setTimeout(loginTick, 3500);
+  window.setInterval(loginTick, 2500);
 
   /* ------------------------------------------------------------------ *
    * 2-ter. Les onglets de la barre du bas

@@ -1081,3 +1081,72 @@ des serveurs de lecture (les bloquer, c'est faire taire toutes les musiques).
 
 C'est la trace qui permet de voir si le blocage touche autre chose que de la
 publicité : si une musique se taisait, elle apparaîtrait ici.
+
+## 20. La session qui survit à la mise à jour, et la connexion qui marche (v2.7.9)
+
+Deux demandes, une seule cause commune : **la WebView garde ses cookies en
+mémoire et les écrit quand elle veut.**
+
+### 1. « Quand je fais la mise à jour, mon compte reste connecté »
+
+Une mise à jour d'application **tue le processus** avant de le relancer. Tout ce
+que la WebView n'avait pas encore écrit sur le disque est perdu — y compris les
+cookies de session que Spotify vient de poser. Rien n'était effacé par
+l'application (elle n'appelle jamais `removeAllCookies`) : c'est l'écriture qui
+arrivait trop tard.
+
+Trois mesures, dans `MainActivity` :
+
+* **écrire au bon moment** — `flushCookies()` à la fin de chaque page du lecteur,
+  à la connexion détectée, à la mise en pause et à l'arrêt. Avec un garde-fou de
+  trois secondes pour ne pas écrire trois fois la même seconde ;
+* **garder une copie de secours** — `saveCookies()` range l'en-tête `Cookie` des
+  trois hôtes (`open.`, `accounts.`, `api.spotify.com`) dans les préférences
+  privées de l'application, **seulement** s'il contient `sp_dc=` (le cookie qui
+  porte la session) ;
+* **la remettre si la WebView n'a plus rien** — `restoreCookies()`, appelée avant
+  le chargement de la page : si `sp_dc` manque, chaque cookie est réécrit avec son
+  domaine (`Domain=.spotify.com`), sa durée et `Secure; SameSite=None`. Une
+  session déjà présente n'est **jamais** écrasée : au pire, Spotify vient de la
+  rafraîchir.
+
+La copie vit dans le dossier privé de l'application et n'est pas exportée :
+c'est le même compromis qu'un profil de navigateur, pour la session de la
+personne qui l'a ouverte, sur son propre téléphone.
+
+`tools/audit-links.mjs` refuse désormais : un `removeAllCookies`, la disparition
+d'un des trois mécanismes, la restauration qui n'aurait plus lieu avant le
+chargement, ou l'écriture qui ne serait plus faite à la pause et à l'arrêt.
+
+### 2. « Fais en sorte que le système de connexion fonctionne »
+
+Le problème de fond de la page de connexion de Spotify dans une WebView : elle
+met en avant **Google, Apple, Facebook**… et Google refuse d'ouvrir son OAuth
+depuis un navigateur embarqué (`disallowed_useragent`). Sans rien, on arrive donc
+sur une page où **aucun** des boutons proposés ne peut aboutir.
+
+C'est exactement ce que l'application d'origine avait réglé, et de la façon la
+plus simple : un bouton « Email + Password Classic Login » inséré dans la page,
+pointant vers `?allow_password=1` — le paramètre qui force Spotify à afficher son
+formulaire. Repris ici, en français, avec trois différences :
+
+* le bandeau n'apparaît **que** si aucun champ de mot de passe n'est déjà à
+  l'écran (dès que le formulaire est là, il disparaît) ;
+* il ne s'affiche que sur `accounts.spotify.com` et sur les chemins de connexion ;
+* il est **masquable** (« Masquer ») et ne revient plus de la session — c'est
+  notre bandeau, pas celui de Spotify, et personne n'a à le subir.
+
+Ajouté aussi : le consentement **Facebook**. Quand on passe par Facebook,
+Facebook affiche d'abord son propre écran de consentement ; l'application
+d'origine cliquait le premier bouton de cette page (et seulement de celle-là).
+Même chose ici.
+
+Tests : 78/78, dont trois sur la connexion (bandeau sur une page sans formulaire,
+disparition dès que le champ apparaît, rien sur la page du lecteur). Audit
+0 erreur.
+
+### 3. Ce que la sonde en dit
+
+`Diagnostic` finit maintenant par l'état de la session : **`sp_dc` présent ou
+absent**, et **copie de secours oui ou non**. C'est la réponse directe à « est-ce
+que je vais devoir me reconnecter après la prochaine mise à jour ? ».
