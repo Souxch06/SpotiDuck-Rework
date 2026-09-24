@@ -136,6 +136,30 @@ const MEASURE = async () => {
     connexion: !!document.querySelector('[data-testid="login-form"], #login-username'),
   };
   out.title = document.title.slice(0, 80);
+  /* La mise en page **du téléphone** : c'est l'angle mort de toutes les
+     versions précédentes. Le web player de Spotify ne déclare aucun
+     `<meta name="viewport">` ; une WebView en `useWideViewPort` se donne alors
+     une largeur de mise en page de **980 px** et dézoome pour la faire tenir à
+     l'écran — tout paraît petit, rogné, « pas adapté à Android ». Mesurer
+     `innerWidth` / `clientWidth` / le débordement, c'est mesurer ça. */
+  var meta = document.querySelector("meta[name='viewport']");
+  out.layout = {
+    innerWidth: window.innerWidth,
+    innerHeight: window.innerHeight,
+    htmlClientWidth: root.clientWidth,
+    visualViewport: window.visualViewport ? String(Math.round(window.visualViewport.width)) : "-",
+    screen: String(screen.width) + "x" + String(screen.height),
+    dpr: String(window.devicePixelRatio),
+    meta: meta ? String(meta.getAttribute("content")).slice(0, 60) : "aucun",
+    debordement: document.body ? Math.max(0, document.body.scrollWidth - root.clientWidth) : -1,
+    contenu: (function () {
+      var el = document.querySelector("#main-view, [data-testid='home-page'], main");
+      if (!el) return "absent";
+      var r = el.getBoundingClientRect();
+      return Math.round(r.width) + "×" + Math.round(r.height) +
+        " police=" + getComputedStyle(el).fontSize;
+    })(),
+  };
   return out;
 };
 
@@ -244,6 +268,14 @@ async function main() {
        (« la coque n'habille pas la vraie page ») portait sur une page d'erreur.
        Mesurer le banc, c'est mesurer `/demo/player.html`. */
     { label: "notre", url: "http://127.0.0.1:5173/demo/player.html", mode: "notre" },
+    /* **La page du téléphone.** Même page, mais dans les conditions réelles de
+       la WebView : `useWideViewPort` (donc mise en page à 980 px tant qu'aucun
+       `<meta name="viewport">` n'est posé), densité d'un vrai écran, écran
+       tactile, et la chaîne d'injection de l'application (`onPageStarted` :
+       identité + meta en attente de `document.head` ; `onPageFinished` : meta
+       puis coque). C'est la seule mesure qui voit ce que l'utilisateur voit
+       quand il dit « l'affichage n'est plus adapté à Android ». */
+    { label: "telephone", url: "https://open.spotify.com/", mode: "telephone" },
   ];
 
   const lines = [];
@@ -299,6 +331,39 @@ async function main() {
         });
       }
       await page.evaluateOnNewDocument(identity);
+      if (target.mode === "telephone") {
+        /* Exactement ce que fait `MainActivity` : la WebView est en
+           `useWideViewPort`, aucun `<meta viewport>` n'existe au départ, et le
+           script de l'application le pose dès que `document.head` apparaît —
+           en réessayant dix fois, parce qu'au premier passage il n'y a pas
+           encore de `<head>`. */
+        await page.evaluateOnNewDocument(() => {
+          window.__sdViewportMeta = true;
+          var CONTENT = "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover";
+          function ensure() {
+            var root = document.head || document.documentElement;
+            if (!root) return false;
+            var metas = document.querySelectorAll("meta[name='viewport']");
+            var meta = metas[0];
+            if (!meta) {
+              meta = document.createElement("meta");
+              meta.setAttribute("name", "viewport");
+              (document.head || document.documentElement).appendChild(meta);
+            }
+            for (var i = 1; i < metas.length; i++) {
+              if (metas[i].parentNode) metas[i].parentNode.removeChild(metas[i]);
+            }
+            if (meta.getAttribute("content") !== CONTENT) meta.setAttribute("content", CONTENT);
+            return true;
+          }
+          ensure();
+          var n = 0;
+          var t = window.setInterval(function () {
+            ensure();
+            if (++n > 10) window.clearInterval(t);
+          }, 200);
+        });
+      }
       await page.evaluateOnNewDocument(() => {
         const CONTENT = "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover";
         const put = () => {
@@ -318,7 +383,17 @@ async function main() {
       });
 
       await page.setUserAgent(DESKTOP_UA);
-      await page.setViewport({ width: 412, height: 915, deviceScaleFactor: 2, isMobile: false, hasTouch: true });
+      /* `isMobile: true` = les règles de mise en page de Chrome mobile, donc la
+         même que la WebView : sans meta, largeur de mise en page de 980 px et
+         dézoom pour tenir à l'écran. Les autres pages restent en mode bureau
+         pour rester comparables aux versions précédentes. */
+      await page.setViewport({
+        width: 412,
+        height: 915,
+        deviceScaleFactor: target.mode === "telephone" ? 2.625 : 2,
+        isMobile: target.mode === "telephone",
+        hasTouch: true,
+      });
 
       await page.goto(target.url, { waitUntil: "domcontentloaded", timeout: 60000 });
       await sleep(6000);
@@ -355,7 +430,7 @@ async function main() {
       /* Une seule capture, sur la page choisie : les places d'annotation sont
          comptées (GitHub en garde une poignée), et l'image coûte à elle seule
          plusieurs morceaux. */
-      if (["origine", "notre", "accueil"].includes(target.label)) await miniature(target.label);
+      if (["notre", "telephone"].includes(target.label)) await miniature(target.label);
 
       /* Les trois vues de la barre du haut : état intérieur + ce que la page
          affiche, avant et après un appui réel. (L'interface d'origine a sa
@@ -408,6 +483,9 @@ async function main() {
       };
       const summary =
         `${target.label} → ` +
+        (after && after.layout
+          ? `mise en page=${after.layout.htmlClientWidth}px (interne ${after.layout.innerWidth}, meta ${after.layout.meta}) débordement=${after.layout.debordement} contenu=${after.layout.contenu} / `
+          : "") +
         (target.mode === "original"
           ? `interface d'origine : firstFuck=${after && after.originalUi ? after.originalUi.firstFuck : "?"} ` +
             `actPlayPause=${after && after.originalUi ? after.originalUi.actPlayPause : "?"} ` +
