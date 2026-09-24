@@ -222,7 +222,8 @@ but the two things it complains about, and the fixes, are worth knowing:
 
 Manually, that screen is *Play Store → profile icon → Play Protect → ⚙️ →
 “Analyser les applis avec Play Protect”*. You can re-enable it afterwards; the
-app you already installed keeps working.
+app you already installed keeps working. Step by step, in French, with the
+fallbacks: **[docs/INSTALLATION.md](./docs/INSTALLATION.md)**.
 
 Two more ways around it, for reference: `adb install -r SpotiDuck-….apk`
 (no installer UI, so no prompt), or installing the APK from a device where the
