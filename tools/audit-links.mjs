@@ -27,6 +27,11 @@ import { createHash } from "node:crypto";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p) => readFileSync(join(root, p), "utf8");
 
+/* Un garde-fou cherche une **pratique**, pas un mot cité dans une
+   explication : ces contrôles lisent le code sans ses commentaires. */
+const stripComments = (js) =>
+  js.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
 const errors = [];
 const warnings = [];
 
@@ -164,29 +169,54 @@ for (const sel of CORE_SELECTORS) {
   if (!bundleCss.includes(sel)) errors.push(`le bundle ne contient plus le sélecteur ${sel}`);
 }
 
-/* 2-quater. Le mode livré par défaut. Ce n'est pas une broutille : le 2.6.0 a
-   expédié la page web mobile de Spotify comme interface par défaut sans qu'on
-   puisse en sortir, et il a fallu deux versions pour revenir en arrière. Le
-   défaut est donc une décision explicite, surveillée ici : c'est
-   l'**affichage mobile**, c'est-à-dire la page que Spotify sert à un
-   téléphone. Jamais notre propre habillage : une coque maison livrée par
-   défaut, c'est ce que l'utilisateur avait justement refusé. */
+/* 2-quater. Le mode livré par défaut. C'est une décision surveillée, et elle a
+   changé de sens une fois, pour une raison **mesurée** (sonde `probe-playback`,
+   run 36028586893) : le message « Lecture désactivée » — « Spotify ne
+   fonctionnera pas si vous bloquez le contenu protégé, si votre navigateur
+   n'est pas compatible… » — est un texte du **lecteur web mobile** de Spotify
+   (`mwp.playback.error.protected.content`, paquet `mobile-web-player`). Servi à
+   un agent de téléphone, ce lecteur ne lit rien pour un compte gratuit ; la page
+   bureau, elle, lit — c'est celle que le code d'origine recevait. Le défaut est
+   donc **la page bureau habillée par notre coque** (`MODE_INJECT`), et la page
+   mobile reste proposée dans le sélecteur. */
 const activity = read("android/app/src/main/java/com/spotiduck/app/MainActivity.kt");
 for (const stale of ["the two interfaces", "MODE_INJECT is the default"]) {
   if (activity.includes(stale)) errors.push(`MainActivity : commentaire périmé (« ${stale} »)`);
 }
-if (!/MODE_DEFAULT\s*=\s*MODE_NATIVE/.test(activity)) {
-  errors.push("MainActivity : le mode par défaut n'est plus l'affichage mobile");
+if (!/MODE_DEFAULT\s*=\s*MODE_INJECT/.test(activity)) {
+  errors.push("MainActivity : le mode par défaut n'est plus la page bureau habillée par la coque");
 }
-if (/MODE_DEFAULT\s*=\s*MODE_INJECT/.test(activity)) {
-  errors.push("MainActivity : le mode par défaut est redevenu notre habillage");
+if (/MODE_DEFAULT\s*=\s*MODE_NATIVE/.test(activity)) {
+  errors.push("MainActivity : le défaut est repassé sur la page mobile, celle qui bloque la lecture");
 }
 /* …et le mode par défaut doit rester quittable **depuis lui-même**, sans
-   réinstaller : c'est ce qui manquait à la 2.6.0. Dans le mode mobile, le seul
-   chemin vers le sélecteur est l'appui long de `native-mode.js`. */
-if (!/MODE_NATIVE,\s*MODE_ORIGINAL,\s*MODE_INJECT/.test(activity.replace(/\s+/g, " "))) {
-  errors.push("MainActivity : le sélecteur d'interface ne propose plus les trois modes");
+   réinstaller : c'est ce qui manquait à la 2.6.0. */
+if (!/MODE_INJECT,\s*MODE_ORIGINAL,\s*MODE_NATIVE/.test(activity.replace(/\s+/g, " "))) {
+  errors.push("MainActivity : le sélecteur d'interface ne propose plus les trois modes, défaut en tête");
 }
+/* L'identité « bureau » de la coque : agent annoncé **et** `navigator`
+   cohérent (plateforme, client hints, greffons, GPU) — sinon Spotify voit un
+   agent Windows doublé d'un navigateur Android, ce qu'il appelle « navigateur
+   non compatible ». Et elle ne doit pas toucher à la géométrie : la coque met
+   la page en page sur la largeur réelle du téléphone. */
+const identitySource = "src/original/spotiduck-identity.js";
+const identityAsset = read("android/app/src/main/assets/spotiduck-identity.js");
+for (const needed of ["userAgentData", "getHighEntropyValues", '"Win32"', '"Windows"', '"x86"']) {
+  if (!identityAsset.includes(needed)) errors.push(`l'identité bureau a perdu « ${needed} »`);
+}
+if (!identityAsset.includes(read(identitySource).trimStart().slice(0, 120))) {
+  errors.push(`assets/spotiduck-identity.js ne vient pas de ${identitySource} — relancer \`npm run build\``);
+}
+const identityCode = stripComments(identityAsset);
+for (const geometry of ["innerWidth", "innerHeight", "devicePixelRatio", "screen.", "window.screen"]) {
+  if (identityCode.includes(geometry)) {
+    errors.push(`l'identité bureau touche à la géométrie (${geometry}) : la coque serait cassée`);
+  }
+}
+if (!/evaluateJavascript\(identityScript/.test(activity)) {
+  errors.push("MainActivity : l'identité bureau n'est plus injectée avant la page");
+}
+
 /* Le blocage des publicités audio passe par `assets/silent.mp3` : la musique est
    servie en Ogg/AAC, les annonces en `audio/mpeg` — c'est ce qui distingue les
    deux. On vérifie donc que le fichier est là, que le code le sert, et surtout

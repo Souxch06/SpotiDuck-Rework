@@ -301,7 +301,32 @@ async function main() {
       for (const scenario of scenarios) {
         const page = await browser.newPage();
         try {
-          await page.setUserAgent(scenario.ua, scenario.metadata ? { userAgentMetadata: scenario.metadata } : undefined);
+          await page.setUserAgent(scenario.ua);
+          /* `navigator.userAgentData` est reposé **dans la page** : le
+             `userAgentMetadata` de CDP est refusé par le Chrome du runner
+             (« mandatory field missing »), et c'est de toute façon ce que fait
+             l'application, côté client, avec son script d'identité. */
+          if (scenario.metadata) {
+            await page.evaluateOnNewDocument((meta) => {
+              try {
+                Object.defineProperty(navigator, "userAgentData", {
+                  configurable: true,
+                  get: () => ({
+                    brands: meta.brands,
+                    mobile: meta.mobile,
+                    platform: meta.platform,
+                    getHighEntropyValues: async (hints) => {
+                      const out = { brands: meta.brands, mobile: meta.mobile, platform: meta.platform };
+                      for (const hint of hints) if (hint in meta) out[hint] = meta[hint];
+                      return out;
+                    },
+                  }),
+                });
+              } catch (e) {
+                /* propriété non redéfinissable : on continue quand même */
+              }
+            }, scenario.metadata);
+          }
           if (scenario.headers) await page.setExtraHTTPHeaders(scenario.headers);
           await page.goto("https://open.spotify.com/", { waitUntil: "domcontentloaded", timeout: 45000 });
           await sleep(10000);

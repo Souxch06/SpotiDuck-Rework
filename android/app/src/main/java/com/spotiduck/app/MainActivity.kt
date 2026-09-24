@@ -81,6 +81,9 @@ class MainActivity : AppCompatActivity() {
     private var nativeScript: String = ""
     private var originalScript: String = ""
     private var originalFingerprint: String = ""
+    /* L'identité « bureau » de la coque : agent + navigator (client hints,
+       greffons, plateforme). Voir `src/original/spotiduck-identity.js`. */
+    private var identityScript: String = ""
     private var uiMode: String = MODE_DEFAULT
     /** Dernier lien non-web traité (converti, ou avalé) : affiché par la sonde. */
     private var lastHandledLink: String = ""
@@ -120,6 +123,7 @@ class MainActivity : AppCompatActivity() {
         uiBundle = readAsset("spotiduck-ui.js")
         originalScript = readAsset("spotiduck-original.js")
         originalFingerprint = readAsset("original-fingerprint.js")
+        identityScript = readAsset("spotiduck-identity.js")
 
         nativeScript = runCatching { assets.open("native-mode.js").bufferedReader().use { it.readText() } }
             .getOrElse {
@@ -311,6 +315,14 @@ class MainActivity : AppCompatActivity() {
                         view.evaluateJavascript(originalFingerprint, null)
                     }
                     return
+                }
+                /* L'identité avant tout le reste : la WebView annonce déjà
+                   Chrome Windows, mais `navigator` répondait encore
+                   « Android » (plateforme, client hints, greffons) — soit un
+                   mélange que Spotify appelle « navigateur non compatible ».
+                   Voir `src/original/spotiduck-identity.js`. */
+                if (identityScript.isNotEmpty()) {
+                    view.evaluateJavascript(identityScript, null)
                 }
                 injectViewportScript()
                 /* `document.head` n'existe pas encore : le script s'installe et
@@ -934,11 +946,11 @@ class MainActivity : AppCompatActivity() {
         /* Le mode livré par défaut est en tête : c'est celui qu'on cherche en
            ouvrant ce sélecteur, et c'est celui que la version a choisi. */
         val labels = arrayOf(
-            getString(R.string.ui_mode_native),
+            getString(R.string.ui_mode_inject),
             getString(R.string.ui_mode_original),
-            getString(R.string.ui_mode_inject)
+            getString(R.string.ui_mode_native)
         )
-        val modes = arrayOf(MODE_NATIVE, MODE_ORIGINAL, MODE_INJECT)
+        val modes = arrayOf(MODE_INJECT, MODE_ORIGINAL, MODE_NATIVE)
         val checked = modes.indexOf(uiMode).coerceAtLeast(0)
         AlertDialog.Builder(this)
             .setTitle(getString(R.string.ui_mode_title))
@@ -1434,22 +1446,33 @@ class MainActivity : AppCompatActivity() {
         const val MODE_INJECT = "inject"
 
         /**
-         * Interface livrée par défaut : la **page web mobile de Spotify** — la
-         * page que Spotify sert lui-même à un téléphone. C'est l'affichage
-         * mobile demandé : navigation basse, listes compactes, lecteur plein
-         * écran, rien de redessiné ici.
+         * Interface livrée par défaut : **la page bureau de Spotify, habillée
+         * par la coque maison** (`MODE_INJECT`) — la page que le code d'origine
+         * recevait, avec la coque par-dessus (barre du bas, mini-lecteur,
+         * lecteur plein écran, feuilles). La page **mobile**, elle, est servie
+         * à un agent de téléphone et bloque la lecture d'un compte gratuit ;
+         * elle reste proposée dans le sélecteur, à titre de comparaison.
          *
-         * Deux écueils déjà payés, à ne pas repayer : la 2.6.0 l'avait livrée
-         * par défaut puis on l'a retirée, parce que cette version-là n'offrait
-         * aucun moyen d'en sortir. Aujourd'hui le sélecteur (appui long) est
-         * toujours là, dans tous les modes. Le second — la connexion — dépend
-         * de ce que Spotify sert à un agent mobile : voir la note au-dessus de
-         * `storedUiMode`.
+         * L'écueil déjà payé, à ne pas repayer : la 2.6.0 avait livré la page
+         * mobile par défaut sans aucun moyen d'en sortir. Le sélecteur (appui
+         * long) est présent dans tous les modes — c'est le chemin de retour.
          */
-        const val MODE_DEFAULT = MODE_NATIVE
+        /* Le défaut est **la page bureau de Spotify habillée par notre coque**
+           (`MODE_INJECT`), pas sa page mobile. Mesuré en CI (`probe-playback`,
+           run 36028586893) : le message « Lecture désactivée » et sa phrase
+           « Spotify ne fonctionnera pas si vous bloquez le contenu protégé… »
+           sont des textes du **lecteur web mobile** de Spotify
+           (`mwp.playback.error.protected.content`, servi dans le paquet
+           `mobile-web-player`) : avec un agent de téléphone, Spotify sert sa
+           page mobile, qui ne lit rien pour un compte gratuit. Le code
+           d'origine n'a jamais eu ce défaut parce qu'il annonce un Chrome de
+           bureau et reçoit la page bureau. C'est donc la page bureau qui est
+           livrée par défaut, avec la coque par-dessus — et le sélecteur
+           (appui long) reste le chemin de retour. */
+        const val MODE_DEFAULT = MODE_INJECT
 
         /** Incrémenter à chaque fois que `MODE_DEFAULT` change. */
-        const val UI_MODE_REV = 4
+        const val UI_MODE_REV = 5
 
         /** Types d'URL `spotify:` convertibles en lien web. */
         private val WEB_KINDS = setOf(

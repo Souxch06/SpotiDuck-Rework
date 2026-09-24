@@ -1372,3 +1372,75 @@ payées en CI avant d'être comprises :
   apostrophe doit s'écrire `\'`, sinon le fichier ne compile plus du tout ;
 * **un garde-fou d'audit** qui refuse désormais une apostrophe non échappée dans
   `strings.xml`, pour ne plus jamais l'apprendre par un échec de build.
+
+## 24. « Lecture désactivée » : la page mobile, et rien d'autre (v2.9.1)
+
+Le message vu au lancement était celui-ci, mot pour mot :
+
+> **Lecture désactivée** — Spotify ne fonctionnera pas si vous bloquez le
+> contenu protégé, si votre navigateur n'est pas compatible ou si vous utilisez
+> un mode de navigation privée ou incognito. Ajustez vos paramètres de
+> navigateur ou téléchargez plutôt notre appli gratuite pour mobile.
+
+Trois causes possibles, une seule vraie. La sonde `probe-playback`
+(`tools/probe-playback.mjs`, run `36028586893`) les a séparées en récupérant la
+page **et tous ses scripts** pour deux agents.
+
+### Ce que la mesure a établi
+
+* le texte est un **libellé du lecteur web mobile** de Spotify :
+  `mwp.playback.error.protected.content`, dans
+  `mobile-web-player/fr.<hash>.json`, servi avec le paquet
+  `mobile-web-player.<hash>.js` — donc **uniquement** à un agent de téléphone ;
+* le lecteur web **bureau** (`web-player.<hash>.js`) ne contient ni ce libellé
+  ni sa version anglaise : servi à un agent de bureau, il n'a rien à afficher de
+  tel — c'est la page que le code d'origine recevait ;
+* rien, dans nos filtres, ne bloque de serveur de lecture : les seuls hôtes
+  `spotify.com` de la liste sont publicitaires (`audio-ads.spotify.com`), et
+  `podz-content` / `gew4-spclient` sont explicitement intouchables (garde-fou
+  d'audit) ;
+* le libellé apparaît **après connexion** — la musique ne joue pas du tout, sur
+  un compte gratuit, dans le lecteur mobile.
+
+Autrement dit : l'application livrait par défaut la page web **mobile** de
+Spotify (agent Android), et cette page-là ne lit rien. Le code d'origine, lui,
+annonce un Chrome de bureau et reçoit la page bureau — d'où « je n'avais pas ce
+message sur la version d'origine ».
+
+### Ce qui change
+
+* **le défaut est la page bureau, habillée par notre coque** (`MODE_INJECT`) :
+  c'est la page que le code d'origine recevait, avec notre interface par-dessus
+  (barre du bas, mini-lecteur, lecteur plein écran, feuilles). La page mobile
+  reste proposée dans le sélecteur, avec un libellé honnête (« pas de lecture
+  sans Premium ») ;
+* **l'identité redevient cohérente** : `src/original/spotiduck-identity.js`
+  reprend, **valeurs pour valeurs**, l'identité du script d'origine — agent
+  Chrome Windows, `navigator.platform` `Win32`, client hints
+  (`brands`, `mobile: false`, `platform: "Windows"`, x86 / 64 bits / Windows
+  10.0.0), greffons, types MIME, chaînes GPU — **sans la géométrie** : la coque
+  met la page en page sur la largeur réelle du téléphone, une fenêtre de
+  1920 px la casserait. C'est ce mélange « agent Windows + `navigator` Android »
+  que Spotify appelle « navigateur non compatible » ;
+* la révision du mode par défaut (`UI_MODE_REV = 5`) fait oublier **une fois**
+  l'ancien choix, pour que les installations mises à jour repartent sur le
+  nouveau défaut, sans jamais toucher à un choix fait ensuite ;
+* les libellés du sélecteur disent la vérité mesurée, et le sélecteur place le
+  défaut en tête.
+
+### Les garde-fous
+
+* l'audit **exige** désormais `MODE_DEFAULT = MODE_INJECT` et **refuse**
+  `MODE_DEFAULT = MODE_NATIVE`, avec la raison (le lecteur mobile bloque la
+  lecture d'un compte gratuit) écrite à côté du test ;
+* l'audit et `npm run sync:android` vérifient que l'identité livrée vient bien
+  de `src/original/spotiduck-identity.js`, qu'elle porte les valeurs de
+  l'original… et qu'elle **ne touche pas à la géométrie** — le contrôle lit le
+  code **sans ses commentaires**, sinon une explication qui cite `innerWidth`
+  le ferait échouer (erreur commise, puis corrigée, dans cette passe).
+
+### Vérifications
+
+audit 0 erreur / 0 avertissement, smoke 84/84, ressources compilées par `aapt2`
+en local avant le push (`187 266 o`), `npm run build` + `npm run sync:android`
+avant le commit.

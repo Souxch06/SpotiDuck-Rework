@@ -13,6 +13,11 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileS
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+/* Un garde-fou cherche une **pratique**, pas un mot cité dans une
+   explication : ces contrôles lisent le code sans ses commentaires. */
+const stripComments = (js) =>
+  js.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const assets = join(root, "android/app/src/main/assets");
 
@@ -20,6 +25,7 @@ const jobs = [
   { from: join(root, "dist/spotiduck-ui.js"), to: join(assets, "spotiduck-ui.js") },
   { from: join(root, "dist/spotiduck-original.js"), to: join(assets, "spotiduck-original.js") },
   { from: join(root, "dist/original-fingerprint.js"), to: join(assets, "original-fingerprint.js") },
+  { from: join(root, "dist/spotiduck-identity.js"), to: join(assets, "spotiduck-identity.js") },
   { from: join(root, "adblock_hosts.txt"), to: join(assets, "adblock_hosts.txt") },
 ];
 
@@ -50,6 +56,25 @@ if (bundle.includes("</script>")) {
   process.exitCode = 1;
 } else {
   console.log(`bundle checked (${bundle.length} chars, ${ok}/${jobs.length} assets synced)`);
+}
+
+/* L'identité « bureau » de la coque : elle doit annoncer un bureau — agent,
+   plateforme, client hints, greffons — et surtout **ne pas** toucher à la
+   géométrie : la coque met la page en page sur la largeur réelle du téléphone,
+   une fenêtre de 1920 px la casserait. */
+const identity = readFileSync(join(assets, "spotiduck-identity.js"), "utf8");
+const identityMust = ["userAgentData", "getHighEntropyValues", '"Win32"', '"Windows"', '"x86"'];
+const identityMissing = identityMust.filter((m) => !identity.includes(m));
+if (identityMissing.length) {
+  console.error(`spotiduck-identity.js incomplet : ${identityMissing.join(", ")}`);
+  process.exitCode = 1;
+}
+const identityCode = stripComments(identity);
+for (const geometry of ["innerWidth", "innerHeight", "devicePixelRatio", "screen.", "window.screen"]) {
+  if (identityCode.includes(geometry)) {
+    console.error(`spotiduck-identity.js touche à la géométrie (${geometry}) : la coque serait cassée`);
+    process.exitCode = 1;
+  }
 }
 
 /* And for the original interface: it is the default one, so a truncated file

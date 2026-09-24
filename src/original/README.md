@@ -19,6 +19,24 @@ Ce que nous assemblons, dans cet ordre, **sans réécrire une ligne** :
 | 2 | `C1356q3__04__….deobfuscated.js` (début) | `window.updMedia`, le rapporteur d'état que l'application d'origine injectait à part : c'est lui qui prévient Android du morceau en cours (notification, écran verrouillé). |
 | 3 | ajout SpotiDuck | Un adaptateur `window.SpotiDuckUI` d'une quarantaine de lignes (balisé en clair dans le fichier) : les commandes de la notification appellent les fonctions d'origine (`actPlayPause`, `actSkipForward`…) au lieu de cliquer les boutons de Spotify. |
 
+## L'identité de la coque (`spotiduck-identity.js`)
+
+Le même `onPageStarted` porte une seconde chose : l'**identité** que la page lit
+dans `navigator`. `spotiduck-identity.js` en reprend les valeurs telles
+quelles — agent Chrome Windows, `platform` `Win32`, client hints (`brands`,
+`mobile: false`, `platform: "Windows"`, x86 / 64 bits / Windows 10.0.0),
+greffons, types MIME, chaînes GPU — **sans la géométrie** (ni `screen`, ni
+`innerWidth`/`innerHeight`, ni `devicePixelRatio`) : la coque maison met la page
+en page sur la largeur réelle du téléphone, alors que l'interface d'origine a
+besoin, elle, de croire à un écran 1920×1080.
+
+Sans ce script, la WebView annonce un agent Chrome Windows mais `navigator`
+répond encore « Android » : c'est ce mélange que Spotify appelle « navigateur
+non compatible », et il accompagne le message de lecture désactivée. Le script
+est injecté avant la page, dans le mode livré par défaut ; `npm run build` et
+`npm run sync:android` refusent de livrer si les valeurs d'identité manquent ou
+si la géométrie y apparaît.
+
 Les empreintes des blocs 1 et 2 sont écrites en tête du fichier, et
 `tools/build-original.mjs` (`npm run build:original`) refuse de livrer si l'un
 d'eux a changé, si la feuille de style d'origine n'est plus intacte
@@ -46,6 +64,12 @@ C'est la seule différence de configuration entre les trois interfaces :
 
 | Mode | Agent | Script injecté | Viewport |
 | --- | --- | --- | --- |
-| `native` (défaut) | Chrome Android | `native-mode.js` | posé par le script |
+| `inject` (**défaut**) | Chrome bureau | `spotiduck-ui.js` (coque) + `spotiduck-identity.js` | posé par le script (couche en dp) |
 | `original` | Chrome bureau | ce dossier | laissé à la page |
-| `inject` | Chrome bureau | `spotiduck-ui.js` | posé par le script (couche en dp) |
+| `native` | Chrome Android | `native-mode.js` | posé par le script |
+
+Le défaut est la page **bureau** — celle que le code d'origine reçoit — parce
+que la page web **mobile** de Spotify (`mobile-web-player`) ne lit rien pour un
+compte gratuit : elle répond « Lecture désactivée » (mesuré, §24 de
+`docs/UI-REWORK.md`). C'est la seule différence de fond entre les trois
+interfaces.

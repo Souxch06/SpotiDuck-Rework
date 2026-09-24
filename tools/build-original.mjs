@@ -31,6 +31,7 @@ const read = (p) => readFileSync(join(root, p), "utf8");
 
 const SOURCE = "src/original/spotiduck-original.js";
 const FINGERPRINT = "src/original/spotiduck-fingerprint.js";
+const IDENTITY = "src/original/spotiduck-identity.js";
 /* Empreintes des deux blocs d'origine — voir l'en-tête du fichier source. */
 const CSS_MD5 = "13de5546d0";
 const CSS_LENGTH = 6001;
@@ -56,6 +57,11 @@ const REQUIRED = [
   "window.mngFetch = async",   // requêtes de lecture hors WebView
 ];
 
+/* Un garde-fou cherche une **pratique**, pas un mot cité dans une
+   explication : ces contrôles lisent le code sans ses commentaires. */
+const stripComments = (js) =>
+  js.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
 const problems = [];
 const original = read(SOURCE);
 
@@ -79,6 +85,35 @@ for (const expected of [
 }
 if (fingerprint.length < 4_000 || fingerprint.length > 7_000) {
   problems.push(`l'empreinte d'origine fait ${fingerprint.length} caractères (4 000 à 7 000 attendus)`);
+}
+
+// 0-bis. l'identité « bureau » de la coque ----------------------------------
+/* Elle reprend les mêmes valeurs d'identité que l'empreinte (agent, plateforme,
+   client hints, greffons, GPU) **sans** la géométrie : la coque met la page en
+   page sur la largeur réelle du téléphone. Deux garde-fous : les valeurs
+   d'identité doivent être là, et la géométrie ne doit pas y être. */
+const identity = read(IDENTITY);
+for (const expected of [
+  'def(nav, "platform", "Win32")',
+  'def(nav, "userAgentData"',
+  'platform: "Windows"',
+  "getHighEntropyValues",
+  'architecture: "x86"',
+  'uaFullVersion: "150.0.7871.187"',
+  'maxTouchPoints',
+]) {
+  if (!identity.includes(expected)) {
+    problems.push(`identité de la coque incomplète : ${expected} est absent`);
+  }
+}
+const identityCode = stripComments(identity);
+for (const geometry of ["innerWidth", "innerHeight", "devicePixelRatio", "screen.", "window.screen"]) {
+  if (identityCode.includes(geometry)) {
+    problems.push(`l'identité de la coque touche à la géométrie (${geometry})`);
+  }
+}
+if (!fingerprint.includes('brand: "Not;A=Brand"') || !identity.includes('brand: "Not;A=Brand"')) {
+  problems.push("les deux scripts d'identité ne déclarent plus les mêmes marques de navigateur");
 }
 
 // 1. la feuille de style d'origine -------------------------------------------
@@ -138,8 +173,17 @@ const fpOut = banner + fingerprint;
 for (const target of ["dist/original-fingerprint.js", "android/app/src/main/assets/original-fingerprint.js"]) {
   writeFileSync(join(root, target), fpOut);
 }
+const identityBanner =
+  "/* SpotiDuck — identité de navigateur de la coque (voir src/original/README.md). Copie de " +
+  IDENTITY +
+  " ; ne pas modifier ici. */\n";
+const idOut = identityBanner + identity;
+for (const target of ["dist/spotiduck-identity.js", "android/app/src/main/assets/spotiduck-identity.js"]) {
+  writeFileSync(join(root, target), idOut);
+}
 const size = Buffer.byteLength(out);
 console.log(`✔ interface d'origine  (${(size / 1024).toFixed(1)} kB)`);
 console.log(`✔ empreinte d'origine  (${(fpOut.length / 1024).toFixed(1)} kB, 1920×1080 bureau)`);
+console.log(`✔ identité de la coque (${(idOut.length / 1024).toFixed(1)} kB, bureau, sans géométrie)`);
 console.log(`  ${needed.size} méthodes du pont · ${REQUIRED.length} fonctions d'origine · feuille ${CSS_LENGTH} car. (md5 ${CSS_MD5})`);
 if (!existsSync(join(root, "dist/spotiduck-original.js"))) process.exit(1);
