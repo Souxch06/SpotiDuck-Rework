@@ -364,10 +364,14 @@ async function main() {
       const hasNav = await safely(() => page.evaluate(() => !!document.querySelector(".sd-nav-item")));
       for (const name of hasNav === true ? ["library", "search", "home"] : []) {
         const stateBefore = await safely(() => page.evaluate(SHELL_STATE));
-        await safely(() => page.evaluate(CLICK, `.sd-nav-item[data-tab="${name}"]`));
+        /* Le résultat de l'appui **et** l'état d'après : « rien ne se passe »
+           et « ça navigue » se ressemblent dans l'état intérieur (une
+           navigation détruit le contexte, donc `stateTab` disparaît). Le chemin
+           est le seul témoin fiable. */
+        const click = await safely(() => page.evaluate(CLICK, `.sd-nav-item[data-tab="${name}"]`));
         await sleep(600);
         const stateAfter = await safely(() => page.evaluate(SHELL_STATE));
-        navEffects.push({ name, before: stateBefore, after: stateAfter });
+        navEffects.push({ name, before: stateBefore, after: stateAfter, click });
         /* (pas de capture à chaque vue : chaque image coûte des morceaux
            d'annotation, et GitHub n'en garde qu'une poignée) */
       }
@@ -410,7 +414,13 @@ async function main() {
                   .join("+") || "rien"
               : "?"}`) +
         ` / appuis : ${navEffects
-          .map((e) => `${e.name}→${e.after && e.after.stateTab ? e.after.stateTab : e.after && e.after.navigation ? "navigue" : "rien"}`)
+          .map((e) => {
+            if (e.click && e.click.clicked === false) return `${e.name}→bouton absent`;
+            if (e.click && e.click.changed) return `${e.name}→navigue ${e.click.pathAfter}`;
+            if (e.after && e.after.navigation) return `${e.name}→navigue`;
+            if (e.after && e.after.stateTab) return `${e.name}→${e.after.stateTab}`;
+            return `${e.name}→RIEN (chemin ${e.click && e.click.pathAfter})`;
+          })
           .join(", ")}`;
       lines.push(summary);
       console.log(`[Sonde coque] ${summary}`);
