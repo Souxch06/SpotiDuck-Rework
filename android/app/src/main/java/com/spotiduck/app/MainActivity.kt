@@ -72,6 +72,8 @@ class MainActivity : AppCompatActivity() {
     private var originalScript: String = ""
     private var originalFingerprint: String = ""
     private var uiMode: String = MODE_DEFAULT
+    /** Dernier lien non-web traité (converti, ou avalé) : affiché par la sonde. */
+    private var lastHandledLink: String = ""
     private var powerManager: PowerManager? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var shutdownRunnable: Runnable? = null
@@ -221,7 +223,18 @@ class MainActivity : AppCompatActivity() {
                 val scheme = url.scheme?.lowercase() ?: return false
                 if (scheme == "http" || scheme == "https") return false
                 val web = spotifyDeepLinkToWeb(url)
-                if (web != null) view.loadUrl(web)
+                lastHandledLink = if (web != null) {
+                    view.loadUrl(web)
+                    "converti $url -> $web"
+                } else {
+                    /* On ne laisse pas la WebView partir sur un schéma qu'elle
+                       ne sait pas ouvrir (page d'erreur), mais on **note** ce
+                       qu'on a avalé : un bouton de la page qui ne fait rien est
+                       justement un lien que la WebView ne sait pas ouvrir, et
+                       la sonde de diagnostic affiche cette ligne. C'est elle
+                       qui dira si le bouton Bibliothèque est de ceux-là. */
+                    "ignore $url"
+                }
                 return true
             }
 
@@ -364,7 +377,11 @@ class MainActivity : AppCompatActivity() {
      */
     fun showDiagnostic() {
         webView.evaluateJavascript(DIAGNOSTIC_JS) { raw ->
-            val text = runCatching { JSONObject("{\"v\":$raw}").getString("v") }.getOrElse { raw ?: "" }
+            val probe = runCatching { JSONObject("{\"v\":$raw}").getString("v") }.getOrElse { raw ?: "" }
+            /* Ce que l'application a fait du dernier lien non-web : converti, ou
+               avalé (donc inerte pour l'utilisateur). */
+            val link = if (lastHandledLink.isEmpty()) "" else "\n\ndernier lien : $lastHandledLink"
+            val text = probe + link
             AlertDialog.Builder(this)
                 .setTitle(getString(R.string.diagnostic_title))
                 .setMessage(text)
@@ -537,12 +554,25 @@ class MainActivity : AppCompatActivity() {
      */
     private fun spotifyDeepLinkToWeb(uri: android.net.Uri): String? {
         if (uri.scheme?.lowercase() != "spotify") return null
-        val parts = uri.toString().removePrefix("spotify:").split(":")
-        if (parts.size < 2 || parts[0].isBlank() || parts[1].isBlank()) return null
+        val parts = uri.toString().removePrefix("spotify:").split(":").filter { it.isNotBlank() }
+        if (parts.isEmpty()) return null
+        val kind = parts[0].lowercase()
+        /* Un seul segment : les onglets de la page mobile (`spotify:collection`
+           est la bibliothèque). Sans cette conversion, ils ne faisaient rien du
+           tout — avalés par le garde-fou ci-dessus. */
+        if (parts.size == 1) {
+            return when (kind) {
+                "collection", "library" -> "$WEB_BASE/collection"
+                "search" -> "$WEB_BASE/search"
+                else -> null
+            }
+        }
         return when {
-            parts[0] == "user" && parts.size >= 4 && parts[2] == "playlist" ->
-                "https://open.spotify.com/user/${parts[1]}/playlist/${parts[3]}"
-            parts[0] in WEB_KINDS -> "https://open.spotify.com/${parts[0]}/${parts[1]}"
+            kind == "user" && parts.size >= 4 && parts[2] == "playlist" ->
+                "$WEB_BASE/user/${parts[1]}/playlist/${parts[3]}"
+            kind == "user" -> "$WEB_BASE/user/${parts[1]}"
+            kind == "search" -> "$WEB_BASE/search/${Uri.encode(parts.drop(1).joinToString(":"))}"
+            kind in WEB_KINDS -> "$WEB_BASE/$kind/${parts[1]}"
             else -> null
         }
     }
@@ -698,6 +728,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         const val TAG = "SpotiDuck"
         const val START_URL = "https://open.spotify.com/"
+        private const val WEB_BASE = "https://open.spotify.com"
 
         /** Interfaces proposées à l'utilisateur (voir `switchUiMode`). */
         const val MODE_ORIGINAL = "original"
@@ -777,6 +808,39 @@ class MainActivity : AppCompatActivity() {
               var c = typeof e.className === "string" ? e.className : "";
               return e.tagName.toLowerCase() + (c ? "." + c.split(" ")[0] : "");
             };
+            /* Les barres de navigation : leurs entrées, leur destination, et
+               si elles sont visibles. C'est ce que la sonde a servi à établir
+               sur le bouton Bibliothèque — un `<a href="spotify:collection">`
+               qu'aucune WebView ne sait ouvrir. */
+            var navLine = function () {
+              var navs = document.querySelectorAll("nav,[role='navigation']");
+              if (!navs.length) return "aucune";
+              var out = [];
+              for (var i = 0; i < navs.length && i < 2; i++) {
+                var items = navs[i].querySelectorAll("a,button,[role='button']");
+                var parts = [];
+                for (var j = 0; j < items.length && j < 6; j++) {
+                  var t = (items[j].textContent || items[j].getAttribute("aria-label") || "")
+                    .replace(/\s+/g, " ").trim().slice(0, 14);
+                  var h = items[j].getAttribute("href") || "-";
+                  var vis = items[j].getClientRects().length ? "" : "(masque)";
+                  parts.push(t + "|" + h + vis);
+                }
+                out.push(parts.join(" , "));
+              }
+              return out.join(" ; ");
+            };
+            /* Encarts d'abonnement encore présents, marqués ou non. */
+            var premiumLine = function (marked) {
+              if (marked) return q("[data-sd-premium='1']");
+              var els = document.querySelectorAll("a,button,[role='button'],[data-testid]");
+              var n = 0;
+              for (var i = 0; i < els.length && i < 900; i++) {
+                var t = (els[i].textContent || "").replace(/\s+/g, " ").trim();
+                if (t.length <= 160 && /premium|abonn|souscri|upgrade/i.test(t)) n++;
+              }
+              return n;
+            };
             /* Invites « ouvrir dans l'application » encore présentes, marquées ou
                non : c'est le seul moyen de savoir si Spotify les repose. */
             var appPrompts = function (marked) {
@@ -798,6 +862,8 @@ class MainActivity : AppCompatActivity() {
               "rangees " + q("div[data-testid=grid-container]") + " / lignes " + q("div[data-testid=tracklist-row]") + " / navigation " + q("#global-nav-bar"),
               "haut de page " + topThing() + " / barre d'etat reservee par la page " + safeTop() + " px",
               "invites ouvrir-dans-l-application " + appPrompts(false) + " / retirees " + appPrompts(true),
+              "invitations premium " + premiumLine(false) + " / retirees " + premiumLine(true),
+              "navigation " + navLine(),
               "interface d'origine " + (typeof window.firstFuck === "function" ? "chargee" : "absente"),
               "adresse " + location.pathname
             ].join("\n");

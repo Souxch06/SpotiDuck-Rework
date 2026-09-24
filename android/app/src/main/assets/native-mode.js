@@ -10,10 +10,11 @@
  *
  *   1. supprimer les pop-ups que Spotify réserve aux navigateurs mobiles
  *      (bandeaux « Ouvrir dans l'application », consentement aux cookies,
- *      infobulles, promotions plein écran) et les empêcher de revenir — le
- *      bandeau « ouvrir dans l'application » étant celui du haut de page, il
- *      est aussi traqué par son **texte** et par la destination de ses liens,
- *      parce que Spotify renomme ses attributs d'une version à l'autre ;
+ *      infobulles, promotions plein écran) et les empêcher de revenir. Le
+ *      bandeau « ouvrir dans l'application » et les invitations à
+ *      l'abonnement — y compris le bouton de la barre du bas — sont en plus
+ *      traqués par leur **texte** et par la destination de leurs liens, parce
+ *      que Spotify renomme ses attributs d'une version à l'autre ;
  *   2. exposer un `window.SpotiDuckUI` minimal (lecture, pause, suivant,
  *      précédent, j'aime, avance) pour que les boutons de la notification
  *      Android et de l'écran de verrouillage fonctionnent : ils cliquent les
@@ -105,8 +106,11 @@
     // Promotions qui recouvrent la page
     "[data-testid='promo-banner']",
     "[data-testid='premium-upsell']",
+    "[data-testid='premium-upsell-dialog']",
+    "[data-testid='upgrade-to-premium']",
     "[data-testid='upgrade-banner']",
     "[data-testid='upsell-banner']",
+    "[data-testid='upsell-dialog']",
     "[data-testid='announcement-banner']",
   ];
 
@@ -122,8 +126,10 @@
   }).join("\n");
   css.textContent =
     hideCss +
-    /* Ce que le balayage par texte (section 2-bis) a reconnu. */
+    /* Ce que les balayages par texte (section 2-bis) ont reconnu :
+       « ouvrir dans l'application », et les invitations à l'abonnement. */
     "\n[data-sd-appprompt='1']{display:none !important}\n" +
+    "\n[data-sd-premium='1']{display:none !important}\n" +
     "\n" +
     "html{-webkit-text-size-adjust:100% !important;-webkit-tap-highlight-color:transparent !important;overscroll-behavior:none !important}\n" +
     "body{overscroll-behavior:none !important;-webkit-tap-highlight-color:transparent !important}\n" +
@@ -229,24 +235,68 @@
   } catch (e) {}
 
   /* ------------------------------------------------------------------ *
-   * 2-bis. « Ouvrir dans l'application » : traqué par le texte
+   * 2-bis. Ce que Spotify pousse à l'utilisateur
    *
-   * Ce bandeau — celui du haut de page, sur la version mobile — renvoie vers
-   * `spotify:` ou vers une fiche Play Store. Dans cette application il ne mène
-   * nulle part : il n'y a pas de « application Spotify » à ouvrir, c'est
-   * l'application elle-même. Les sélecteurs de la section 2 ne l'attrapent que
-   * si Spotify garde les mêmes attributs ; ce balayage-là regarde ce que dit
-   * le bandeau, ce que le CSS ne peut pas faire.
+   * Deux familles d'éléments, un seul balayage :
+   *
+   *  · « Ouvrir dans l'application » — celui du haut de page. Il renvoie vers
+   *    `spotify:` ou vers une fiche de magasin, et ici il ne mène nulle part :
+   *    il n'y a pas d'« application Spotify » à ouvrir, c'est l'application
+   *    elle-même.
+   *  · Les invitations à l'abonnement — encarts, fenêtres, et le bouton de la
+   *    barre du bas.
+   *
+   * Les sélecteurs par attributs de la section 2 sont fragiles : Spotify
+   * renomme ses attributs d'une version à l'autre. Ces deux-là regardent ce que
+   * l'élément **dit** et où ses liens **mènent** — ce que le CSS ne sait pas
+   * faire.
    * ------------------------------------------------------------------ */
   var APP_PROMPT_TEXT = /ouvrir dans l'application|ouvrir l'application|ouvrir spotify|ouvrir l'appli|écouter dans l'application|continuer dans l'application|télécharger l'application|lancer l'application|open (the )?app|open spotify|get the app|download the app/i;
-  var APP_PROMPT_LINK = /^(spotify:|market:|intent:)/i;
+  var APP_PROMPT_LINK = /^(market:|intent:)/i;
   var APP_STORE_LINK = /play\.google\.com|apps\.apple\.com|itunes\.apple\.com|\/download/i;
+  var PREMIUM_TEXT = new RegExp(
+    [
+      "passe[rz]? (?:à|a|au) premium",
+      "passer premium",
+      "essay(?:ez|er) premium",
+      "essai (?:gratuit|de premium|premium)",
+      "premium (?:gratuit|gratuitement|sans engagement)",
+      "découvr(?:ez|ir) premium",
+      "devenez premium",
+      "abonnez-vous",
+      "s'abonner",
+      "souscri(?:re|vez)",
+      "offre premium",
+      "musique en aléatoire",
+      "lecture en aléatoire",
+      "interruptions publicitaires",
+      "sans (?:publicité|pub|interruption)",
+      "get premium",
+      "try premium",
+      "go premium",
+      "upgrade (?:to|your) premium",
+      "free trial",
+      "start (?:your )?free trial",
+      "subscribe",
+      "premium for",
+    ].join("|"),
+    "i"
+  );
+  var PREMIUM_LINK = /spotify:premium|spotify\.com\/premium|^\/premium(?:\/|\?|$)|^https?:\/\/[^/]*\/premium(?:\/|\?|$)/i;
+
+  function clickablesIn(el) {
+    try {
+      return el.querySelectorAll("a,button,[role='button']").length;
+    } catch (e) {
+      return 99;
+    }
+  }
 
   /**
-   * Posé au-dessus du contenu (position `fixed`, `absolute` ou `sticky`, ou
-   * `role="banner"` / `role="dialog"`) : un bandeau. Au-delà de cinq niveaux on
-   * s'arrête et on ne touche à rien — masquer un parent trop large emporterait
-   * du vrai contenu.
+   * L'élément est-il posé au-dessus du contenu — `position` `fixed`, `absolute`
+   * ou `sticky`, ou `role="banner"` / `role="dialog"` ? Au-delà de cinq niveaux
+   * on s'arrête et on ne touche à rien : masquer un parent trop large
+   * emporterait du vrai contenu.
    */
   function bannerAncestor(el) {
     var n = el && el.parentNode;
@@ -265,46 +315,61 @@
   }
 
   /**
-   * Ce qu'on masque : le bandeau entier s'il ne porte que l'invite, l'invite
-   * seule s'il porte aussi les commandes de la page (logo, recherche, profil) —
-   * enlever la barre du haut parce qu'elle contient une phrase serait pire que
-   * la laisser.
+   * L'élément est-il dans une barre de navigation ? Un `<nav>`, un
+   * `role="navigation"`, ou une barre collée qui porte au moins trois
+   * commandes (c'est la barre du bas de la page mobile).
    */
-  function promptHost(el, byText) {
-    var band = bannerAncestor(el);
-    if (band) {
-      var inside = 0;
+  function inBar(el) {
+    var n = el && el.parentNode;
+    var hops = 0;
+    while (n && n !== document.body && hops < 6) {
+      var role = n.getAttribute ? n.getAttribute("role") : null;
+      if (n.tagName === "NAV" || role === "navigation") return true;
+      var pos = "";
       try {
-        inside = band.querySelectorAll("a,button,[role='button']").length;
-      } catch (e) {
-        inside = 99;
-      }
-      /* Un bandeau qui ne porte que l'invite (souvent l'invite et un bouton
-         « Ouvrir ») part en entier. */
-      return inside <= 1 ? band : el;
+        pos = document.defaultView.getComputedStyle(n).position || "";
+      } catch (e) {}
+      if (/fixed|sticky/.test(pos) && clickablesIn(n) >= 3) return true;
+      n = n.parentNode;
+      hops++;
     }
-    /* Pas de bandeau autour : seul un texte explicite autorise à masquer
-       l'élément lui-même (un lien vers le magasin d'applications peut très bien
-       être un simple lien de la page). */
-    return byText ? el : null;
+    return false;
   }
 
   /**
-   * Marque pour le CSS ce qui parle de « l'application » : soit le texte, soit
-   * un lien vers le magasin d'applications (auquel cas il faut **aussi** un
-   * bandeau autour, pour ne pas emporter un simple lien de la page).
+   * Ce qu'on masque : le bandeau entier s'il ne porte que l'invitation,
+   * l'invitation seule s'il porte aussi les commandes de la page (logo,
+   * recherche, profil) — enlever la barre du haut parce qu'elle contient une
+   * phrase serait pire que la laisser. Dans une barre de navigation, on ne
+   * touche jamais qu'à l'élément lui-même.
    */
-  function hideAppPrompts() {
+  function placeSweep(el, allowInBar) {
+    if (clickablesIn(el) > 2) return null; // une barre, pas un encart
+    /* Dans une barre de navigation, on ne touche jamais qu'à l'élément
+       lui-même — et seulement s'il dit lui-même ce qu'il est : un onglet ne
+       doit pas disparaître sur une déduction. */
+    if (inBar(el)) return allowInBar ? el : null;
+    var band = bannerAncestor(el);
+    if (band) return clickablesIn(band) <= 2 ? band : el;
+    /* Pas de bandeau autour : seul un signe explicite autorise à masquer
+       l'élément lui-même (un lien vers le magasin d'applications peut très bien
+       être un simple lien de la page). */
+    return allowInBar ? el : null;
+  }
+
+  var SWEEP_SELECTOR = "a,button,[role='button'],[data-testid],[role='banner']";
+
+  function sweep(attr, verdict) {
     var els;
     try {
-      els = document.querySelectorAll("a,button,[role='button'],[data-testid],[role='banner']");
+      els = document.querySelectorAll(SWEEP_SELECTOR);
     } catch (e) {
       return 0;
     }
     var hits = 0;
     for (var i = 0; i < els.length && i < 900; i++) {
       var el = els[i];
-      if (el.getAttribute("data-sd-appprompt") === "1") continue;
+      if (el.getAttribute(attr) === "1") continue;
       var href = "";
       var text = "";
       try {
@@ -314,35 +379,77 @@
         continue;
       }
       if (text.length > 160) text = "";
-      var byText = APP_PROMPT_TEXT.test(text);
-      var byLink = APP_PROMPT_LINK.test(href) || APP_STORE_LINK.test(href);
-      if (!byText && !byLink) continue;
-      /* Un conteneur qui porte déjà les commandes de la page n'est pas un
-         bandeau d'invite : c'est la barre du haut. Ses invites, elles, restent
-         candidates et seront masquées une par une. */
-      var inside = 0;
-      try {
-        inside = el.querySelectorAll("a,button,[role='button']").length;
-      } catch (e) {
-        inside = 99;
-      }
-      if (inside > 1) continue;
-      var host = promptHost(el, byText);
-      if (!host) continue;
-      if (host.getAttribute("data-sd-appprompt") === "1") continue;
-      host.setAttribute("data-sd-appprompt", "1");
+      var found = verdict(text, href, el);
+      if (!found) continue;
+      var host = placeSweep(el, found.allowInBar);
+      if (!host || host.getAttribute(attr) === "1") continue;
+      host.setAttribute(attr, "1");
       hits++;
     }
     return hits;
   }
 
-  hideAppPrompts();
-  window.setTimeout(hideAppPrompts, 400);
-  window.setTimeout(hideAppPrompts, 1500);
-  window.setTimeout(hideAppPrompts, 4000);
-  /* Spotify repose son bandeau à chaque changement d'écran : le balayage est
-     donc répété, mais borné (900 éléments, un regex court). */
-  window.setInterval(hideAppPrompts, 2000);
+  /**
+   * Le texte de ce qui entoure l'élément (cinq niveaux au plus, 160 caractères
+   * au plus) dit-il qu'il s'agit d'une invitation ? C'est ce qui permet de
+   * reconnaître un bandeau dont le bouton ne dit que « Ouvrir ».
+   */
+  function ancestorInvite(el) {
+    var n = el.parentNode;
+    var hops = 0;
+    while (n && n !== document.body && hops < 5) {
+      var t = "";
+      try {
+        t = (n.textContent || "").replace(/\s+/g, " ").trim();
+      } catch (e) {
+        return false;
+      }
+      if (t.length <= 160 && APP_PROMPT_TEXT.test(t)) return true;
+      n = n.parentNode;
+      hops++;
+    }
+    return false;
+  }
+
+  function appPromptVerdict(text, href, el) {
+    var byText = APP_PROMPT_TEXT.test(text);
+    var byLink = APP_PROMPT_LINK.test(href) || APP_STORE_LINK.test(href);
+    if (!byText && !byLink) {
+      /* Un lien `spotify:` n'est pas une preuve : la barre du bas de la page
+         mobile en est pleine (`spotify:collection` est l'onglet Bibliothèque).
+         Seule une phrase d'invitation autour autorise à masquer — c'est ainsi
+         qu'un onglet de navigation survit toujours. */
+      if (!/^spotify:/i.test(href) || !ancestorInvite(el)) return null;
+      byText = true;
+    }
+    return { allowInBar: byText };
+  }
+
+  function premiumVerdict(text, href, el) {
+    var byText = PREMIUM_TEXT.test(text);
+    var byLink = PREMIUM_LINK.test(href);
+    /* Un onglet « Premium » tout court : dans une barre, ou qui mène aux
+       offres. Une simple étiquette « Premium » ailleurs n'est pas touchée. */
+    if (!byText && !byLink && /^premium$/i.test(text) && (href !== "" || inBar(el))) {
+      byText = true;
+    }
+    if (!byText && !byLink) return null;
+    /* Ici, un lien vers les offres suffit, même dans une barre : c'est
+       précisément le bouton d'abonnement du bas de page qu'on veut retirer. */
+    return { allowInBar: byText || byLink };
+  }
+
+  function sweepAll() {
+    return sweep("data-sd-appprompt", appPromptVerdict) + sweep("data-sd-premium", premiumVerdict);
+  }
+
+  sweepAll();
+  window.setTimeout(sweepAll, 400);
+  window.setTimeout(sweepAll, 1500);
+  window.setTimeout(sweepAll, 4000);
+  /* Spotify repose son bandeau et ses encarts à chaque changement d'écran : le
+     balayage est donc répété, mais borné (900 éléments, des motifs courts). */
+  window.setInterval(sweepAll, 2000);
 
   /* ------------------------------------------------------------------ *
    * 2. Pont minimal pour la notification Android

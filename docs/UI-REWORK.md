@@ -871,3 +871,72 @@ sur ces deux points :
 Tests : 70/70 (`npm run smoke`), dont deux nouveaux cas — un bandeau dédié, aux
 attributs inconnus, doit disparaître ; la barre du haut d'une page, qui porte
 aussi ses commandes, doit survivre.
+
+## 17. Le bouton Bibliothèque, et les invitations à l'abonnement (v2.7.5)
+
+Deux constats, arrivés ensemble après la 2.7.4 : « *le bouton bibliothèque ne
+fait rien* » et « *enlève tous les popups pour l'abonnement ainsi que le bouton
+en bas pour l'abonnement* ».
+
+### Le bouton Bibliothèque : une règle trop large de la 2.7.4
+
+Le balayage « ouvrir dans l'application » introduit en 2.7.4 traitait **tout**
+lien `spotify:` comme une invitation. Or la barre du bas de la page mobile en est
+pleine : Spotify s'en sert pour ses propres onglets (`spotify:collection` **est**
+l'onglet Bibliothèque). Deux dégâts possibles, selon la façon dont la barre est
+construite :
+
+* l'onglet lui-même était masqué (`display:none !important`) : l'icône reste
+  parfois visible, mais il n'y a plus rien à toucher — « le bouton ne fait
+  rien » ;
+* ou, s'il n'était pas masqué, le tap partait sur un lien que **la WebView ne
+  sait pas ouvrir** : `shouldOverrideUrlLoading` avalait le `spotify:` pour
+  éviter une page d'erreur, et il ne se passait donc rien.
+
+Les deux sont corrigés, et de façon vérifiable :
+
+1. **Un lien `spotify:` n'est plus une preuve.** Il ne compte comme invitation
+   que si le texte de ce qui l'entoure (cinq niveaux, 160 caractères au plus) dit
+   explicitement « ouvrir dans l'application ». Un onglet de navigation survit
+   donc toujours. `tools/audit-links.mjs` refuse désormais un `native-mode.js`
+   où `spotify:` suffirait de nouveau à masquer un élément.
+2. **Les onglets `spotify:` sont convertis en adresses web** au lieu d'être
+   avalés : `spotify:collection` → `/collection`, `spotify:library` →
+   `/collection`, `spotify:search:mot` → `/search/mot`, `spotify:user:ID` →
+   `/user/ID`. Le garde-fou reste en place pour tout le reste — mais il **note**
+   ce qu'il avale, et la sonde l'affiche (« dernier lien : converti … -> … » ou
+   « ignore … »).
+3. Les barres de navigation (`<nav>`, `role="navigation"`, ou barre collée
+   portant au moins trois commandes) sont protégées explicitement : on ne masque
+   jamais que l'élément lui-même, et seulement s'il dit lui-même ce qu'il est.
+
+### Les invitations à l'abonnement
+
+Même mécanisme que le bandeau, avec ses propres motifs — des phrases, parce que
+le texte ne change pas d'une version à l'autre : *passer à Premium*, *essai
+gratuit*, *s'abonner*, *souscrire*, *découvrez Premium*, *musique en aléatoire*,
+*interruptions publicitaires*, *sans publicité*… et les liens vers `/premium`.
+
+Ce que ça enlève :
+
+* les **fenêtres** d'abonnement : ce qui les entoure est masqué en entier ;
+* le **bouton de la barre du bas** (`Premium`, ou tout élément qui mène aux
+  offres) : dans une barre, seul l'onglet disparaît, la barre reste ;
+* les encarts déjà couverts par attribut (`premium-upsell`,
+  `premium-upsell-dialog`, `upgrade-to-premium`, `upsell-dialog`…).
+
+Ce que ça ne touche pas : un lien ordinaire de la page, un onglet Accueil /
+Rechercher / Bibliothèque, une étiquette « Premium » qui ne mène nulle part,
+et toute barre de navigation en tant que telle.
+
+### Ce que la sonde dit maintenant
+
+`Diagnostic` (sélecteur d'interface) gagne trois lignes de plus :
+
+* **navigation** — les entrées des barres, leur `href`, et `(masque)` si l'une
+  d'elles n'est plus visible : c'est ce qui distingue « onglet masqué » de
+  « lien avalé » ;
+* **invitations premium** — présentes, puis retirées ;
+* **dernier lien** — ce que l'application a fait du dernier lien non-web :
+  converti (avec la conversion) ou ignoré. C'est la seule trace d'un tap qui
+  n'aurait rien déclenché.
