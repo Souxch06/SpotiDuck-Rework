@@ -1,0 +1,102 @@
+/* ==========================================================================
+   75 — La page tient dans la largeur de l'écran
+
+   Le défaut, mesuré (sonde `probe-coop`, page « telephone » : la page chargée
+   dans les conditions de la WebView, `useWideViewPort`, densité réelle, écran
+   tactile) :
+
+       mise en page=412px · contenu=736×691 · débordement=388
+
+   Autrement dit : la page Spotify est **736 px de large dans un écran de
+   412 px**. C'est ce que l'utilisateur voit — « l'affichage n'est plus adapté à
+   Android », du texte rogné, une page qu'il faut faire glisser de côté. Le web
+   player est un site de bureau : sous ~700 px, il ne se replie pas, il déborde.
+
+   Le code de l'application d'origine règle ça avec cinq règles, et c'est ce
+   qu'on reprend ici (son propre feuillet, `st.textContent`, déchiffré de
+   `C1356q3`) : `--panel-gap` à zéro, `#main-view + div` en `width:auto` +
+   `overflow:hidden`, le panneau de droite à `100vw`, les gouttières de grille
+   annulées, et `section[data-testid=home-page] .contentSpacing` en `0 10px`.
+   Ce sont ces règles-là qui font qu'une page bureau tient sur un téléphone —
+   notre coque, elle, ne les avait pas.
+
+   Puis deux filets de sécurité, pour les conteneurs que Spotify ajoutera plus
+   tard : rien de plus large que l'écran, et les enfants de grille ou de flex
+   autorisés à rétrécir (`min-width: auto` est la cause classique d'un
+   débordement dans une grille).
+   ========================================================================== */
+
+html.sd-mobile,
+html.sd-mobile body {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+/* — Ce que faisait l'application d'origine — */
+
+html.sd-mobile .sd-root div[data-testid="root"] {
+  --panel-gap: 0 !important;
+}
+html.sd-mobile .sd-root #main-view + div,
+html.sd-mobile .sd-root #main-view + div > div {
+  overflow: hidden !important;
+  width: auto !important;
+}
+html.sd-mobile .sd-root #main-view + div > div > div > div:nth-child(2) > div {
+  width: 100vw !important;
+}
+html.sd-mobile .sd-root div[data-testid="grid-container"] {
+  margin-inline: 0 !important;
+  column-gap: 0 !important;
+  overflow: hidden !important;
+}
+html.sd-mobile .sd-root .contentSpacing {
+  padding: 0 !important;
+}
+html.sd-mobile .sd-root section[data-testid="home-page"] .contentSpacing {
+  padding: 0 calc(10px * var(--sd-u)) !important;
+  overflow: hidden !important;
+}
+
+/* — Filet de sécurité : jamais plus large que l'écran — */
+
+html.sd-mobile .sd-root main,
+html.sd-mobile .sd-root main > div,
+html.sd-mobile .sd-root .main-view-container,
+html.sd-mobile .sd-root .main-view-container__scroll-node,
+html.sd-mobile .sd-root [data-testid="home-page"],
+html.sd-mobile .sd-root [data-testid="search-page"],
+html.sd-mobile .sd-root [data-testid="playlist-page"],
+html.sd-mobile .sd-root [data-testid="track-page"],
+html.sd-mobile .sd-root [data-testid="artist-page"],
+html.sd-mobile .sd-root [data-testid="component-shelf"],
+html.sd-mobile .sd-root [data-testid="grid-container"],
+html.sd-mobile .sd-root [data-testid="tracklist-container"],
+html.sd-mobile .sd-root [data-testid="tracklist-row"] {
+  max-width: 100% !important;
+  min-width: 0 !important;
+}
+/* Dans une grille ou un flex, `min-width: auto` empêche l'enfant de rétrécir :
+   c'est la cause la plus fréquente d'un débordement horizontal, et elle ne se
+   voit qu'à la largeur d'un téléphone. */
+html.sd-mobile .sd-root [data-testid="grid-container"] > *,
+html.sd-mobile .sd-root [data-testid="component-shelf"] > *,
+html.sd-mobile .sd-root [data-testid="tracklist-row"] > * {
+  min-width: 0 !important;
+}
+/* Les intertitres ne doivent pas imposer leur largeur au conteneur. */
+html.sd-mobile .sd-root [data-testid="grid-container"] > * > *,
+html.sd-mobile .sd-root .encore-text-headline-large,
+html.sd-mobile .sd-root h1,
+html.sd-mobile .sd-root h2 {
+  max-width: 100% !important;
+  overflow-wrap: anywhere;
+}
+/* Le formulaire de recherche de Spotify (page bureau) est calé sur une colonne
+   de 48 px : il débordait de la barre. L'application d'origine le ramenait dans
+   l'écran (`form[role=search]`, `max-width:88%`). */
+html.sd-mobile .sd-root form[role="search"] {
+  max-width: 88% !important;
+  margin-left: 0 !important;
+  z-index: 10;
+}

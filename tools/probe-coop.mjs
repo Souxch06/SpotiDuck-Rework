@@ -143,6 +143,28 @@ const MEASURE = async () => {
      l'écran — tout paraît petit, rogné, « pas adapté à Android ». Mesurer
      `innerWidth` / `clientWidth` / le débordement, c'est mesurer ça. */
   var meta = document.querySelector("meta[name='viewport']");
+  /* Qui déborde : un élément plus large que l'écran explique « c'est rogné, il
+     faut faire glisser la page ». On les nomme — la coque n'est pas la page. */
+  out.debordants = (function () {
+    var w = root.clientWidth;
+    var found = [];
+    var all = document.body ? document.body.querySelectorAll("*") : [];
+    for (var i = 0; i < all.length && found.length < 30; i++) {
+      var el = all[i];
+      if (el.closest && el.closest(".sd-layer")) continue;
+      var r = el.getBoundingClientRect();
+      if (r.height <= 0 || r.width < 60 || r.right <= w + 4) continue;
+      var tid = el.getAttribute && el.getAttribute("data-testid");
+      var cls = (el.getAttribute && el.getAttribute("class")) || "";
+      found.push(
+        el.tagName.toLowerCase() +
+          (tid ? "[" + tid + "]" : "") +
+          (cls ? "." + String(cls).split(/\s+/).slice(0, 2).join(".") : "") +
+          "=" + Math.round(r.width)
+      );
+    }
+    return found.slice(0, 8).join(", ");
+  })();
   out.layout = {
     innerWidth: window.innerWidth,
     innerHeight: window.innerHeight,
@@ -484,7 +506,9 @@ async function main() {
       const summary =
         `${target.label} → ` +
         (after && after.layout
-          ? `mise en page=${after.layout.htmlClientWidth}px (interne ${after.layout.innerWidth}, meta ${after.layout.meta}) débordement=${after.layout.debordement} contenu=${after.layout.contenu} / `
+          ? `mise en page=${after.layout.htmlClientWidth}px (interne ${after.layout.innerWidth}, meta ${after.layout.meta}) débordement=${after.layout.debordement} contenu=${after.layout.contenu}` +
+            (after.layout.debordement > 0 && after.debordants ? ` débordants: ${after.debordants}` : "") +
+            ` / `
           : "") +
         (target.mode === "original"
           ? `interface d'origine : firstFuck=${after && after.originalUi ? after.originalUi.firstFuck : "?"} ` +
