@@ -525,6 +525,45 @@ const SHELL_STATE = () => {
 };
 
 /** Un appui réel sur un contrôle, et ce qu'il déclenche. */
+/* **Ce que la page montre quand on ouvre l'onglet Bibliothèque.** Le 25/09 :
+   « quand on clique sur l'onglet bibliothèque, la barre en haut disparaît et
+   rien d'autre n'apparaît ; je reste bloqué sur l'écran d'accueil ». Le relevé
+   général est pris avant tout appui et sa ligne a été coupée par la limite de
+   1 800 caractères des annotations : cette mesure-ci est donc courte et part
+   seule, pour dire en une ligne si la bibliothèque s'affiche, si l'accueil se
+   retire et si la navigation reste là. */
+const TABMEASURE = () => {
+  const state = (sel) => {
+    const el = document.querySelector(sel);
+    if (!el) return "absent";
+    const r = el.getBoundingClientRect();
+    const c = window.getComputedStyle(el);
+    const gone = el.hidden === true || c.display === "none" || c.visibility === "hidden" || r.width < 2 || r.height < 2;
+    return (gone ? "caché" : "visible") + " " + Math.round(r.width) + "x" + Math.round(r.height);
+  };
+  const active = document.querySelector(".sd-nav-item.is-active, .sd-nav-item[aria-current]");
+  const title = document.querySelector(".sd-lib-title");
+  const api = window.SpotiDuckUI;
+  const lib = document.querySelector(".sd-lib");
+  return {
+    chemin: location.pathname,
+    ongletActif: active ? (active.textContent || "").trim().slice(0, 18) : "aucun",
+    bibliotheque: state(".sd-lib"),
+    titre: title ? `"${(title.textContent || "").trim().slice(0, 20)}"` : "absent",
+    lignes: lib ? lib.querySelectorAll(".sd-lib-row").length : 0,
+    etat: api && api.library && api.library.describe ? api.library.describe() : "?",
+    accueilMaison: state(".sd-home"),
+    ongletsVisibles: [...document.querySelectorAll(".sd-nav-item")].filter((el) => {
+      const r = el.getBoundingClientRect();
+      return r.width > 2 && r.height > 2;
+    }).length,
+    barreTitre: state(".sd-topbar"),
+    barreLaterale: state("#Desktop_LeftSidebar_Id"),
+    textePage: (document.body.innerText || "").replace(/\s+/g, " ").trim().length,
+    classes: document.documentElement.className,
+  };
+};
+
 const CLICK = async (selector) => {
   const el = document.querySelector(selector);
   if (!el) return { clicked: false, reason: `${selector} absent` };
@@ -841,12 +880,22 @@ async function main() {
          Le relevé ci-dessus est pris **avant** tout appui (`State.tab` vaut
          « accueil ») : il ne pouvait donc pas voir ce bug. On ouvre l'onglet,
          on mesure, puis on revient à l'accueil. */
-      let libraryOnTab = "";
       if (hasNav === true) {
         await safely(() => page.evaluate(CLICK, '.sd-nav-item[data-tab="library"]'));
         await sleep(900);
-        const m = await safely(() => page.evaluate(MEASURE));
-        libraryOnTab = (m && m.library) || "?";
+        const m = await safely(() => page.evaluate(TABMEASURE));
+        if (m) {
+          note(
+            `Onglet Bibliothèque — ${target.label}`,
+            `chemin=${m.chemin} · onglet-actif=${m.ongletActif} · bibliothèque=${m.bibliotheque} ` +
+              `lignes=${m.lignes} état=${m.etat} titre=${m.titre} · accueil-maison=${m.accueilMaison} ` +
+              `onglets-visibles=${m.ongletsVisibles} barre-titre=${m.barreTitre} barre-laterale=${m.barreLaterale} ` +
+              `texte=${m.textePage} car. · classes="${m.classes}"`
+          );
+          report.pages.push({ label: `${target.label} (onglet bibliothèque)`, tab: m });
+        } else {
+          warn(`Onglet Bibliothèque — ${target.label}`, "aucune mesure n'est remontée après l'appui sur l'onglet");
+        }
         /* On revient à l'accueil : l'appui suivant se mesure sur la page de
            départ, et les captures aussi. */
         await safely(() => page.evaluate(CLICK, '.sd-nav-item[data-tab="home"]'));
@@ -967,7 +1016,6 @@ async function main() {
       if (after && after.home) pageLines.push(`Accueil maison - ${target.label} : ${after.home}`);
       if (after && after.library) pageLines.push(`Bibliothèque - ${target.label} : ${after.library}`);
       if (after && after.bottom) pageLines.push(`Bas de page - ${target.label} : ${after.bottom}`);
-      if (libraryOnTab) pageLines.push(`Onglet Bibliothèque ouvert - ${target.label} : ${libraryOnTab}`);
       lines.push(summary, ...pageLines);
       console.log(`[Sonde coque] ${summary}`);
       note(`Mesure — ${target.label}`, summary);

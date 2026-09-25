@@ -1019,7 +1019,7 @@ if (!/excerpt: function \(\)/.test(stripComments(runtime)) || !/describe: functi
 if (!/@JavascriptInterface\s+fun session\(\): Boolean/.test(bridgeKt) || !/fun sessionPresent\(\): Boolean/.test(activity)) {
   errors.push("le diagnostic ne peut plus dire si un compte est réellement connecté (session du lecteur)");
 }
-if (!/Onglet Bibliothèque ouvert/.test(probeTool) || !/libraryOnTab/.test(probeTool)) {
+if (!/Onglet Bibliothèque — /.test(probeTool) || !/const TABMEASURE = /.test(probeTool) || !/onglet-actif=/.test(probeTool)) {
   errors.push("la sonde ne mesure plus l'appui sur l'onglet Bibliothèque : le « rien ne s'affiche » du 25/09 ne serait plus vu en CI");
 }
 if (!/out\.verdict/.test(probeTool) || !/homePath/.test(probeTool)) {
