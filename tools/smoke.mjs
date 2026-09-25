@@ -1773,7 +1773,7 @@ await checkAsync("a tall, narrow page is not 'nothing displayed', and the diagno
     const width = isMain ? 29 : hasText ? 24 : 0;
     return { width, height, top: 0, left: 0, right: width, bottom: height, x: 0, y: 0 };
   };
-  w.AndBridge = { version: () => "2.11.16", session: () => false };
+  w.AndBridge = { version: () => "2.11.17", session: () => false };
   w.eval(await read("dist/spotiduck-ui.js"));
   await tick(250);
 
@@ -3091,6 +3091,131 @@ await checkAsync("la bibliothèque lit la liste de Spotify quand l'API ne répon
   assert(glyphes.length === rows.filter((r) => !r.querySelector(".sd-lib-art img")).length, "les lignes sans pochette n'ont pas toutes un glyphe");
   dom.window.close();
   return "repli sur la liste de Spotify · vos titres likés en tête · 3 lignes · refus écrit dans le journal ✓";
+});
+
+await checkAsync("un appui sur une playlist l'ouvre dans le lecteur, et le retour revient", async () => {
+  /* Signalé le 25/09 : « quand on appuie sur une playlist, écran noir » — et
+     le retour ne ramenait pas à la bibliothèque. La cause est dans la façon
+     d'ouvrir la page : nos lignes sont des liens, et un appui faisait donc
+     charger l'adresse par la WebView comme un **premier chargement**. Tout le
+     lecteur repartait de zéro (plusieurs secondes pendant lesquelles il n'y a
+     rien à peindre : du noir), notre coque était reconstruite, l'historique ne
+     contenait plus l'ouverture, et le retour retombait sur l'accueil.
+     Mesuré en Chrome, même banc, avant ce correctif : document rechargé, 0
+     élément à l'écran, coque absente 6,7 s. Le lecteur, lui, est une
+     application d'une seule page : il sait afficher ses adresses sans se
+     recharger, et c'est **sa** navigation que l'appui doit suivre. */
+  const dom = new JSDOM(
+    "<!doctype html><html><body><div id='Desktop_LeftSidebar_Id'>" +
+      "<a href='/playlist/abc'><span>Mes tubes</span></a>" +
+      "</div><main></main></body></html>",
+    { url: "https://open.spotify.com/intl-fr/", pretendToBeVisual: true, runScripts: "dangerously" }
+  );
+  dom.window.fetch = () => Promise.resolve({ ok: false, status: 401, json: () => Promise.resolve({}) });
+  dom.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => undefined }));
+  dom.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(200);
+  const api = dom.window.SpotiDuckUI;
+  const page = dom.window.document;
+  api.state.tab = "library";
+  api.library.load(true);
+  await tick(80);
+
+  const ligne = [...page.querySelectorAll(".sd-lib-row-playlist")][0];
+  assert(ligne && ligne.getAttribute("href") === "/playlist/abc", "aucune ligne de playlist à ouvrir");
+  /* Le lien de Spotify pour la même adresse joue le rôle du lien de la barre
+     latérale : c'est lui qui a le routeur et l'historique. */
+  const jumeau = page.querySelector("#Desktop_LeftSidebar_Id a[href='/playlist/abc']");
+  assert(jumeau && !jumeau.closest(".sd-layer"), "le lien de Spotify n'est pas là où on l'attend");
+  let clicsJumeau = 0;
+  let vu = null;
+  jumeau.addEventListener("click", (e) => {
+    clicsJumeau++;
+    e.preventDefault(); /* comme le routeur de Spotify : il affiche la page lui-même */
+  });
+  ligne.addEventListener("click", (e) => {
+    vu = e;
+  });
+  ligne.click();
+  assert(clicsJumeau === 1, `l'appui n'est pas passé au lien du lecteur (${clicsJumeau} clic(s) sur le lien de Spotify)`);
+  assert(vu && vu.defaultPrevented, "l'appui laisse le navigateur charger l'adresse : c'est le rechargement de l'application (l'écran noir)");
+  /* **Le voile** : si la page met du temps, l'écran dit ce qu'il ouvre au lieu
+     de rester noir. Et il ne couvre pas le lecteur, qui doit rester là. */
+  const voile = page.querySelector(".sd-open");
+  assert(voile, "il n'y a pas de voile d'ouverture");
+  assert(voile.hidden === false, "l'écran reste noir pendant l'ouverture : le voile n'est pas posé");
+  assert(/Mes tubes/.test(voile.textContent), "le voile ne dit pas ce qu'on ouvre : « " + voile.textContent.trim() + " »");
+  assert(/information|Ouverture/.test(voile.getAttribute("role") === "status" ? "Ouverture" : ""), "le voile n'est pas annoncé aux lecteurs d'écran");
+
+  /* **Le retour défait l'ouverture.** Signalé : « le retour en arrière doit
+     fonctionner ». Pendant l'ouverture, la route n'a pas encore changé : sans
+     ce cas, l'appui retour partait sur l'onglet Accueil. */
+  assert(api.back() === true, "le retour n'est pas pris en compte pendant l'ouverture");
+  await tick(80);
+  assert(voile.hidden === true, "le voile reste affiché après le retour : l'écran ne se libère jamais");
+
+  /* Et sans lien de Spotify pour la même adresse (une playlist de l'API qui
+     n'est pas dans la barre latérale) : l'adresse est poussée dans
+     l'historique et la navigation est annoncée — jamais un rechargement. */
+  page.querySelectorAll("#Desktop_LeftSidebar_Id a").forEach((a) => a.remove());
+  const avant = dom.window.location.pathname;
+  ligne.click();
+  await tick(60);
+  assert(dom.window.location.pathname === "/playlist/abc", `l'adresse n'a pas été poussée : « ${dom.window.location.pathname} »`);
+  assert(dom.window.location.pathname !== avant || avant === "/playlist/abc", "l'adresse n'a pas changé");
+  assert(voile.hidden === false, "le voile n'est pas posé quand la page n'a pas de lien à suivre");
+  api.back();
+  await tick(80);
+  assert(voile.hidden === true, "le voile reste affiché après l'annulation");
+  dom.window.close();
+  return "appui → navigation du lecteur (aucun rechargement) · voile d'ouverture · retour qui défait ✓";
+});
+
+await checkAsync("la bibliothèque n'affiche qu'une fois « Titres likés »", async () => {
+  /* La capture du 25/09 montrait deux lignes « Titres likés » à la suite :
+     celle que la coque pose elle-même, et celle que Spotify affiche dans sa
+     propre liste — que le repli relit dans la page. Deux fois la même entrée,
+     avec deux sous-titres différents (« Vos titres likés », « Dans votre
+     bibliothèque ») : ça se lit comme un doublon, pas comme une bibliothèque. */
+  const dom = new JSDOM(
+    "<!doctype html><html><body><div id='Desktop_LeftSidebar_Id'>" +
+      "<a href='/collection/tracks'><span>Titres likés</span></a>" +
+      "<a href='/playlist/abc'><span>Mes tubes</span></a>" +
+      "</div><main></main></body></html>",
+    { url: "https://open.spotify.com/intl-fr/", pretendToBeVisual: true, runScripts: "dangerously" }
+  );
+  dom.window.fetch = () => Promise.resolve({ ok: false, status: 401, json: () => Promise.resolve({}) });
+  dom.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => undefined }));
+  dom.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(200);
+  const api = dom.window.SpotiDuckUI;
+  const page = dom.window.document;
+  api.state.tab = "library";
+  api.library.load(true);
+  await tick(120);
+
+  /* La remise d'aplomb elle-même : deux entrées likés, un doublon de playlist. */
+  const remis = api.library.ensureLiked([
+    { type: "liked", name: "Titres likés", sub: "Vos titres likés", href: "/collection/tracks", img: "" },
+    { type: "playlist", name: "Mes tubes", sub: "Dans votre bibliothèque", href: "/playlist/abc", img: "" },
+    { type: "liked", name: "Titres likés", sub: "Dans votre bibliothèque", href: "/collection", img: "" },
+    { type: "playlist", name: "Mes tubes", sub: "Dans votre bibliothèque", href: "/playlist/abc", img: "" },
+  ]);
+  const liked = remis.filter((r) => r.type === "liked");
+  assert(liked.length === 1, `${liked.length} lignes « Titres likés » après remise d'aplomb : « ${liked.map((r) => r.sub).join(" », « ")} »`);
+  assert(remis[0] === liked[0], "l'entrée des titres likés n'est plus en tête");
+  assert(remis.length === 2, `la liste garde ${remis.length} lignes au lieu de 2 : le doublon de playlist n'est pas tombé`);
+
+  /* Et de bout en bout : la page montre « Titres likés » de son côté, la coque
+     doit quand même n'en afficher qu'une. */
+  const affichees = [...page.querySelectorAll(".sd-lib-row-liked")];
+  assert(affichees.length === 1, `${affichees.length} lignes « Titres likés » à l'écran (une seule attendue)`);
+  const badge = page.querySelector(".sd-lib-count");
+  const lignes = page.querySelectorAll(".sd-lib-row").length;
+  assert(lignes === 2, `${lignes} lignes affichées au lieu de 2 (titres likés + playlist)`);
+  assert(badge && new RegExp(String(lignes)).test(badge.textContent), `le compte de l'en-tête (« ${badge.textContent} ») ne dit pas les ${lignes} lignes`);
+  dom.window.close();
+  return "une seule « Titres likés » · doublon de playlist écarté · compte de l'en-tête juste ✓";
 });
 
 await checkAsync("la bibliothèque dit ce qui est à vous, et garde vos titres likés en tête", async () => {

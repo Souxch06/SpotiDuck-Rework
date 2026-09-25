@@ -3469,3 +3469,92 @@ likés).
   quelque chose en lecture : sans titre, elle écrit « rien ne joue : le zap
   n'est pas mesurable ».
 
+## §52 — Appuyer sur une playlist (v2.11.17)
+
+« Quand on appuie sur une playlist, tout doit s'afficher correctement (pas
+d'écran noir), et le retour en arrière doit fonctionner. » La capture de
+l'utilisateur montrait par ailleurs **deux lignes « Titres likés »** à la suite.
+
+### La cause de l'écran noir : l'appui rechargeait l'application
+
+Nos lignes de bibliothèque sont des **liens** (`<a href="/playlist/…">`). Un
+appui laissait donc la WebView charger l'adresse comme un **premier
+chargement** : tout le lecteur repartait de zéro, il n'y avait rien à peindre
+pendant plusieurs secondes (du noir), notre coque était reconstruite, et
+l'historique ne contenait plus l'ouverture — le retour tombait sur l'accueil.
+
+Mesuré en Chrome, 412×915, banc de démonstration, **avant** le correctif :
+
+| | avant |
+|---|---|
+| document rechargé | **oui** |
+| contenu à l'écran, 250 ms après l'appui | **0 × 0**, 5 éléments (rien) |
+| coque de retour à l'écran | **6,7 s** |
+| retour (`SpotiDuckUI.back()`) | impossible (plus de coque à cet instant) |
+
+### Le correctif : la navigation du lecteur, pas celle du navigateur
+
+Le lecteur est une application d'une **seule page** : il sait afficher ses
+adresses sans se recharger. Le module `Open` intercepte donc l'appui sur nos
+liens (capture sur `document`, uniquement dans `.sd-layer`, uniquement les
+adresses internes — la connexion, elle, reste un lien externe) et, dans cet
+ordre :
+
+1. **le lien de Spotify pour la même adresse**, s'il est dans la page : c'est
+   lui qui a le routeur et l'historique ;
+2. sinon l'adresse est **poussée dans l'historique** et l'événement de
+   navigation est émis (c'est ainsi qu'une application d'une seule page apprend
+   qu'une adresse a changé) ; l'entrée est **comptée comme une navigation**,
+   donc le retour la défait ;
+3. si la page n'a pas suivi après trois vérifications (700 ms), on navigue pour
+   de vrai — le voile est déjà posé, l'écran n'est jamais noir.
+
+Un **voile** couvre la zone de contenu pendant l'ouverture : « Ouverture de
+« Flex and chill »… », avec la barre de progression et le tourniquet. Il ne
+couvre **pas** le lecteur (qui reste visible et utilisable), laisse passer les
+appuis (`pointer-events: none`), ne recouvre que la zone de contenu, et se
+retire tout seul au plus tard après huit secondes : un voile qui reste serait
+pire que le noir.
+
+Le retour, lui, a deux cas : **pendant** l'ouverture, `SpotiDuckUI.back()`
+annule ce qui a été poussé (la route n'a pas encore changé — sans ce cas,
+l'appui retour partait sur l'accueil) ; **une fois la page ouverte**, il
+revient à l'adresse précédente, et la bibliothèque reprend sa place avec son
+onglet.
+
+### Le doublon « Titres likés »
+
+La liste est maintenant **remise d'aplomb** à l'endroit par lequel passent
+toutes les sources (`ensureLiked`) : une seule entrée pour les titres likés,
+**en tête**, celle qui porte le chiffre quand l'API l'a donné ; les autres
+« Titres likés » (celui que Spotify affiche et que le repli relit dans la page)
+tombent, et les doublons d'adresse aussi. Le repli « liste de Spotify » passe
+désormais par la même remise d'aplomb, et le compte de l'en-tête est calculé
+sur la liste **affichée**.
+
+### Vérifications
+
+* **mesures Chrome** (avant → après, même banc, mêmes données) : document
+  rechargé `oui` → `non` ; contenu à 250 ms `0×0` → `396×871` (886 éléments) ;
+  coque de retour `6,7 s` → `0,26 s` ; retour : chemin revenu à l'adresse de
+  départ, onglet `library`, bibliothèque `visible 412×731 lignes=15`, lecteur
+  `visible` ;
+* **le chemin du lien de Spotify** est vérifié à part (le banc pose un lien
+  comme le fait la vraie page) : un seul clic sur ce lien, aucun rechargement,
+  la page s'affiche, et le retour revient ;
+* **banc jsdom** : **140/140** — deux vérifications ajoutées : l'appui passe au
+  lien du lecteur, l'événement n'est pas laissé au navigateur, le voile dit ce
+  qu'on ouvre, le retour défait l'ouverture, et une seule ligne
+  « Titres likés » (avec la remise d'aplomb testée directement) ;
+* **audit** : **0 erreur**, garde-fous sur chacun de ces points — et **17
+  régressions volontaires** (interception retirée, routeur du banc remis en
+  arrière, voile enlevé, doublon réintroduit, retour qui n'annule plus…)
+  toutes détectées ;
+* la **sonde CI** mesure maintenant, sur la vraie page : `application
+  rechargée=oui/non` à l'appui sur une ligne, puis le retour (`Retour depuis une
+  playlist`) — et alerte si l'un des deux se dégrade.
+
+La capture `screenshots/playlist_ouverture.png` montre les deux moments :
+pendant l'ouverture (le voile, le lecteur toujours là) et la playlist ouverte
+(barre de retour, contenu, mini-lecteur).
+

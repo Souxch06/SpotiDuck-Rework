@@ -295,6 +295,8 @@
       libraryLogHint: "Pourquoi l'API n'a pas répondu",
       libraryCountOne: "%s élément",
       libraryCountMany: "%s éléments",
+      opening: "Ouverture…",
+      openingOf: "Ouverture de « %s »…",
       libraryTokenAge: "Jeton capté %s · /me → %s",
       libraryTokenRefresh: "Jeton redemandé à la page : %s",
       libraryRetry: "Réessayer",
@@ -1669,6 +1671,20 @@
         } catch (e) {}
       });
       loginCta.textContent = Settings.labels.classicLogin;
+      /* Le voile d'ouverture : jamais d'écran noir pendant qu'une page
+         s'ouvre. Il couvre la **zone de contenu** — la navigation et le
+         lecteur restent à leur place et utilisables —, il dit ce qu'il ouvre,
+         et il se retire dès que la page est là (module `Open`). */
+      var openVeil = document.createElement("div");
+      openVeil.className = "sd-open";
+      openVeil.hidden = true;
+      openVeil.setAttribute("role", "status");
+      openVeil.setAttribute("aria-live", "polite");
+      openVeil.innerHTML =
+        '<span class="sd-open-bar" aria-hidden="true"></span>' +
+        '<span class="sd-open-card"><span class="sd-open-spin" aria-hidden="true"></span>' +
+        '<span class="sd-open-text"></span></span>';
+
       var offlineBar = document.createElement("div");
       offlineBar.className = "sd-offline-bar";
       offlineBar.setAttribute("role", "status");
@@ -1685,6 +1701,7 @@
       L.appendChild(player);
       L.appendChild(loginCta);
       L.appendChild(offlineBar);
+      L.appendChild(openVeil);
       L.appendChild(welcome);
       document.body.appendChild(L);
 
@@ -1757,6 +1774,7 @@
         grabber: grabber,
         loginCta: loginCta,
         offlineBar: offlineBar,
+        open: openVeil,
         welcome: welcome,
         welcomeCta: $(".sd-welcome-cta", welcome),
       };
@@ -3705,8 +3723,209 @@
     },
   };
   window.addEventListener("popstate", function () {
+    /* L'événement que **nous** émettons pour ouvrir une page n'est pas un
+       retour de l'utilisateur : il ne doit pas fermer un panneau. */
+    if (Open.synthetic) return;
     if (Back.pushed) Back.handle();
   });
+
+  /* ------------------------------------------------------------------ *
+   * 11e. Open — ouvrir une page **dans** le lecteur, jamais en
+   *      rechargeant l'application.
+   *
+   * Signalé le 25/09 : « quand on appuie sur une playlist, écran noir » — et
+   * le retour ne ramenait pas à la bibliothèque. Nos lignes de bibliothèque
+   * sont des liens : l'appui faisait donc charger l'adresse par la WebView
+   * comme un premier chargement. La page se vidait, Spotify se rechargeait en
+   * entier (plusieurs secondes de noir), notre coque repartait de zéro, et le
+   * bouton retour sortait de la page au lieu de revenir en arrière.
+   *
+   * Le lecteur est une application d'une **seule page** : il sait afficher ses
+   * propres adresses sans se recharger. On lui passe donc la main, dans cet
+   * ordre :
+   *   1. le lien de Spotify pour la **même** adresse, s'il est dans la page —
+   *      c'est lui qui a le routeur et l'historique ;
+   *   2. sinon l'adresse est poussée dans l'historique et l'événement de
+   *      navigation est émis : c'est ainsi qu'une application d'une seule page
+   *      apprend qu'une adresse a changé ;
+   *   3. et si la page n'a pas suivi après trois vérifications, on navigue pour
+   *      de vrai — mais **le voile est déjà posé**, donc l'écran n'est jamais
+   *      noir : il dit ce qu'il ouvre.
+   * ------------------------------------------------------------------ */
+  var Open = {
+    busy: false,
+    tries: 0,
+    /* Vrai pendant l'émission de notre propre événement de navigation. */
+    synthetic: false,
+
+    bind: function () {
+      if (this.bound) return false;
+      this.bound = true;
+      var self = this;
+      /* En capture : nos liens n'ont pas de routeur, la page en a un. */
+      document.addEventListener(
+        "click",
+        function (ev) {
+          if (ev.defaultPrevented) return;
+          if (ev.button > 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+          var a = ev.target && ev.target.closest ? ev.target.closest("a[href]") : null;
+          if (!a || !a.closest || !a.closest(".sd-layer")) return;
+          var href = a.getAttribute("href") || "";
+          /* Un lien externe (la connexion, un partage) ne nous regarde pas. */
+          if (href.charAt(0) !== "/") return;
+          ev.preventDefault();
+          var nom = $(".sd-lib-name", a) || $(".sd-home-title", a);
+          self.open(href, nom ? (nom.textContent || "").trim() : "");
+        },
+        true
+      );
+      return true;
+    },
+
+    /** Le lien de Spotify pour la même adresse, hors de notre coque. */
+    twin: function (href) {
+      var cible = href.split("?")[0].replace(/\/+$/, "");
+      var links = $$('a[href^="/"]');
+      for (var i = 0; i < links.length; i++) {
+        var a = links[i];
+        if (a.closest && a.closest(".sd-layer")) continue;
+        var h = (a.getAttribute("href") || "").split("?")[0].replace(/\/+$/, "");
+        if (h === cible) return a;
+      }
+      return null;
+    },
+
+    open: function (href, name) {
+      if (!href || href.charAt(0) !== "/") return false;
+      if (this.busy) return false;
+      this.busy = true;
+      this.href = href.split("?")[0].replace(/\/+$/, "");
+      this.tries = 0;
+      this.veil(name);
+      var twin = this.twin(href);
+      this.parLien = !!twin;
+      if (twin) {
+        try {
+          twin.click();
+        } catch (e) {}
+      } else {
+        try {
+          history.pushState({ sd: "open", open: href }, "", href);
+        } catch (e) {}
+        this.pulse();
+      }
+      var self = this;
+      /* Filet de sécurité : le voile ne reste jamais plus longtemps que ça,
+         même si la page ne dit rien. */
+      clearTimeout(this.lettre);
+      this.lettre = setTimeout(function () {
+        self.done();
+      }, OPEN_LIMIT);
+      this.check();
+      return true;
+    },
+
+    /**
+     * **L'événement de navigation.** Une application d'une seule page affiche
+     * une adresse ainsi : on la pousse, puis on lui dit qu'elle a changé.
+     * Nos propres écouteurs savent que celui-ci vient de nous (`synthetic`) —
+     * sinon l'historique se décrémentait deux fois et le retour tombait à côté.
+     */
+    pulse: function () {
+      var ev = null;
+      try {
+        ev = typeof PopStateEvent === "function" ? new PopStateEvent("popstate", { state: { sd: "open" } }) : null;
+        if (!ev) {
+          ev = document.createEvent("Event");
+          ev.initEvent("popstate", true, false);
+        }
+      } catch (e) {
+        return false;
+      }
+      this.synthetic = true;
+      try {
+        window.dispatchEvent(ev);
+      } catch (e) {
+        /* rien : la vérification qui suit décidera */
+      }
+      this.synthetic = false;
+      return true;
+    },
+
+    /** La page demandée est-elle arrivée ? */
+    arrive: function () {
+      /* Une sous-page est rendue : c'est la réponse la plus sûre. */
+      if (Spotify.route() === "page") return true;
+      /* Certaines adresses n'ont pas de section à elles : si **le routeur a
+         suivi le lien de Spotify** et que l'adresse est la bonne, c'est arrivé. */
+      if (this.parLien && location.pathname.replace(/\/+$/, "") === this.href) return true;
+      return false;
+    },
+
+    check: function () {
+      var self = this;
+      clearTimeout(this.timer);
+      this.timer = setTimeout(function () {
+        if (!self.busy) return;
+        if (self.arrive()) {
+          self.done();
+          return;
+        }
+        if (++self.tries >= OPEN_TRIES) {
+          /* La page n'a pas suivi (adresse que son routeur ignore, routeur
+             absent) : on navigue pour de vrai — le voile est déjà posé, donc
+             l'écran montre « Ouverture… », jamais du noir. */
+          self.busy = false;
+          clearTimeout(self.lettre);
+          try {
+            location.assign(self.href);
+          } catch (e) {
+            self.done();
+          }
+          return;
+        }
+        self.check();
+      }, OPEN_STEP);
+    },
+
+    /** Le voile : l'écran dit ce qu'il fait pendant que la page s'ouvre. */
+    veil: function (name) {
+      var node = (UI.el && UI.el.open) || $(".sd-open");
+      if (!node) return false;
+      var text = $(".sd-open-text", node);
+      if (text) text.textContent = name ? Settings.labels.openingOf.replace("%s", name) : Settings.labels.opening;
+      node.hidden = false;
+      return true;
+    },
+
+    hide: function () {
+      var node = (UI.el && UI.el.open) || $(".sd-open");
+      if (node) node.hidden = true;
+      return !!node;
+    },
+
+    /** La page est là (ou on renonce) : le voile se retire. */
+    done: function (keep) {
+      this.busy = false;
+      this.tries = 0;
+      clearTimeout(this.timer);
+      clearTimeout(this.lettre);
+      if (!keep) this.hide();
+      return true;
+    },
+
+    /** Le retour pendant l'ouverture : on annule ce qu'on a poussé. */
+    cancel: function () {
+      var pousse = this.busy && !this.parLien;
+      this.done();
+      if (pousse) {
+        try {
+          history.back();
+        } catch (e) {}
+      }
+      return true;
+    },
+  };
 
   /* ------------------------------------------------------------------ *
    * 11d. Auto — playback hand-off, stuck-player recovery, screen wake
@@ -5050,6 +5269,11 @@
   /** Combien de temps une lecture de la bibliothèque reste bonne. */
   var LIBRARY_TTL = 10 * 60 * 1000;
   var LIBRARY_PAGE = 50;
+  /* Ouverture d'une page (voir le module `Open`) : on vérifie que la page a
+     suivi, trois fois, à 700 ms — puis on navigue pour de vrai. */
+  var OPEN_STEP = 700;
+  var OPEN_TRIES = 3;
+  var OPEN_LIMIT = 8000;
   /* Les dernières lignes lues, gardées sur l'appareil : c'est ce qui affiche la
      bibliothèque **tout de suite** à la deuxième ouverture (et après un
      rechargement de page), sans attendre le réseau. */
@@ -5478,22 +5702,46 @@
      */
     ensureLiked: function (rows) {
       var list = rows || [];
-      for (var i = 0; i < list.length; i++) if (list[i].type === "liked") return list;
-      /* Rien à compléter sur une liste vide, et pas de « vos titres likés » pour
-         un lecteur dont on **sait** qu'il n'est pas connecté. Mais quand la page
-         montre déjà votre bibliothèque, cette entrée en fait partie : on ne la
-         laisse pas manquer sous prétexte que l'API n'a pas répondu (c'est
-         exactement le cas où l'on vient de lire vos playlists dans la page). */
       if (!list.length) return list;
-      if (!this.account && this.accountState() === "out") return list;
-      list.unshift({
-        type: "liked",
-        name: Settings.labels.libraryLiked,
-        sub: Settings.labels.libraryLikedHint,
-        href: "/collection/tracks",
-        img: "",
-      });
-      return list;
+      /* **Une seule entrée « Titres likés », et la même pour tout le monde.**
+         Signalé le 25/09 : deux lignes « Titres likés » se suivaient dans la
+         liste (la nôtre, puis celle que Spotify affiche lui-même et que le
+         repli relit dans la page). La liste est donc remise d'aplomb ici, à
+         l'endroit par lequel passent toutes les sources : les doublons de
+         titre et d'adresse tombent, l'entrée des titres likés reste **en
+         tête**, et elle garde son chiffre quand l'API l'a donné. */
+      var liked = null;
+      var propres = [];
+      var vues = {};
+      for (var i = 0; i < list.length; i++) {
+        var row = list[i];
+        if (!row) continue;
+        if (row.type === "liked") {
+          if (!liked) liked = row;
+          continue;
+        }
+        var cle = row.type + "|" + (row.href || row.name || "");
+        if (vues[cle]) continue;
+        vues[cle] = 1;
+        propres.push(row);
+      }
+      /* Pas de « vos titres likés » pour un lecteur dont on **sait** qu'il n'est
+         pas connecté. Mais quand la page montre déjà votre bibliothèque, cette
+         entrée en fait partie : on ne la laisse pas manquer sous prétexte que
+         l'API n'a pas répondu (c'est exactement le cas où l'on vient de lire
+         vos playlists dans la page). */
+      if (!liked && !this.account && this.accountState() === "out") return propres;
+      if (!liked) {
+        liked = {
+          type: "liked",
+          name: Settings.labels.libraryLiked,
+          sub: Settings.labels.libraryLikedHint,
+          href: "/collection/tracks",
+          img: "",
+        };
+      }
+      propres.unshift(liked);
+      return propres;
     },
 
     /** Relit la liste de Spotify après un rendu, sans bloquer la page. */
@@ -5507,7 +5755,7 @@
         var rows = self.fromSpotifyList();
         if (!rows.length) return;
         self.items = self.ensureLiked(rows);
-        self.counts = self.tallyRows(rows);
+        self.counts = self.tallyRows(self.items);
         self.fromSidebar = true;
         self.state = "ready";
         self.loadedAt = Date.now();
@@ -5582,7 +5830,7 @@
       var rows = this.fromSpotifyList();
       if (rows.length) {
         this.items = this.ensureLiked(rows);
-        this.counts = this.tallyRows(rows);
+        this.counts = this.tallyRows(this.items);
         this.fromSidebar = true;
         this.state = "ready";
         this.apply();
@@ -5759,6 +6007,9 @@
           /* L'API a répondu : ses lignes sont plus complètes que le repli, on
              les prend — et on les garde pour la prochaine ouverture. */
           self.items = self.ensureLiked(fresh);
+          /* Les totaux de l'API (toute la bibliothèque, pas seulement la page
+             lue) : « Titres likés 128 » compte des **titres**, pas des lignes —
+             le compte de l'en-tête, lui, compte les lignes affichées. */
           self.counts = self.tally(sources);
           self.fromSidebar = false;
           self.cached = false;
@@ -5793,8 +6044,11 @@
             self.retrySidebar(1200);
           }
           if (rows.length) {
-            self.items = rows;
-            self.counts = self.tallyRows(rows);
+            /* Par la même remise d'aplomb que les autres sources : c'est par
+               ici qu'arrivaient les deux « Titres likés » (celui de Spotify et
+               le nôtre), et c'est ici qu'ils tombent. */
+            self.items = self.ensureLiked(rows);
+            self.counts = self.tallyRows(self.items);
             self.fromSidebar = true;
             self.state = "ready";
           } else if (!self.account) {
@@ -7246,6 +7500,9 @@
          de suite. `route` commande la place de nos barres **et** le bouton
          retour — le deviner au DOM, c'est l'écran noir signalé. */
       if (route === "other" && Spotify.isSubPagePath()) route = "page";
+      /* La page ouverte est arrivée : le voile d'ouverture (module `Open`) a
+         fait son travail. */
+      if (Open.busy && route === "page") Open.done();
       var patch = { route: route };
       if (route === "home" && State.tab !== "library" && State.tab !== "search") patch.tab = "home";
       /* **Le choix de l'utilisateur prime sur la route.** « Bibliothèque » n'est
@@ -7268,14 +7525,19 @@
       ["pushState", "replaceState"].forEach(function (m) {
         var orig = history[m];
         history[m] = function (state) {
-          /* Our own panel entries (`{sd:'panel'}`, pushed by Back) must not
-             count as internal navigation, or `goBack()` would just re-open
-             the sheet it is supposed to close. */
-          if (m === "pushState" && !(state && state.sd)) History.depth++;
+          /* **Les seules entrées qui ne comptent pas** sont celles des
+             panneaux (`{sd:'panel'}`, posées par `Back`) : sans cela,
+             `goBack()` rouvrirait la feuille qu'il doit fermer. Celles de
+             l'ouverture d'une page (`{sd:'open'}`, module `Open`) sont de
+             vraies navigations : le retour doit les défaire. */
+          if (m === "pushState" && !(state && state.sd === "panel")) History.depth++;
           return orig.apply(this, arguments);
         };
       });
       window.addEventListener("popstate", function () {
+        /* L'événement que nous émettons pour ouvrir une page ne doit pas
+           décrémenter l'historique : ce n'est pas un retour. */
+        if (Open.synthetic) return;
         if (History.depth > 0) History.depth--;
       });
     },
@@ -7740,6 +8002,8 @@
 
     UI.build();
     History.install();
+    /* Nos liens ouvrent les pages **dans** le lecteur (module `Open`). */
+    Open.bind();
     Api.watch();
     /* Les réponses du pont réseau arrivent ici (`window.__sdNet`). */
     Net.install();
@@ -7938,6 +8202,14 @@
      * (a panel was closed), `false` when the app should handle it itself.
      */
     back: function () {
+      /* **Une ouverture en cours se défait.** Sans cela, un retour pendant
+         qu'une playlist s'ouvre atterrissait sur l'onglet Accueil : la route
+         n'avait pas encore changé, donc le retour croyait être sur l'accueil.
+         On annule ce qu'on a poussé, et on reste où on était. */
+      if (Open.busy) {
+        Open.cancel();
+        return true;
+      }
       if (Back.top()) {
         Back.handle();
         return true;

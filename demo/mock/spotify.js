@@ -499,6 +499,20 @@
   }
 
   /* ----------------------------------------------------------- navigation */
+  /* Quelle page pour cette adresse ? Comme dans le lecteur : l'adresse fait
+     foi, y compris quand elle arrive par l'historique. */
+  function routeFromPath(path) {
+    if (/^\/playlist\//.test(path)) return "playlist";
+    if (/^\/search/.test(path)) return "search";
+    return "home";
+  }
+  function playlistNameFor(path) {
+    var slug = String(path).replace(/^\/playlist\//, "").replace(/\/+$/, "");
+    for (var i = 0; i < LIBRARY.length; i++) {
+      if (LIBRARY[i].name.toLowerCase().replace(/[^a-z0-9]+/g, "-") === slug) return LIBRARY[i].name;
+    }
+    return slug || "Playlist";
+  }
   function navigate(route, opts) {
     state.route = route;
     if (route === "search") renderMain();
@@ -527,6 +541,13 @@
     q("#Desktop_LeftSidebar_Id").addEventListener("click", function (e) {
       var row = e.target.closest('div[role="row"]');
       if (!row) return;
+      /* **Un lien interne ne recharge pas la page.** Dans le vrai lecteur, le
+         routeur de Spotify prend la main sur ses propres liens (`preventDefault`)
+         et affiche la page : c'est ce qui permet à la coque de suivre un de ces
+         liens pour ouvrir une playlist sans perdre l'application. Le banc
+         laissait faire le navigateur, donc suivre un lien y ressemblait à un
+         rechargement — une mesure fausse. */
+      e.preventDefault();
       var item = LIBRARY[parseInt(row.getAttribute("data-lib"), 10)];
       state.playlistItem = { name: item.name, meta: item.meta, hue: item.hue };
       navigate("playlist");
@@ -561,8 +582,24 @@
       state.position = parseFloat(progressInput.value) || 0;
       renderTimes();
     });
+    /* **Le retour affiche l'adresse.** Le vrai lecteur est une application
+       d'une seule page : quand l'historique bouge (bouton retour d'Android,
+       geste, ou l'ouverture d'une page par la coque), c'est l'adresse qui
+       décide de ce qui s'affiche — pas l'écran qu'on quitte. Le banc faisait
+       l'inverse (`navigate(state.route)`), donc une adresse poussée par
+       `SpotiDuckUI` ne pouvait pas s'afficher et les mesures de navigation
+       étaient fausses. */
     window.addEventListener("popstate", function () {
-      navigate(state.route, { silent: true });
+      var route = routeFromPath(location.pathname);
+      if (route === "playlist" && !state.playlistItem) {
+        state.playlistItem = {
+          name: playlistNameFor(location.pathname),
+          meta: ["Playlist", "OV32LO2D"],
+          hue: 265,
+        };
+      }
+      state.route = route;
+      navigate(route, { silent: true });
     });
   }
 

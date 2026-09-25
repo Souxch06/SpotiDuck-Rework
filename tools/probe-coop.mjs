@@ -723,6 +723,30 @@ const CLICKPLAYLIST = (sel) => {
   return { via: "aucun lien", before, apres: before };
 };
 
+/* Où en est-on après un retour ? La bibliothèque doit être revenue, avec son
+   onglet, et le lecteur toujours visible. */
+const RETOUR_PROBE = () => {
+  const visible = (el) => {
+    if (!el || el.hidden === true) return false;
+    const r = el.getBoundingClientRect();
+    const c = window.getComputedStyle(el);
+    return r.width > 2 && r.height > 2 && c.display !== "none" && c.visibility !== "hidden";
+  };
+  const lib = document.querySelector(".sd-layer .sd-lib");
+  const box = (el) => {
+    const r = el.getBoundingClientRect();
+    return Math.round(r.width) + "x" + Math.round(r.height);
+  };
+  const onglet = document.querySelector(".sd-nav-item.is-active");
+  const mini = document.querySelector(".sd-layer .sd-mini");
+  return {
+    chemin: location.pathname,
+    onglet: onglet ? onglet.getAttribute("data-tab") || "" : "",
+    bibliotheque: lib ? (visible(lib) ? "visible " + box(lib) : "masquée") + " lignes=" + lib.querySelectorAll(".sd-lib-row").length : "absente",
+    lecteur: mini ? (visible(mini) ? "visible " + box(mini) : "caché") : "absent",
+  };
+};
+
 const SUBPAGE_PROBE = () => {
   const visible = (el) => {
     if (!el) return false;
@@ -1544,9 +1568,21 @@ async function main() {
         const links = await safely(() => page.evaluate(CHECKPLAYLIST, PLAY_SEL));
         let opened = null;
         let reinjectee = false;
+        let retour = null;
+        /* **Un rechargement se voit.** On pose une marque sur le document avant
+           l'appui : si elle a disparu après, l'application a été rechargée —
+           c'est exactement l'écran noir signalé le 25/09 (« quand on appuie sur
+           une playlist »), et la mesure doit le dire, pas le laisser deviner. */
         if (links && links > 0) {
+          await safely(() =>
+            page.evaluate(() => {
+              window.__sdNavMark = "pose";
+            })
+          );
           opened = await safely(() => page.evaluate(CLICKPLAYLIST, PLAY_SEL));
           await sleep(3500);
+          const marque = await safely(() => page.evaluate(() => window.__sdNavMark === "pose"));
+          if (opened) opened.recharge = marque === true ? "non" : "oui";
         } else {
           opened = { via: "adresse de playlist (aucun lien sur la page)", before: before && before.chemin, apres: "/playlist/…" };
           try {
@@ -1579,6 +1615,7 @@ async function main() {
               : "?";
           const line =
             `ouvert par ${opened ? opened.via : "?"} (${opened ? opened.before : "?"} → ${opened ? opened.apres : "?"})` +
+            (opened && opened.recharge ? ` · application rechargée=${opened.recharge}` : "") +
             (reinjectee ? " · coque réinjectée après un chargement complet" : "") +
             ` · ${lecture(at)}` +
             ` · +2 s : chemin=${after ? after.chemin : "?"} contenu=${after ? after.contenu : "?"} ` +
@@ -1592,12 +1629,36 @@ async function main() {
             /centre=[^ ]*\[nous\]/.test(at.dessus) ||
             (at.chemin.indexOf("/playlist") !== 0 && at.chemin.indexOf("/album") !== 0) ||
             (before && before.lecteur.indexOf("visible") === 0 && at.lecteur.indexOf("visible") !== 0);
-          if (noir) warn(`Sous-page playlist — ${target.label}`, line);
+          /* **Un appui qui recharge l'application est le défaut lui-même** :
+             plusieurs secondes sans rien à peindre (l'écran noir), la coque
+             reconstruite, et un retour qui n'a plus l'ouverture à défaire. */
+          if (opened && opened.recharge === "oui") warn(`Sous-page playlist — ${target.label} (rechargement à l'appui)`, line);
+          else if (noir) warn(`Sous-page playlist — ${target.label}`, line);
           else note(`Sous-page playlist — ${target.label}`, line);
           report.pages.push({ label: `${target.label} (playlist)`, sub: at, after });
         } else {
           warn(`Sous-page playlist — ${target.label}`, "aucune mesure n'est remontée après l'ouverture");
         }
+        /* **Et le retour.** Signalé avec l'écran noir : « le retour en arrière
+           doit fonctionner ». On l'appuie comme le ferait Android
+           (`SpotiDuckUI.back()`) et on regarde où l'on atterrit : la
+           bibliothèque doit revenir, son onglet avec, et le lecteur rester. */
+        retour = await safely(() =>
+          page.evaluate(() => {
+            if (!window.SpotiDuckUI || !window.SpotiDuckUI.back) return null;
+            const consomme = window.SpotiDuckUI.back();
+            return { consomme, chemin: location.pathname };
+          })
+        );
+        await sleep(2200);
+        const apresRetour = await safely(() => page.evaluate(RETOUR_PROBE));
+        if (retour && apresRetour) {
+          retour = Object.assign(retour, apresRetour);
+          const rate = retour.bibliotheque.indexOf("visible") < 0 && retour.onglet !== "library";
+          if (rate) warn(`Retour depuis une playlist — ${target.label}`, `chemin=${retour.chemin} onglet=${retour.onglet} bibliothèque=${retour.bibliotheque} lecteur=${retour.lecteur}`);
+          else note(`Retour depuis une playlist — ${target.label}`, `chemin=${retour.chemin} onglet=${retour.onglet} bibliothèque=${retour.bibliotheque} lecteur=${retour.lecteur}`);
+        }
+
         /* Et on revient : les mesures suivantes (défilement, captures) ont
            besoin de la page de départ, pas d'une playlist ouverte. */
         try {

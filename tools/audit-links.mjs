@@ -1511,6 +1511,75 @@ for (const [type, icone] of [["liked", "heartSolid"], ["playlist", "musicNote"],
   }
 }
 
+/* **Pass 52 — l'appui sur une playlist.** « Quand on appuie sur une playlist,
+   tout doit s'afficher correctement (pas d'écran noir), et le retour doit
+   fonctionner. » Ce qui suit empêche de revenir au rechargement sans le voir :
+   nos liens doivent passer par la navigation du lecteur, un voile doit dire ce
+   qui s'ouvre, et le retour doit défaire l'ouverture. */
+const openCss = read("src/inject/80-open.css");
+/* L'appui sur un de nos liens passe par `Open.open`, jamais par le navigateur. */
+if (!/ev\.preventDefault\(\);\s*var nom = \$\("\.sd-lib-name", a\)/.test(runtime) || !/a\.closest\("\.sd-layer"\)/.test(runtime)) {
+  errors.push("nos liens ne sont plus interceptés : un appui recharge l'application (écran noir, coque reconstruite)");
+}
+if (!/if \(href\.charAt\(0\) !== "\/"\) return;/.test(runtime)) {
+  errors.push("le filtre des liens internes a disparu : un lien externe (la connexion) serait détourné");
+}
+if (!/twin: function \(href\)/.test(runtime) || !/if \(a\.closest && a\.closest\("\.sd-layer"\)\) continue;/.test(runtime) || !/if \(h === cible\) return a;/.test(runtime)) {
+  errors.push("l'appui ne cherche plus le lien du lecteur pour la même adresse : la navigation n'est plus celle de Spotify");
+}
+if (!/history\.pushState\(\{ sd: "open", open: href \}, "", href\)/.test(runtime) || !/pulse: function \(\)/.test(runtime)) {
+  errors.push("l'adresse n'est plus poussée dans l'historique avec la navigation annoncée : l'ouverture ne peut plus se défaire");
+}
+if (!/location\.assign\(self\.href\)/.test(runtime) || !/if \(\+\+self\.tries >= OPEN_TRIES\)/.test(runtime)) {
+  errors.push("plus aucune vérification que la page a suivi : une adresse refusée laisserait un écran vide");
+}
+if (!/state\.sd === "panel"/.test(runtime)) {
+  errors.push("l'ouverture d'une page n'est plus comptée comme une navigation : le retour ne la défait plus");
+}
+if (!/if \(Open\.synthetic\) return;\s*\/\*|\/\*[\s\S]{0,200}?\*\/\s*if \(Open\.synthetic\) return;/.test(runtime) || (runtime.match(/if \(Open\.synthetic\) return;/g) || []).length < 2) {
+  errors.push("l'événement de navigation que nous émettons est repris par nos propres écouteurs : l'historique se décrémente deux fois");
+}
+/* Le voile : posé, rangé, et il ne couvre pas le lecteur. */
+if (!/openVeil\.className = "sd-open";/.test(runtime) || !/L\.appendChild\(openVeil\);/.test(runtime) || !/openingOf/.test(runtime)) {
+  errors.push("plus de voile d'ouverture : pendant qu'une page se charge, l'écran reste noir");
+}
+if (!/\.sd-open \{[^}]*bottom: var\(--sd-bottom\)/.test(openCss) || !/\.sd-open \{[^}]*pointer-events: none/.test(openCss)) {
+  errors.push("le voile couvre le lecteur ou bloque les appuis : il doit ne couvrir que la zone de contenu");
+}
+if (!/\.sd-open \{[^}]*z-index: 38/.test(openCss)) {
+  errors.push("le voile n'est plus rangé entre les pages et la feuille du lecteur");
+}
+/* Le retour défait une ouverture en cours au lieu de partir sur l'accueil. */
+if (!/if \(Open\.busy\) \{\s*Open\.cancel\(\);\s*return true;/.test(runtime) || !/cancel: function \(\) \{/.test(runtime)) {
+  errors.push("le retour pendant une ouverture n'est plus pris en compte : il retomberait sur l'accueil");
+}
+/* **Une seule entrée « Titres likés ».** La capture du 25/09 en montrait deux :
+   la nôtre, et celle de Spotify relue par le repli. */
+if (!/if \(row\.type === "liked"\) \{\s*if \(!liked\) liked = row;\s*continue;/.test(runtime) || !/propres\.unshift\(liked\)/.test(runtime)) {
+  errors.push("les lignes ne sont plus remises d'aplomb : « Titres likés » peut réapparaître deux fois");
+}
+if (!/type \+ "\|" \+ \(row\.href \|\| row\.name/.test(runtime) || !/if \(vues\[cle\]\) continue;/.test(runtime)) {
+  errors.push("les doublons d'adresse ne sont plus écartés : la même playlist peut s'afficher deux fois");
+}
+/* **Le banc doit pouvoir mesurer cela.** Sans routeur sur l'adresse ni
+   `preventDefault` sur les liens internes, un appui ressemble à un
+   rechargement dans le banc — une mesure fausse. */
+const mock = read("demo/mock/spotify.js");
+if (!/routeFromPath\(location\.pathname\)/.test(mock) || !/state\.route = route;/.test(mock)) {
+  errors.push("le banc ne route plus par l'adresse : l'ouverture d'une page par l'historique ne peut plus être mesurée");
+}
+if (!/Desktop_LeftSidebar_Id"\)\.addEventListener\("click",[\s\S]{0,900}?e\.preventDefault\(\)/.test(mock)) {
+  errors.push("le banc laisse le navigateur suivre un lien interne : suivre un lien y ressemble à un rechargement");
+}
+/* Et la sonde doit le dire : un appui qui recharge est le défaut signalé. */
+const probe = read("tools/probe-coop.mjs");
+if (!/window\.__sdNavMark = "pose";/.test(probe) || !/opened\.recharge/.test(probe)) {
+  errors.push("la sonde ne mesure plus si l'application est rechargée à l'appui : le défaut du 25/09 pourrait revenir sans alerte");
+}
+if (!/const RETOUR_PROBE = \(\) => \{/.test(probe) || !/page\.evaluate\(RETOUR_PROBE\)/.test(probe) || !/Retour depuis une playlist/.test(probe)) {
+  errors.push("la sonde ne mesure plus le retour : « le retour en arrière doit fonctionner » ne serait plus vérifié");
+}
+
 /* Rapport ------------------------------------------------------------------ */
 const size = (n) => String(n).padStart(2);
 console.log(`\nSpotiDuck — liens internes\n`);
