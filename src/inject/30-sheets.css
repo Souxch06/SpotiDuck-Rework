@@ -1,0 +1,446 @@
+/* ==========================================================================
+   SpotiDuck — Mobile UI layer · part 3/3: sheets, settings, states
+   --------------------------------------------------------------------------
+   · bottom sheets (player options + settings), drag to dismiss
+   · login page (mobile form + e-mail/password call-to-action)
+   · offline banner, reduced motion, tactile feedback
+   Everything stays scoped to `html.sd-mobile` and lives inside our own
+   `.sd-layer`, exactly like parts 1 and 2.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   18. Bottom sheets (options menu · settings)
+   -------------------------------------------------------------------------- */
+html.sd-mobile .sd-sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 46;
+  display: flex;
+  flex-direction: column;
+  max-height: min(84vh, 660px);
+  border-radius: 14px 14px 0 0;
+  background: var(--sd-bg-elev);
+  color: var(--sd-text);
+  box-shadow: 0 -18px 48px rgba(0, 0, 0, 0.55);
+  visibility: hidden;
+  transform: translate3d(0, calc(100% + var(--sd-safe-b)), 0);
+  transition: transform 320ms var(--sd-ease), visibility 0s linear 320ms;
+  will-change: transform;
+  overscroll-behavior: contain;
+}
+html.sd-mobile .sd-sheet.is-open {
+  visibility: visible;
+  transform: translate3d(0, var(--sd-sheet-drag, 0px), 0);
+  transition: transform 320ms var(--sd-ease);
+}
+/* Only a finger on the header kills the animation (same rule as the player). */
+html.sd-mobile .sd-sheet.is-dragging {
+  transition: none;
+}
+
+html.sd-mobile .sd-sheet-head {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 8px 4px 16px;
+  touch-action: none;
+  cursor: grab;
+}
+html.sd-mobile .sd-sheet-head::before {
+  content: "";
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  width: 40px;
+  height: 4px;
+  margin-left: -20px;
+  border-radius: 4px;
+  background: currentColor;
+  opacity: 0.18;
+}
+html.sd-mobile .sd-sheet-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+html.sd-mobile .sd-sheet-close {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+}
+html.sd-mobile .sd-sheet-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 4px 8px calc(14px + var(--sd-safe-b));
+}
+
+html.sd-mobile .sd-group {
+  margin: 4px 0 14px;
+}
+html.sd-mobile .sd-group h2 {
+  margin: 8px 8px 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sd-sub);
+}
+
+html.sd-mobile .sd-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  min-height: 52px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 140ms ease;
+}
+html.sd-mobile .sd-row + .sd-row {
+  margin-top: 2px;
+}
+html.sd-mobile .sd-row:active {
+  background: var(--sd-bg-tint);
+}
+html.sd-mobile .sd-row[hidden] {
+  display: none !important;
+}
+html.sd-mobile .sd-row-info {
+  cursor: default;
+  font-size: 14px;
+}
+html.sd-mobile .sd-row-icon {
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  color: var(--sd-sub);
+}
+html.sd-mobile .sd-row-icon svg {
+  width: 22px;
+  height: 22px;
+  fill: currentColor;
+}
+html.sd-mobile .sd-row-lead .sd-row-icon {
+  color: var(--sd-text);
+}
+html.sd-mobile .sd-row-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+html.sd-mobile .sd-row-value {
+  flex: 0 0 auto;
+  font-size: 13px;
+  color: var(--sd-sub);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Switches (settings) */
+html.sd-mobile .sd-switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 44px;
+  height: 26px;
+  border-radius: 13px;
+  background: var(--sd-bg-hi);
+  border: 1px solid var(--sd-border);
+  transition: background-color 200ms ease, border-color 200ms ease;
+}
+html.sd-mobile .sd-switch i {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--sd-sub);
+  transition: transform 220ms var(--sd-ease), background-color 200ms ease;
+}
+html.sd-mobile .sd-row-switch.is-on .sd-switch {
+  background: var(--sd-accent);
+  border-color: transparent;
+}
+html.sd-mobile .sd-row-switch.is-on .sd-switch i {
+  background: #000;
+  transform: translateX(20px);
+}
+
+/* Segmented control (theme) */
+html.sd-mobile .sd-row-seg {
+  flex-wrap: wrap;
+  gap: 10px;
+}
+html.sd-mobile .sd-seg {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--sd-bg-hi);
+  border: 1px solid var(--sd-border);
+}
+html.sd-mobile .sd-seg button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--sd-sub);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  min-height: 32px;
+  padding: 0 14px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+html.sd-mobile .sd-seg button.is-on {
+  background: var(--sd-text);
+  color: var(--sd-bg);
+}
+html.sd-mobile.sd-theme-light .sd-sheet {
+  box-shadow: 0 -18px 48px rgba(0, 0, 0, 0.22);
+}
+
+/* The shared scrim has to sit above the full player when a sheet is open,
+   and the (Spotify-owned) queue panel above it in turn. */
+html.sd-mobile.sd-sheet-open .sd-scrim {
+  z-index: 45;
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 240ms ease;
+}
+html.sd-mobile.sd-player-open.sd-queue-open #Desktop_PanelContainer_Id {
+  z-index: 46 !important;
+}
+
+/* --------------------------------------------------------------------------
+   19. Login page
+   --------------------------------------------------------------------------
+   The WebView gets the desktop login page: a narrow card with tiny inputs and
+   social buttons that often fail inside a WebView. We make it a normal mobile
+   form and expose the e-mail/password route (`?allow_password=1`) as a button
+   of ours — the old layer inserted that link *inside* Spotify's React tree. */
+html.sd-mobile.sd-login body,
+html.sd-mobile.sd-login {
+  --sd-bottom: calc(var(--sd-safe-b) + 8px);
+}
+html.sd-mobile.sd-login .sd-tabbar,
+html.sd-mobile.sd-login .sd-mini,
+html.sd-mobile.sd-login .sd-topbar {
+  display: none !important;
+}
+html.sd-mobile.sd-login #main-view,
+html.sd-mobile.sd-login .main-view-container__scroll-node {
+  overflow: auto !important;
+}
+html.sd-mobile.sd-login div[data-testid="login-page"] section,
+html.sd-mobile.sd-login main > div,
+html.sd-mobile.sd-login #main-view > div {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 18px 20px 96px !important;
+  box-shadow: none !important;
+  border: 0 !important;
+  background: transparent !important;
+}
+html.sd-mobile.sd-login h1 {
+  font-size: clamp(22px, 7vw, 30px) !important;
+  line-height: 1.2 !important;
+  text-align: center !important;
+  margin: 8px 0 18px !important;
+}
+html.sd-mobile.sd-login input {
+  width: 100% !important;
+  height: 48px !important;
+  font-size: 16px !important; /* 16px: no iOS/Android zoom-on-focus */
+  border-radius: 8px !important;
+}
+html.sd-mobile.sd-login button,
+html.sd-mobile.sd-login a[role="button"] {
+  min-height: 48px !important;
+  border-radius: 999px !important;
+  font-size: 15px !important;
+  font-weight: 700 !important;
+}
+
+html.sd-mobile .sd-login-cta {
+  position: fixed;
+  left: 20px;
+  right: 20px;
+  bottom: calc(24px + var(--sd-safe-b));
+  z-index: 30;
+  display: none;
+  padding: 15px 20px;
+  border-radius: 999px;
+  background: var(--sd-accent);
+  color: #04150a;
+  font-size: 15px;
+  font-weight: 700;
+  text-align: center;
+  text-decoration: none;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+}
+html.sd-mobile.sd-login.sd-need-password .sd-login-cta {
+  display: block;
+}
+/* Le formulaire e-mail/mot de passe est déjà à l'écran : ne jamais proposer en
+   plus le bouton qui mène… à ce même formulaire. */
+html.sd-mobile.sd-login.sd-login-classic .sd-login-cta {
+  display: none;
+}
+html.sd-mobile .sd-login-cta:active {
+  transform: scale(0.98);
+}
+
+/* --------------------------------------------------------------------------
+   20. Offline banner
+   -------------------------------------------------------------------------- */
+html.sd-mobile .sd-offline-bar {
+  position: fixed;
+  left: calc(var(--sd-safe-l) + 12px);
+  right: calc(var(--sd-safe-r) + 12px);
+  bottom: calc(var(--sd-bottom) + 12px);
+  z-index: 60;
+  display: none;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: #b3261e;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+}
+html.sd-mobile.sd-offline .sd-offline-bar {
+  display: flex;
+}
+html.sd-mobile .sd-offline-bar .sd-offline-icon svg {
+  width: 20px;
+  height: 20px;
+  fill: currentColor;
+  display: block;
+}
+
+/* --------------------------------------------------------------------------
+   21. Tactile feedback (press states the desktop player never needed)
+   -------------------------------------------------------------------------- */
+html.sd-mobile div[data-testid="tracklist-row"]:active,
+html.sd-mobile div[data-testid="card"]:active,
+html.sd-mobile .YourLibraryX div[role="row"]:active {
+  background-color: var(--sd-bg-tint) !important;
+}
+html.sd-mobile div[data-testid="card"] {
+  transition: transform 140ms var(--sd-ease), background-color 140ms ease;
+}
+html.sd-mobile div[data-testid="card"]:active {
+  transform: scale(0.975);
+}
+html.sd-mobile .sd-tab:active svg {
+  transform: scale(0.9);
+}
+html.sd-mobile button[data-testid="play-button"]:active,
+html.sd-mobile div[data-testid="action-bar-row"] button:active {
+  transform: scale(0.94);
+}
+
+/* Cover placeholders: a music note instead of an empty grey square while the
+   artwork loads (or when it never does). The <img> paints over it. */
+html.sd-mobile .sd-mini-art {
+  background-color: var(--sd-bg-tint);
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%20fill='%23888888'%3E%3Cpath%20d='M20%203.2v12.3a3.5%203.5%200%201%201-2-3.2V6.6l-8%201.7v9.2a3.5%203.5%200%201%201-2-3.2V5.6l12-2.4z'/%3E%3C/svg%3E");
+  background-position: center;
+  background-size: 22px 22px;
+  background-repeat: no-repeat;
+}
+
+/* --------------------------------------------------------------------------
+   21b. Header buttons (player + top bars)
+   --------------------------------------------------------------------------
+   They are plain .sd-iconbtn, but their glyphs are not all 24px in the native
+   design: the chevron reads better bigger, the "…" a bit smaller. */
+html.sd-mobile .sd-player-close svg,
+html.sd-mobile .sd-topbar .sd-back svg,
+html.sd-mobile .sd-player-head .sd-player-close svg {
+  width: 26px;
+  height: 26px;
+}
+html.sd-mobile .sd-player-menu svg,
+html.sd-mobile .sd-topbar-gear svg,
+html.sd-mobile .sd-topbar-close svg,
+html.sd-mobile .sd-mini-next svg {
+  width: 22px;
+  height: 22px;
+}
+html.sd-mobile .sd-player-bottom .sd-ctrl-device svg,
+html.sd-mobile .sd-player-bottom .sd-ctrl-queue svg,
+html.sd-mobile .sd-player-bottom .sd-ctrl-lyrics svg,
+html.sd-mobile .sd-player-bottom .sd-ctrl-share svg {
+  width: 23px;
+  height: 23px;
+}
+html.sd-mobile .sd-player-bottom .sd-ctrl-queue.is-active,
+html.sd-mobile .sd-player-bottom .sd-ctrl-lyrics.is-active {
+  color: var(--sd-accent);
+}
+/* Time labels: fixed width numerals so the bar never jitters while it runs. */
+html.sd-mobile .sd-t-cur,
+html.sd-mobile .sd-t-dur {
+  min-width: 34px;
+  font-variant-numeric: tabular-nums;
+}
+html.sd-mobile .sd-t-dur {
+  text-align: right;
+}
+
+/* --------------------------------------------------------------------------
+   22. Reduced motion (setting, on top of the OS preference)
+   -------------------------------------------------------------------------- */
+html.sd-mobile.sd-reduce-motion .sd-sheet,
+html.sd-mobile.sd-reduce-motion .sd-player,
+html.sd-mobile.sd-reduce-motion .sd-mini,
+html.sd-mobile.sd-reduce-motion .sd-scrim,
+html.sd-mobile.sd-reduce-motion .sd-toast,
+html.sd-mobile.sd-reduce-motion .sd-seek-thumb,
+html.sd-mobile.sd-reduce-motion .sd-switch i,
+html.sd-mobile.sd-reduce-motion .sd-switch,
+html.sd-mobile.sd-reduce-motion .sd-iconbtn,
+html.sd-mobile.sd-reduce-motion div[data-testid="card"] {
+  transition-duration: 1ms !important;
+  animation-duration: 1ms !important;
+}
+
+/* --------------------------------------------------------------------------
+   23. Landscape: shorter sheets, less chrome
+   -------------------------------------------------------------------------- */
+@media (orientation: landscape) and (max-height: 560px) {
+  html.sd-mobile .sd-sheet {
+    max-height: 92vh;
+  }
+  html.sd-mobile .sd-sheet-head {
+    padding-top: 10px;
+  }
+  html.sd-mobile .sd-row {
+    min-height: 44px;
+  }
+}

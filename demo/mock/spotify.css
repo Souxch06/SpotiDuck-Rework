@@ -1,0 +1,643 @@
+/* ==========================================================================
+   Mock of the *desktop* Spotify web player.
+   --------------------------------------------------------------------------
+   This is a fixture, not app code: it reproduces the DOM structure and the
+   visual language of open.spotify.com (desktop, wide viewport) closely enough
+   for the injected mobile layer to be developed and reviewed offline.
+
+   Selector names follow the real web player (`data-testid=…`, `#main-view`,
+   `#Desktop_LeftSidebar_Id`, `aside[data-testid=now-playing-bar]`, …) because
+   that is exactly what the injected CSS/JS hooks onto.
+   ========================================================================== */
+
+:root {
+  --mock-bg: #000;
+  --mock-panel: #121212;
+  --mock-elev: #1f1f1f;
+  --mock-hi: #2a2a2a;
+  --mock-text: #fff;
+  --mock-sub: #b3b3b3;
+  --mock-green: #1ed760;
+  --encore-body-font-stack: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--mock-bg);
+  color: var(--mock-text);
+  font-family: var(--encore-body-font-stack);
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  overflow: hidden;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+img {
+  display: block;
+}
+
+/* ---------------------------------------------------------------- shell -- */
+div[data-testid="root"] {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) 400px;
+  grid-template-areas:
+    "nav nav"
+    "main side"
+    "bar bar";
+  height: 100%;
+  gap: 8px;
+  padding: 8px;
+}
+
+#global-nav-bar {
+  grid-area: nav;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 56px;
+  padding: 0 8px;
+}
+
+.nav-buttons {
+  display: flex;
+  gap: 6px;
+}
+
+.nav-pill {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.7);
+  display: grid;
+  place-items: center;
+  color: var(--mock-sub);
+}
+
+#global-nav-bar form[role="search"] {
+  flex: 0 1 420px;
+  margin-left: 8px;
+  position: relative;
+}
+
+#global-nav-bar input[data-testid="search-input"] {
+  width: 100%;
+  height: 40px;
+  border-radius: 500px;
+  border: 0;
+  background: var(--mock-elev);
+  color: var(--mock-text);
+  padding: 0 16px 0 40px;
+  font-size: 14px;
+}
+
+#global-nav-bar .nav-logo {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  color: #fff;
+}
+
+.nav-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: var(--mock-sub);
+}
+
+.nav-icon.is-round {
+  background: #2a2a2a;
+  color: #fff;
+}
+.nav-icon:hover {
+  color: #fff;
+}
+
+/* ---------------------------------------------------------------- main -- */
+.main-view-container {
+  grid-area: main;
+  background: var(--mock-panel);
+  border-radius: 8px;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.main-view-container__scroll-node {
+  height: 100%;
+  overflow-y: auto;
+}
+
+#main-view {
+  min-height: 100%;
+}
+
+.contentSpacing {
+  padding: 0 24px;
+}
+
+section[data-testid="home-page"] {
+  padding-top: 12px;
+}
+
+div[data-testid="topbar-content"] {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 56px;
+  padding: 0 24px;
+  gap: 16px;
+}
+
+div[role="tablist"] {
+  display: flex;
+  gap: 8px;
+  padding: 0 24px 12px;
+}
+
+div[role="tablist"] button {
+  height: 32px;
+  padding: 0 16px;
+  border-radius: 500px;
+  background: var(--mock-hi);
+  color: var(--mock-text);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+div[role="tablist"] button[aria-selected="true"] {
+  background: #fff;
+  color: #000;
+}
+
+div[data-testid="grid-container"] {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  padding: 0 24px 8px;
+  margin: 0 0 24px;
+}
+
+div[data-testid="card"] {
+  background: var(--mock-elev);
+  border-radius: 6px;
+  padding: 12px;
+  transition: background-color 200ms ease;
+  min-width: 0;
+}
+div[data-testid="card"]:hover {
+  background: var(--mock-hi);
+}
+
+div[data-testid="card-image"] {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  margin-bottom: 12px;
+}
+div[data-testid="card-image"] img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+div[data-testid="card-title"] {
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+div[data-testid="card-subtitle"] {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--mock-sub);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+section[data-testid="component-shelf"] {
+  padding: 8px 0;
+}
+
+section[data-testid="component-shelf"] h2,
+h2.section-title {
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  padding: 0 24px;
+  margin: 8px 0 12px;
+}
+
+/* Shortcut tiles (the "Raccourcis" grid of the desktop home) */
+.shortcut-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+}
+.shortcut {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(255, 255, 255, 0.08) !important;
+  border-radius: 6px;
+  padding: 0 !important;
+  overflow: hidden;
+  height: 64px;
+  text-align: left;
+}
+.shortcut img {
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+.shortcut span {
+  font-size: 14px;
+  font-weight: 700;
+  padding-right: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Page hero (playlist) */
+.page-hero {
+  display: flex;
+  align-items: flex-end;
+  gap: 24px;
+  padding: 24px;
+  background: linear-gradient(to bottom, #4a3b6b, rgba(18, 18, 18, 0.9));
+  min-height: 30vh;
+}
+.page-hero img {
+  width: 200px;
+  height: 200px;
+  border-radius: 4px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+}
+.page-hero .kind {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.page-hero h1 {
+  font-size: 64px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  margin: 8px 0;
+  line-height: 1.05;
+}
+.page-hero .meta {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+div[data-testid="action-bar-row"] {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 24px;
+}
+div[data-testid="action-bar-row"] button[data-testid="play-button"] {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: var(--mock-green);
+  color: #000;
+  display: grid;
+  place-items: center;
+}
+div[data-testid="action-bar-row"] button:not([data-testid="play-button"]) {
+  color: var(--mock-sub);
+  font-size: 22px;
+}
+
+/* Tracklist */
+div[data-testid="tracklist-container"] {
+  padding: 0 12px 24px;
+}
+div[data-testid="tracklist-header"],
+div[data-testid="tracklist-row"] {
+  display: grid;
+  grid-template-columns: 46px minmax(200px, 4fr) minmax(120px, 2fr) minmax(80px, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px;
+  color: var(--mock-sub);
+  font-size: 14px;
+}
+div[data-testid="tracklist-row"] {
+  height: 56px;
+  border-radius: 4px;
+  color: var(--mock-text);
+}
+div[data-testid="tracklist-row"]:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+div[data-testid="tracklist-row"] .cell-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+div[data-testid="tracklist-row"] .cell-title img {
+  width: 40px;
+  height: 40px;
+  border-radius: 4px;
+}
+div[data-testid="tracklist-row"] .cell-title .t {
+  font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+div[data-testid="tracklist-row"] .cell-title .a {
+  font-size: 13px;
+  color: var(--mock-sub);
+}
+div[data-testid="tracklist-row"] .row-menu {
+  justify-self: end;
+  color: var(--mock-sub);
+}
+
+/* -------------------------------------------------------------- sidebar -- */
+#Desktop_LeftSidebar_Id {
+  grid-area: side;
+  background: var(--mock-panel);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#Desktop_LeftSidebar_Id header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  color: var(--mock-sub);
+}
+#Desktop_LeftSidebar_Id header h1 {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--mock-text);
+  margin: 0;
+}
+#Desktop_LeftSidebar_Id > nav > div {
+  border-radius: 8px;
+  padding: 8px 16px;
+}
+.YourLibraryX {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.YourLibraryX > div > header {
+  padding: 8px 16px 0;
+}
+.library-chips {
+  display: flex;
+  gap: 8px;
+  padding: 0 16px 8px;
+}
+.library-chips span {
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 500px;
+  background: var(--mock-hi);
+  color: #fff;
+  font-size: 13px;
+  display: grid;
+  place-items: center;
+}
+div[role="grid"].library-list {
+  overflow-y: auto;
+  padding: 0 8px 8px;
+}
+div[role="row"] {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+div[role="row"]:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+div[role="row"] img {
+  width: 48px;
+  height: 48px;
+  border-radius: 4px;
+  object-fit: cover;
+}
+div[role="row"].is-round img {
+  border-radius: 50%;
+}
+div[role="row"] .lib-name {
+  font-size: 15px;
+  font-weight: 500;
+}
+div[role="row"] .lib-meta {
+  font-size: 13px;
+  color: var(--mock-sub);
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+/* --------------------------------------------------------------- search -- */
+section[data-testid="search-page"] .browse-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.browse-card {
+  position: relative;
+  aspect-ratio: 1 / 0.62;
+  border-radius: 8px;
+  overflow: hidden;
+  padding: 16px;
+  font-size: 20px;
+  font-weight: 800;
+  color: #fff;
+}
+
+/* ------------------------------------------------------- now playing bar -- */
+aside[data-testid="now-playing-bar"] {
+  grid-area: bar;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 88px;
+  padding: 0 16px;
+  background: #000;
+}
+
+div[data-testid="now-playing-widget"] {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 30%;
+  min-width: 180px;
+}
+div[data-testid="now-playing-widget"] > div:first-child img {
+  width: 56px;
+  height: 56px;
+  border-radius: 4px;
+}
+.np-links {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+a[data-testid="context-item-link"] {
+  font-size: 14px;
+  color: #fff;
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+a[data-testid="context-item-info-artist"] {
+  font-size: 12px;
+  color: var(--mock-sub);
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.np-like {
+  width: 32px;
+  height: 32px;
+  color: var(--mock-sub);
+}
+.np-like[aria-checked="true"] {
+  color: var(--mock-green);
+}
+
+div[data-testid="player-controls"] {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.control-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.control-row button {
+  color: var(--mock-sub);
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+}
+.control-row button:hover {
+  color: #fff;
+}
+.control-row button[aria-checked="true"],
+.control-row button.is-on {
+  color: var(--mock-green);
+}
+button[data-testid="control-button-playpause"] {
+  width: 40px !important;
+  height: 40px !important;
+  border-radius: 50%;
+  background: #fff;
+  color: #000 !important;
+}
+.playback-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  font-size: 11px;
+  color: var(--mock-sub);
+}
+div[data-testid="playback-progressbar"] {
+  flex: 1;
+  display: flex;
+  align-items: center;
+}
+div[data-testid="playback-progressbar"] input[type="range"] {
+  width: 100%;
+  accent-color: var(--mock-green);
+}
+.np-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--mock-sub);
+}
+.np-right button {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  color: inherit;
+}
+.np-right button:hover {
+  color: #fff;
+}
+
+/* --------------------------------------------------------------- panel --- */
+#Desktop_PanelContainer_Id {
+  grid-area: side;
+  align-self: end;
+  max-height: 70%;
+  background: var(--mock-elev);
+  border-radius: 8px;
+  padding: 12px;
+  overflow: hidden;
+  display: none;
+}
+#Desktop_PanelContainer_Id h3 {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+.queue-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 0;
+  font-size: 13px;
+}
+.queue-row img {
+  width: 40px;
+  height: 40px;
+  border-radius: 4px;
+}
+.queue-row .q-a {
+  color: var(--mock-sub);
+  font-size: 12px;
+}
+
+/* Utility */
+.spacer {
+  flex: 1;
+}

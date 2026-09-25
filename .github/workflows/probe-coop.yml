@@ -1,0 +1,68 @@
+name: Probe the shell
+
+# Sonde de la coque. `npm run smoke` vérifie la coque sur une page **factice** :
+# il ne dit rien de la vraie page de Spotify, et c'est exactement l'angle mort
+# dans lequel l'utilisateur est tombé deux fois (« le bouton ne fait rien »,
+# puis « les boutons ne sont plus reliés à aucune action »).
+#
+# Cette sonde charge la coque sur open.spotify.com **et** sur la page de
+# connexion, dans un vrai Chrome, exactement comme l'application le fait
+# (identité au début du chargement, coque à la fin), puis relève :
+#
+#   · la coque est-elle construite (`.sd-layer`, classe `sd-mobile`, onglets) ?
+#   · ses styles sont-ils appliqués (position et taille réelle de la barre) ?
+#   · un appui sur un onglet produit-il une navigation ?
+#   · quelles erreurs la page a-t-elle levées ?
+#
+# Aucun échec n'est bloquant : tout est publié en annotations (quatre au plus —
+# GitHub tronque au-delà).
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/probe-coop.yml"
+      - "tools/probe-coop.mjs"
+      # La sonde mesure l'interface : elle doit se déclencher **quand
+      # l'interface change**, sinon on relit une mesure périmée en croyant
+      # mesurer la version qu'on vient d'écrire (c'est arrivé au tour
+      # précédent : la feuille « tenir dans l'écran » ajoutée, et l'annotation
+      # relue d'un run d'avant).
+      - "src/inject/**"
+      - "dist/spotiduck-ui.js"
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Construire la coque livrée
+        run: npm ci --no-audit --no-fund && npm run build
+      - name: Chrome du runner
+        run: |
+          set +e -uo pipefail
+          google-chrome --version || chromium --version || true
+      - name: Installer le pilote CDP
+        run: npm install --no-save --no-audit --no-fund puppeteer-core@23
+      - name: Le banc de démonstration (notre interface sur le faux lecteur)
+        run: |
+          node tools/serve.mjs 5173 > /tmp/serve.log 2>&1 &
+          # Le banc est dans demo/ : `/player.html` à la racine répond 404, et la
+          # première version de cette sonde mesurait donc une page d'erreur.
+          for i in $(seq 1 20); do
+            curl -sf http://127.0.0.1:5173/demo/player.html -o /dev/null && break
+            sleep 0.5
+          done
+          curl -sf -o /dev/null http://127.0.0.1:5173/demo/player.html && echo "banc prêt" || echo "banc injoignable"
+      - name: Charger la coque sur la vraie page
+        run: node tools/probe-coop.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: probe-coop
+          path: /tmp/probe-coop
+          if-no-files-found: ignore

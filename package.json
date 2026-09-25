@@ -1,0 +1,30 @@
+{
+  "name": "spotiduck-ui",
+  "version": "2.11.17",
+  "private": true,
+  "description": "Mobile UI layer (Spotify-app-like shell) injected into the SpotiDuck WebView",
+  "type": "module",
+  "scripts": {
+    "build": "node tools/build-original-fit.mjs && node tools/build.mjs && node tools/build-original.mjs",
+    "watch": "node tools/build.mjs --watch",
+    "smoke": "node tools/smoke.mjs",
+    "sync:android": "node tools/sync-android.mjs",
+    "android": "node tools/build.mjs && node tools/sync-android.mjs",
+    "demo": "node tools/serve.mjs",
+    "shots": "node tools/screenshots.mjs",
+    "audit": "node tools/audit-links.mjs",
+    "build:original": "node tools/build-original.mjs && node tools/build-original-fit.mjs"
+  },
+  "keywords": [
+    "spotiduck",
+    "spotify",
+    "webview",
+    "userscript",
+    "ui"
+  ],
+  "license": "GPL-3.0",
+  "devDependencies": {
+    "acorn": "^8.18.0",
+    "jsdom": "^25.0.1"
+  }
+}

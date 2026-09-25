@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Déclaration du widget : quatre colonnes sur deux (Android 12+ le dit
+  explicitement ; les versions antérieures s'en servent comme d'un minimum).
+  `updatePeriodMillis = 0` : le widget n'a pas à se réveiller tout seul, c'est
+  le service qui le redessine à chaque changement de lecture.
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:initialLayout="@layout/widget_player"
+    android:minWidth="250dp"
+    android:minHeight="70dp"
+    android:targetCellWidth="4"
+    android:targetCellHeight="2"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen"
+    android:description="@string/widget_description"
+    android:updatePeriodMillis="0" />

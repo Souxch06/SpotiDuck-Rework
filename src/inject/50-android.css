@@ -1,0 +1,640 @@
+/* ==========================================================================
+   SpotiDuck — Mobile UI layer · part 5/5: adaptation Android (Material 3)
+   --------------------------------------------------------------------------
+   Loaded last: this file is the *platform* pass. It does not add features, it
+   makes everything above look and behave like a native Android app instead of
+   a desktop web page squeezed into a phone:
+
+     1. Typographie  — Roboto, échelle Material (11→28 px), font boosting off
+     2. Densité      — cibles 48 px, barres 56/64 px, gouttières 16 px
+     3. Formes       — Material 3 : cartes 8, feuilles 28, pastilles 999
+     4. Surfaces     — #121212 / #1e1e1e / #282828, thème clair complet
+     5. Mouvement    — courbes et durées Material, état pressé (state layer)
+     6. Ripple/état  — pas de :hover (tactile), retour au doigt systématique
+     7. Barres système — encoches, barre de navigation, edge to edge
+     8. Listes       — lignes 56 px, séparateurs, pochettes arrondies
+     9. Contrôles    — interrupteurs et segments Material
+    10. WebView      — scrollbars, sélection, callouts, overscroll
+
+   Règle de conduite (héritée de l'audit) : les règles qui touchent le DOM de
+   Spotify sont scopées sur `.sd-root`, celles de la coque sur `.sd-layer`.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1. Typographie
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile {
+  /* Échelle globale : c'est le seul levier qui change la taille de TOUTE
+     l'interface. Elle a deux facteurs, et dans cet ordre :
+
+       · `--sd-u-base` — **mesurée sur l'appareil** (largeur de mise en page et
+         hauteur, voir `Device.apply` dans la coque) : 0,92 sur un 360×800,
+         1,00 sur un 412×915 (la référence du projet), 1,15 sur un écran large,
+         0,92 en paysage. C'est ce qui fait que l'interface s'adapte **toute
+         seule** à l'appareil, au lieu de supposer un téléphone de 412 px ;
+       · `--sd-density` — le réglage manuel « Taille de l'interface »
+         (0,8 / 1 / 1,12), qui reste disponible par-dessus.
+
+     Avant, seul le second existait et valait 1 : la même interface pour un
+     téléphone étroit et une tablette. */
+  --sd-u-base: 1;
+  --sd-density: 1;
+  --sd-u: calc(var(--sd-u-base) * var(--sd-density));
+
+  /* Roboto d'abord : c'est la police système d'Android (et de Chrome/WebView).
+     Spotify sert sa police « Circular » via une webfont ; on garde la sienne
+     uniquement si Roboto est absente. */
+  --sd-font: Roboto, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
+  --sd-font-display: Roboto, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
+
+  /* Échelle Material (px CSS = dp dans une WebView Android). */
+  --sd-fs-display: calc(28px * var(--sd-u)); /* grands titres de page */
+  --sd-fs-title-lg: calc(22px * var(--sd-u)); /* titres de section   */
+  --sd-fs-title: calc(16px * var(--sd-u)); /* titres de liste       */
+  --sd-fs-body: calc(14px * var(--sd-u)); /* corps de texte          */
+  --sd-fs-label: calc(12px * var(--sd-u)); /* libellés, méta         */
+  --sd-fs-caption: calc(11px * var(--sd-u)); /* texte tertiaire      */
+  --sd-lh-tight: 1.25;
+  --sd-lh-body: 1.45;
+
+  /* Letter-spacing Material : négatif sur les grands titres, nul ailleurs. */
+  --sd-ls-display: -0.4px;
+  --sd-ls-title: -0.1px;
+  --sd-ls-caps: 0.4px;
+}
+
+/* La police s'applique aussi au web player : sans ça, la moitié de l'écran
+   garde la typo « desktop web » et le mélange des deux est ce qui fait le
+   plus « site web » plutôt qu'application. */
+html.sd-mobile .sd-layer,
+html.sd-mobile .sd-layer *,
+html.sd-mobile .sd-root,
+html.sd-mobile .sd-root *:not(svg):not(svg *) {
+  font-family: var(--sd-font) !important;
+}
+
+/* Android grossit (« font boosting ») le texte des blocs larges : sur une
+   interface d'application ça casse la mise en page. */
+html.sd-mobile {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+html.sd-mobile .sd-layer .sd-topbar-title,
+html.sd-mobile .sd-layer .sd-player-track {
+  font-weight: 700;
+  letter-spacing: var(--sd-ls-title);
+  line-height: var(--sd-lh-tight);
+}
+html.sd-mobile .sd-layer .sd-tab-label,
+html.sd-mobile .sd-layer .sd-mini-artist,
+html.sd-mobile .sd-layer .sd-row-value {
+  font-weight: 400;
+  letter-spacing: 0;
+}
+html.sd-mobile .sd-layer .sd-tab-label {
+  font-size: var(--sd-fs-caption);
+  letter-spacing: var(--sd-ls-caps);
+}
+html.sd-mobile .sd-layer .sd-mini-title {
+  font-size: var(--sd-fs-body);
+  font-weight: 500;
+}
+html.sd-mobile .sd-layer .sd-mini-artist {
+  font-size: var(--sd-fs-label);
+}
+
+/* Le chrome du web player : mêmes règles, pour que les titres de section,
+   les lignes de pistes et les cartes suivent la même échelle que notre coque. */
+html.sd-mobile .sd-root h1,
+html.sd-mobile .sd-root [data-testid="home-page"] h2,
+html.sd-mobile .sd-root [data-testid^="component-shelf"] h2 {
+  letter-spacing: var(--sd-ls-display);
+  line-height: var(--sd-lh-tight);
+}
+html.sd-mobile .sd-root [data-testid="tracklist-row"] [dir="auto"],
+html.sd-mobile .sd-root [role="row"] [dir="auto"] {
+  font-size: var(--sd-fs-body) !important;
+  line-height: var(--sd-lh-body);
+}
+html.sd-mobile .sd-root [data-testid="context-item-info-artist"],
+html.sd-mobile .sd-root [data-testid="card-subtitle"] {
+  font-size: var(--sd-fs-label) !important;
+  line-height: var(--sd-lh-body);
+}
+
+/* --------------------------------------------------------------------------
+   2. Densité (cibles et barres Android)
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile {
+  --sd-tap: calc(48px * var(--sd-u)); /* Material : 48 dp minimum */
+  --sd-tap-sm: calc(40px * var(--sd-u)); /* contrôles secondaires  */
+  --sd-tabbar-h: calc(64px * var(--sd-u)); /* barre de navigation  */
+  --sd-mini-h: calc(64px * var(--sd-u)); /* mini-lecteur            */
+  --sd-player-header-h: calc(56px * var(--sd-u)); /* app bar       */
+  --sd-gutter: calc(16px * var(--sd-u)); /* marge système          */
+  --sd-gap: calc(8px * var(--sd-u)); /* rythme 8 dp               */
+}
+
+/* Les contrôles de notre coque respectent la nouvelle cible. */
+html.sd-mobile .sd-layer button,
+html.sd-mobile .sd-layer [role="button"],
+html.sd-mobile .sd-layer .sd-tab,
+html.sd-mobile .sd-layer .sd-switch {
+  min-height: var(--sd-tap);
+}
+
+/* Les icônes restent à 24 dp, mais leur boîte grandit. */
+html.sd-mobile .sd-layer .sd-iconbtn svg,
+html.sd-mobile .sd-layer .sd-tab svg {
+  width: 24px;
+  height: 24px;
+}
+
+/* Les contrôles natifs de Spotify aussi (l'audit relevait des chevrons 16 px). */
+html.sd-mobile .sd-root button:has(> svg:only-child),
+html.sd-mobile .sd-root [role="button"]:has(> svg:only-child) {
+  min-width: var(--sd-tap);
+  min-height: var(--sd-tap);
+}
+
+/* --------------------------------------------------------------------------
+   3. Formes Material 3
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile {
+  --sd-radius: 8px; /* cartes, pochettes de liste */
+  --sd-radius-lg: 12px; /* grandes cartes, feuilles d'action */
+  --sd-radius-xl: 16px;
+  --sd-radius-sheet: 28px; /* feuilles basses (M3)       */
+  --sd-radius-pill: 999px;
+  --sd-radius-art: 6px; /* pochette du mini-lecteur   */
+}
+
+html.sd-mobile .sd-layer .sd-mini {
+  border-radius: var(--sd-radius-lg);
+}
+html.sd-mobile .sd-layer .sd-mini-art,
+html.sd-mobile .sd-layer .sd-mini-art img {
+  border-radius: var(--sd-radius-art);
+}
+html.sd-mobile .sd-layer .sd-player-art,
+html.sd-mobile .sd-layer .sd-player-art img {
+  border-radius: var(--sd-radius-xl);
+}
+html.sd-mobile .sd-layer .sd-sheet,
+html.sd-mobile .sd-layer .sd-player {
+  border-radius: var(--sd-radius-sheet) var(--sd-radius-sheet) 0 0;
+}
+html.sd-mobile .sd-layer .sd-seg {
+  border-radius: var(--sd-radius-pill);
+}
+html.sd-mobile .sd-layer .sd-seg > button {
+  border-radius: var(--sd-radius-pill);
+}
+html.sd-mobile .sd-layer .sd-btn,
+html.sd-mobile .sd-layer .sd-login-cta {
+  border-radius: var(--sd-radius-pill);
+  min-height: var(--sd-tap);
+  padding: 0 24px;
+  font-size: var(--sd-fs-body);
+  font-weight: 500;
+  letter-spacing: var(--sd-ls-caps);
+  text-transform: none;
+}
+
+/* Cartes du web player : coins Material, plus de relief « desktop ». */
+html.sd-mobile .sd-root [data-testid="card-click-handler"],
+html.sd-mobile .sd-root [data-testid="card-image"],
+html.sd-mobile .sd-root [data-testid^="component-shelf"] img {
+  border-radius: var(--sd-radius);
+}
+html.sd-mobile .sd-root [data-testid="card-click-handler"]:hover {
+  background: transparent;
+}
+
+/* --------------------------------------------------------------------------
+   4. Surfaces et élévation
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile {
+  --sd-surface: #121212;
+  --sd-surface-1: #1e1e1e; /* M3 surface-container            */
+  --sd-surface-2: #282828; /* menus, feuilles                 */
+  --sd-surface-3: #333333; /* StateLayer sur surface 2        */
+  --sd-outline: rgba(255, 255, 255, 0.14);
+  --sd-outline-soft: rgba(255, 255, 255, 0.08);
+  --sd-state: rgba(255, 255, 255, 0.12); /* Material state layer */
+  --sd-bar: rgba(18, 18, 18, 0.92);
+  --sd-shadow-2: 0 2px 6px rgba(0, 0, 0, 0.45);
+  --sd-shadow-3: 0 -6px 24px rgba(0, 0, 0, 0.55);
+  --sd-bg-tint: var(--sd-state);
+}
+
+html.sd-mobile.sd-theme-light {
+  --sd-surface: #ffffff;
+  --sd-surface-1: #f5f5f5;
+  --sd-surface-2: #ffffff;
+  --sd-surface-3: #ebeef1;
+  --sd-outline: rgba(0, 0, 0, 0.16);
+  --sd-outline-soft: rgba(0, 0, 0, 0.08);
+  --sd-state: rgba(0, 0, 0, 0.09);
+  --sd-bar: rgba(255, 255, 255, 0.94);
+  --sd-bg-tint: var(--sd-state);
+}
+
+/* Élévation : la barre du bas est une surface, pas un trait. */
+html.sd-mobile .sd-layer .sd-tabbar {
+  border-top: 1px solid var(--sd-outline-soft);
+  box-shadow: var(--sd-shadow-3);
+}
+html.sd-mobile .sd-layer .sd-mini {
+  border: 1px solid var(--sd-outline-soft);
+  box-shadow: var(--sd-shadow-2);
+  background: var(--sd-surface-1);
+}
+html.sd-mobile .sd-layer .sd-sheet {
+  background: var(--sd-surface-1);
+  border-top: 1px solid var(--sd-outline-soft);
+}
+html.sd-mobile .sd-layer .sd-row + .sd-row,
+html.sd-mobile .sd-layer .sd-group + .sd-group {
+  border-top: 1px solid var(--sd-outline-soft);
+}
+
+/* --------------------------------------------------------------------------
+   5. Mouvement Material
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile {
+  /* emphasised decelerate / accelerate, durées M3 : 150 · 250 · 400 */
+  --sd-ease: cubic-bezier(0.2, 0, 0, 1);
+  --sd-ease-out: cubic-bezier(0.05, 0.7, 0.1, 1);
+  --sd-dur-fast: 120ms;
+  --sd-dur: 220ms;
+  --sd-dur-slow: 400ms;
+}
+
+html.sd-mobile .sd-layer .sd-mini,
+html.sd-mobile .sd-layer .sd-player,
+html.sd-mobile .sd-layer .sd-sheet,
+html.sd-mobile .sd-layer .sd-tab,
+html.sd-mobile .sd-layer .sd-iconbtn,
+html.sd-mobile .sd-layer .sd-switch i {
+  transition-duration: var(--sd-dur);
+  transition-timing-function: var(--sd-ease);
+}
+
+/* Changement d'onglet : fondu court au lieu du saut sec. */
+html.sd-mobile .sd-root [data-testid="home-page"],
+html.sd-mobile .sd-root [data-testid="search-page"] {
+  animation: sd-fade-in var(--sd-dur) var(--sd-ease-out);
+}
+@keyframes sd-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   6. Retour au doigt (state layer) — pas de hover sur tactile
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile .sd-layer button,
+html.sd-mobile .sd-layer [role="button"],
+html.sd-mobile .sd-layer .sd-tab,
+html.sd-mobile .sd-layer .sd-row,
+html.sd-mobile .sd-root [data-testid="tracklist-row"],
+html.sd-mobile .sd-root [data-testid="card-click-handler"] {
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color var(--sd-dur-fast) var(--sd-ease);
+}
+
+html.sd-mobile .sd-layer .sd-iconbtn:active {
+  background: var(--sd-state);
+}
+html.sd-mobile .sd-layer .sd-tab:active .sd-tab-icon {
+  transform: scale(0.92);
+}
+html.sd-mobile .sd-layer .sd-ctrl-play:active,
+html.sd-mobile .sd-layer .sd-login-cta:active {
+  transform: scale(0.96);
+}
+html.sd-mobile .sd-layer .sd-ctrl-play,
+html.sd-mobile .sd-layer .sd-login-cta {
+  transition: transform var(--sd-dur-fast) var(--sd-ease), background-color var(--sd-dur-fast) var(--sd-ease);
+}
+
+/* Sur tactile, tout ce qui n'apparaissait qu'au survol doit être visible. */
+@media (hover: none) {
+  html.sd-mobile .sd-root [data-testid="tracklist-row"] button,
+  html.sd-mobile .sd-root [data-testid="tracklist-row"] [role="button"] {
+    opacity: 1 !important;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   7. Barres système (edge to edge)
+   -------------------------------------------------------------------------- */
+
+/* Le contenu commence sous la barre d'état, la coque gère la zone gestuelle :
+   le runtime reçoit les vraies valeurs via `--sd-safe-*-override`. */
+html.sd-mobile .sd-root [data-testid="home-page"],
+html.sd-mobile .sd-root [data-testid="search-page"],
+html.sd-mobile .sd-root [data-testid="playlist-page"],
+html.sd-mobile .sd-root [data-testid="album-page"],
+html.sd-mobile .sd-root [data-testid="artist-page"],
+html.sd-mobile .sd-root [data-testid="library-page"] {
+  padding-top: calc(var(--sd-safe-t) + var(--sd-gap));
+}
+
+/* La barre du bas laisse respirer la zone gestuelle Android (16 dp au lieu des
+   8 dp d'iOS) quand l'encoche basse est nulle. */
+html.sd-mobile {
+  --sd-safe-b: max(env(safe-area-inset-bottom, 0px), var(--sd-safe-b-override, 0px), 8px);
+}
+
+/* --------------------------------------------------------------------------
+   8. Listes et lignes
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile .sd-root [data-testid="tracklist-row"],
+html.sd-mobile .sd-root [role="row"] {
+  min-height: 56px;
+  padding-left: var(--sd-gutter);
+  padding-right: var(--sd-gutter);
+  border-radius: 4px;
+}
+
+html.sd-mobile .sd-root [data-testid="tracklist-row"] img,
+html.sd-mobile .sd-root [data-testid="tracklist-row"] [data-testid="cover-art-image"] {
+  border-radius: var(--sd-radius-art);
+}
+
+/* Les séparateurs ne collent plus aux bords (inset list Material). */
+html.sd-mobile .sd-root [data-testid="tracklist-row"] + [data-testid="tracklist-row"] {
+  border-top: 1px solid var(--sd-outline-soft);
+}
+
+/* --------------------------------------------------------------------------
+   9. Contrôles Material (interrupteurs, segments, curseur)
+   -------------------------------------------------------------------------- */
+
+/* Interrupteur : piste 52×32, pouce 24, accent quand actif. */
+html.sd-mobile .sd-layer .sd-switch {
+  width: 52px;
+  height: 32px;
+  border-radius: var(--sd-radius-pill);
+  background: var(--sd-surface-3);
+  border: 2px solid var(--sd-outline);
+}
+html.sd-mobile .sd-layer .sd-switch i {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #d0d0d0;
+  transform: translateX(0);
+}
+html.sd-mobile .sd-layer .sd-row-switch[aria-checked="true"] .sd-switch,
+html.sd-mobile .sd-layer .sd-row-switch[aria-checked="true"] .sd-switch i {
+  background: var(--sd-accent);
+}
+html.sd-mobile .sd-layer .sd-row-switch[aria-checked="true"] .sd-switch i {
+  transform: translateX(20px);
+  background: #08210f;
+}
+
+/* Segments : contour 1 px, sélection en teinte accent, hauteur 40 dp. */
+html.sd-mobile .sd-layer .sd-seg {
+  border: 1px solid var(--sd-outline);
+  background: transparent;
+  padding: 0;
+  height: var(--sd-tap-sm);
+}
+html.sd-mobile .sd-layer .sd-seg > button {
+  height: 100%;
+  padding: 0 16px;
+  font-size: var(--sd-fs-label);
+  font-weight: 500;
+  letter-spacing: var(--sd-ls-caps);
+  color: var(--sd-sub);
+  background: transparent;
+}
+html.sd-mobile .sd-layer .sd-seg > button[aria-checked="true"],
+html.sd-mobile .sd-layer .sd-seg > button[aria-selected="true"],
+html.sd-mobile .sd-layer .sd-seg > button.is-on {
+  background: var(--sd-accent);
+  color: #08210f;
+}
+
+/* Curseur de lecture : rail 4 dp, pouce 14 dp (M3 slider). */
+html.sd-mobile .sd-layer .sd-seek-track {
+  height: 4px;
+  border-radius: var(--sd-radius-pill);
+}
+html.sd-mobile .sd-layer .sd-seek-thumb {
+  width: 14px;
+  height: 14px;
+}
+html.sd-mobile .sd-layer .sd-seek.is-dragging .sd-seek-track {
+  height: 6px;
+}
+html.sd-mobile .sd-layer .sd-mini-progress i {
+  height: 2px;
+  background: var(--sd-accent);
+}
+
+/* --------------------------------------------------------------------------
+   10. WebView : détails tactiles
+   -------------------------------------------------------------------------- */
+
+/* Pas de barre de défilement : une application Android n'en montre jamais. */
+html.sd-mobile ::-webkit-scrollbar,
+html.sd-mobile .sd-root ::-webkit-scrollbar {
+  width: 0 !important;
+  height: 0 !important;
+}
+html.sd-mobile .os-scrollbar {
+  display: none !important;
+}
+
+/* Le rebond élastique du WebView (halo bleu/noir en bout de liste) est le
+   détail qui trahit le plus une page web. */
+html.sd-mobile,
+html.sd-mobile body,
+html.sd-mobile .sd-root [data-testid="main-view-container"] > div {
+  overscroll-behavior: none !important;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Sélection et menu contextuel : uniquement là où c'est du texte. */
+html.sd-mobile .sd-layer .sd-mini,
+html.sd-mobile .sd-layer .sd-tabbar,
+html.sd-mobile .sd-layer .sd-topbar,
+html.sd-mobile .sd-layer .sd-sheet-head {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Un appui long dans une liste ne doit pas ouvrir le menu du navigateur. */
+html.sd-mobile .sd-root [data-testid="tracklist-row"],
+html.sd-mobile .sd-root [data-testid="card-click-handler"] {
+  -webkit-touch-callout: none;
+}
+
+/* Sur écran large (tablette, paysage), on garde la coque compacte : le
+   mini-lecteur et la barre ne s'étirent pas sur toute la largeur. */
+@media (min-width: 700px) {
+  html.sd-mobile .sd-layer .sd-mini,
+  html.sd-mobile .sd-layer .sd-tabbar > *,
+  html.sd-mobile .sd-layer .sd-player-body {
+    max-width: 640px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   11. Écran d'accueil (session déconnectée)
+   --------------------------------------------------------------------------
+   Remplace la page marketing desktop de Spotify par un écran SpotiDuck :
+   logo, une phrase, un bouton. C'est le premier écran que voit un nouvel
+   utilisateur — il doit ressembler à une application, pas à une page web.
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile .sd-layer .sd-welcome {
+  position: fixed;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: calc(var(--sd-safe-t) + 24px) 24px calc(var(--sd-safe-b) + 24px);
+  background:
+    radial-gradient(120% 80% at 50% 0%, rgba(30, 215, 96, 0.16), transparent 60%),
+    var(--sd-surface);
+  z-index: 30;
+}
+html.sd-mobile.sd-welcome-on .sd-layer .sd-welcome {
+  display: flex;
+}
+/* L'écran d'accueil remplace le contenu : on masque la coque de lecture. */
+html.sd-mobile.sd-welcome-on .sd-layer > .sd-mini,
+html.sd-mobile.sd-welcome-on .sd-layer > .sd-tabbar,
+html.sd-mobile.sd-welcome-on .sd-layer > .sd-topbar {
+  display: none;
+}
+
+html.sd-mobile .sd-layer .sd-welcome-card {
+  width: 100%;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 12px;
+}
+
+html.sd-mobile .sd-layer .sd-welcome-logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 96px;
+  height: 96px;
+  margin-bottom: 8px;
+  border-radius: 50%;
+  background: var(--sd-accent);
+  color: #08210f;
+}
+html.sd-mobile .sd-layer .sd-welcome-logo svg {
+  width: 52px;
+  height: 52px;
+  fill: currentColor;
+}
+
+html.sd-mobile .sd-layer .sd-welcome-title {
+  margin: 0;
+  font-size: var(--sd-fs-display);
+  font-weight: 700;
+  letter-spacing: var(--sd-ls-display);
+  color: var(--sd-text);
+}
+
+html.sd-mobile .sd-layer .sd-welcome-text {
+  margin: 0 0 8px;
+  font-size: var(--sd-fs-body);
+  line-height: var(--sd-lh-body);
+  color: var(--sd-sub);
+}
+
+html.sd-mobile .sd-layer .sd-welcome-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 52px;
+  border-radius: var(--sd-radius-pill);
+  background: var(--sd-accent);
+  color: #08210f;
+  font-size: var(--sd-fs-title);
+  font-weight: 700;
+  text-decoration: none;
+}
+html.sd-mobile .sd-layer .sd-welcome-cta:active {
+  transform: scale(0.97);
+}
+
+html.sd-mobile .sd-layer .sd-welcome-note {
+  margin: 0;
+  font-size: var(--sd-fs-label);
+  color: var(--sd-sub);
+}
+
+/* Tant que l'écran d'accueil est affiché, la page Spotify dessous ne doit pas
+   apparaître en transparence sur les côtés. */
+html.sd-mobile.sd-welcome-on body {
+  background: var(--sd-surface) !important;
+}
+
+/* --------------------------------------------------------------------------
+   12. Densité (réglage « Taille de l'interface »)
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile.sd-density-compact {
+  --sd-density: 0.8;
+}
+html.sd-mobile.sd-density-normal {
+  --sd-density: 1;
+}
+html.sd-mobile.sd-density-large {
+  --sd-density: 1.12;
+}
+
+/* Les icônes suivent la densité, mais plus doucement que le texte : elles
+   restent lisibles en compact (22 dp) et ne deviennent pas énormes en grand. */
+html.sd-mobile .sd-layer .sd-iconbtn svg,
+html.sd-mobile .sd-layer .sd-tab svg {
+  width: calc(24px * (0.65 + 0.35 * var(--sd-u)));
+  height: calc(24px * (0.65 + 0.35 * var(--sd-u)));
+}
+
+/* Les titres du web player ne suivaient que partiellement l'échelle : on les
+   rattache explicitement à `--sd-u` pour que le réglage soit homogène. */
+html.sd-mobile .sd-root h1,
+html.sd-mobile .sd-root [data-testid="home-page"] h2,
+html.sd-mobile .sd-root [data-testid^="component-shelf"] h2 {
+  font-size: calc(1em * var(--sd-u));
+}
+html.sd-mobile .sd-root [data-testid="tracklist-row"] [dir="auto"],
+html.sd-mobile .sd-root [role="row"] [dir="auto"] {
+  font-size: calc(14px * var(--sd-u)) !important;
+}
+html.sd-mobile .sd-root [data-testid="context-item-info-artist"],
+html.sd-mobile .sd-root [data-testid="card-subtitle"] {
+  font-size: calc(12px * var(--sd-u)) !important;
+}

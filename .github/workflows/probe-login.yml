@@ -1,0 +1,116 @@
+name: Probe the login
+
+# Sonde de connexion. Elle répond, par la mesure, aux seules questions qui
+# décident du système de connexion de l'application :
+#
+#   1. la page de connexion de Spotify (celle que voit l'application, agent
+#      mobile) propose-t-elle **un champ mot de passe**, ou seulement les
+#      boutons sociaux ?
+#   2. `?allow_password=1` (le raccourci repris de l'application d'origine)
+#      mène-t-il encore à un formulaire utilisable, ou à une page morte ?
+#   3. que répond Google quand on clique « Continuer avec Google » depuis cette
+#      page — la page d'autorisation, ou un refus ?
+#
+# Le job `browser` pilote un vrai Chrome en mode sans tête via CDP
+# (puppeteer-core + le Chrome du runner) : il clique réellement les boutons et
+# rapporte l'adresse atteinte et le texte de la page. Le job `static` fait le
+# tour des fichiers servis (formulaire, reCAPTCHA, CSRF, redirection OAuth).
+#
+# Aucun échec ici n'est bloquant : tout est publié en annotations.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/probe-login.yml"
+      - "tools/probe-login.mjs"
+
+jobs:
+  static:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Ce que Spotify sert à un agent mobile
+        run: |
+          set +e -uo pipefail
+          UA="Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Mobile Safari/537.36"
+          mkdir -p /tmp/login && cd /tmp/login
+          for spec in \
+            "moderne|https://accounts.spotify.com/fr/login" \
+            "classique|https://accounts.spotify.com/fr/login?allow_password=1" \
+            "lecteur|https://open.spotify.com/login"; do
+            name="${spec%%|*}"; url="${spec#*|}"
+            code=$(curl -sSL -A "$UA" -H "accept-language: fr-FR,fr;q=0.9" -o "$name.html" -w "%{http_code}" "$url")
+            bytes=$(wc -c < "$name.html" 2>/dev/null || echo 0)
+            echo "::notice title=$name ($code, $bytes o)::$url"
+            echo "$name: code=$code bytes=$bytes password=$(grep -ci 'type="password"' "$name.html") recaptcha=$(grep -ci 'recaptcha' "$name.html") csrf=$(grep -ci 'csrf' "$name.html") allow_password=$(grep -ci 'allow_password' "$name.html")"
+            printf '  scripts : %s\n' "$(grep -oE 'src="[^"]+\.js[^"]*"' "$name.html" | sed 's/src="//;s/"$//' | sort -u | tr '\n' ' ')"
+            printf '  titres : %s\n' "$(grep -oE '<title>[^<]*' "$name.html" | sed 's/<title>//' | head -2 | tr '\n' ' ')"
+          done
+
+      - name: Ce que contiennent les scripts servis
+        run: |
+          set +e -uo pipefail
+          cd /tmp/login
+          UA="Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Mobile Safari/537.36"
+          i=0
+          for ref in $(cat moderne.html classique.html lecteur.html 2>/dev/null | grep -oE 'src="[^"]+\.js[^"]*"' | sed 's/src="//;s/"$//' | sort -u | head -12); do
+            case "$ref" in
+              http*) url="$ref" ;;
+              //*) url="https:$ref" ;;
+              /*) url="https://accounts.spotify.com$ref" ;;
+              *) url="https://accounts.spotify.com/$ref" ;;
+            esac
+            i=$((i+1))
+            curl -sSL -A "$UA" -o "s$i.js" -w "script $i code=%{http_code} bytes=%{size_download} $url\n" "$url"
+          done
+          echo "--- repères dans les scripts ---"
+          grep -ohE 'client_id=[A-Za-z0-9_.-]{6,}|accounts\.google\.com[^"'"'"']{0,80}|appleid\.apple\.com[^"'"'"']{0,40}|www\.facebook\.com[^"'"'"']{0,40}|recaptcha[^"'"'"']{0,40}|/api/login[^"'"'"']{0,30}|redirect_uri=[^&"'"'"']{0,80}' s*.js 2>/dev/null | sort -u | head -40
+          echo "--- chaque repère en annotation (lisible sans journaux) ---"
+          for pat in "accounts.google.com" "client_id=" "recaptcha" "/api/login" "redirect_uri=" "allow_password"; do
+            hits=$(grep -ohF "$pat" s*.js 2>/dev/null | wc -l)
+            echo "::notice title=scripts : $pat::$hits occurrence(s) dans les scripts de $i fichier(s)"
+          done
+
+      - name: L'URL d'autorisation de Google répond-elle à notre agent ?
+        run: |
+          set +e -uo pipefail
+          cd /tmp/login
+          UA="Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Mobile Safari/537.36"
+          WV="Mozilla/5.0 (Linux; Android 14; Pixel 7 Build/UP1A.231005.007; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/150.0.0.0 Mobile Safari/537.36"
+          # Une requête d'autorisation OAuth valide n'est pas reconstructible ici
+          # (il faudrait le client de Spotify) : on teste ce que Google répond à
+          # l'agent de l'application sur la porte d'entrée, et on compare avec un
+          # agent de WebView nu — c'est l'écart entre les deux qui est parlant.
+          for spec in "app|$UA" "webview|$WV"; do
+            name="${spec%%|*}"; agent="${spec#*|}"
+            code=$(curl -sSL -o "$name-google.html" -w "%{http_code}" -A "$agent" \
+              "https://accounts.google.com/signin/v2/identifier?hl=fr&flowName=GlifWebSignIn&client_id=77185425430.apps.googleusercontent.com" )
+            bytes=$(wc -c < "$name-google.html" 2>/dev/null || echo 0)
+            blocked=$(grep -ci 'disallowed_useragent' "$name-google.html" 2>/dev/null)
+            echo "::notice title=Google avec l'agent $name ($code, $bytes o)::refus=$(grep -ci 'disallowed_useragent\|ne respecte pas\|doesn.t comply' "$name-google.html") — 0 = page de connexion normale"
+          done
+
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Chrome du runner
+        run: |
+          set +e -uo pipefail
+          which google-chrome google-chrome-stable chromium || true
+          google-chrome --version || true
+      - name: Installer le pilote CDP
+        run: npm install --no-save --no-audit --no-fund puppeteer-core@23
+      - name: Cliquer réellement « Continuer avec Google »
+        run: node tools/probe-login.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: probe-login
+          path: /tmp/probe-login
+          if-no-files-found: ignore

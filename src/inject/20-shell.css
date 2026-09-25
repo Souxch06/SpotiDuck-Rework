@@ -1,0 +1,821 @@
+/* ==========================================================================
+   SpotiDuck — Mobile UI layer · part 2/2: our own chrome
+   --------------------------------------------------------------------------
+   Tab bar · mini player · full-screen player · library & search headers ·
+   landscape · accessibility.
+
+   Everything in this file is built by src/inject/spotiduck-ui.js inside a
+   single `.sd-layer` element, so the web player's React tree is never touched
+   (the old implementation inserted nodes *inside* React-managed containers,
+   which the reconciler silently deleted on the next render).
+   ========================================================================== */
+
+/* The layer itself must never create a scrollbar or catch events: it is a
+   stack of fixed elements, each one opting in to pointer events. */
+html.sd-mobile .sd-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  pointer-events: none;
+  direction: ltr;
+  font-family: var(
+    --encore-body-font-stack,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    Helvetica,
+    Arial,
+    sans-serif
+  );
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+html.sd-mobile .sd-layer > * {
+  pointer-events: auto;
+}
+/* Our elements always use the border-box: the fixed heights above (mini
+   player, tab bar, headers) assume it. The web player uses content-box in
+   places, so this must be scoped to our layer only. */
+html.sd-mobile .sd-layer,
+html.sd-mobile .sd-layer *,
+html.sd-mobile .sd-layer *::before,
+html.sd-mobile .sd-layer *::after {
+  box-sizing: border-box;
+}
+
+/* Line/solid icon pairs: the active state swaps the glyph, the way the native
+   app does (outline when idle, filled when selected). */
+html.sd-mobile .sd-icon-solid {
+  display: none;
+}
+html.sd-mobile .is-active > .sd-icon-solid {
+  display: block;
+}
+html.sd-mobile .is-active > .sd-icon-line {
+  display: none;
+}
+
+html.sd-mobile .sd-iconbtn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--sd-sub);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--sd-tap);
+  height: var(--sd-tap);
+  padding: 0;
+  border-radius: 50%;
+  transition: color 160ms ease, background-color 160ms ease, transform 120ms ease;
+  cursor: pointer;
+}
+html.sd-mobile .sd-iconbtn svg {
+  width: 24px;
+  height: 24px;
+  display: block;
+  fill: currentColor;
+}
+html.sd-mobile .sd-iconbtn:hover {
+  color: var(--sd-text);
+}
+html.sd-mobile .sd-iconbtn:active {
+  transform: scale(0.92);
+}
+html.sd-mobile .sd-iconbtn.is-active {
+  color: var(--sd-accent);
+}
+html.sd-mobile .sd-iconbtn:focus-visible,
+html.sd-mobile .sd-tab:focus-visible,
+html.sd-mobile .sd-mini:focus-visible {
+  outline: 2px solid var(--sd-text);
+  outline-offset: -2px;
+}
+html.sd-mobile .sd-iconbtn[disabled] {
+  opacity: 0.4;
+  pointer-events: none;
+}
+/* `display: inline-flex` above would otherwise beat the UA's `[hidden]` rule,
+   so a capability the web player does not expose (paroles, appareils…) would
+   still show a dead button. */
+html.sd-mobile .sd-iconbtn[hidden] {
+  display: none !important;
+}
+
+/* Animation d'apparition des barres du haut. Le mini-lecteur, lui, n'anime
+   plus rien : il est statique (voir plus bas). */
+@keyframes sd-slide-up {
+  from {
+    transform: translate3d(0, 100%, 0);
+  }
+  to {
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   9. Output-only regions: the audio element Spotify plays through is tiny
+   and covered; no rule needed, but we keep the "visualiser" cheap.
+   -------------------------------------------------------------------------- */
+
+/* --------------------------------------------------------------------------
+   10. Top bar (back / title / actions) — used by the Library tab and by
+   every sub-page. Replaces the desktop breadcrumb + the wrong "Close Library"
+   / "𝖫 &nbsp; Close Library" header text of the old layer.
+   -------------------------------------------------------------------------- */
+html.sd-mobile .sd-topbar {
+  position: fixed;
+  top: var(--sd-safe-t);
+  left: var(--sd-safe-l);
+  right: var(--sd-safe-r);
+  height: var(--sd-player-header-h);
+  z-index: 22;
+  display: none;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  background: var(--sd-bar);
+  backdrop-filter: blur(20px) saturate(1.6);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  color: var(--sd-text);
+}
+html.sd-mobile .sd-topbar.is-visible {
+  display: flex;
+}
+html.sd-mobile .sd-topbar-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+html.sd-mobile .sd-topbar-title.is-large {
+  font-size: 24px;
+  font-weight: 800;
+}
+/* On sub-pages the header must show the *page* title over the blurred art. */
+html.sd-mobile .sd-topbar .sd-back svg {
+  width: 26px;
+  height: 26px;
+}
+
+/* --------------------------------------------------------------------------
+   11. Mini player
+   -------------------------------------------------------------------------- */
+html.sd-mobile .sd-mini {
+  position: fixed;
+  left: var(--sd-safe-l);
+  right: var(--sd-safe-r);
+  bottom: calc(var(--sd-tabbar-h) + var(--sd-safe-b));
+  height: var(--sd-mini-h);
+  z-index: 24;
+  display: none;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 0 8px;
+  background: var(--sd-mini-bg, #1f1f1f);
+  border-top: 1px solid var(--sd-border);
+  /* **Le lecteur est statique.** Il ne glisse plus, ne se décale plus, ne
+     s'anime plus : il est posé là, en bas, et rien ne le déplace. « Le lecteur
+     disparaît quand je scroll vers le bas » (deux fois signalé) venait de
+     gestes et de transitions sur cette barre ; il n'y en a plus. */
+  transform: none !important;
+  animation: none !important;
+  transition: background-color 400ms linear;
+  cursor: pointer;
+  overscroll-behavior: contain;
+}
+/* Le mini-lecteur est **le lecteur** de l'application : il s'affiche dès
+   qu'un lecteur existe, avec ou sans piste en cours (état vide plus bas). Le
+   lier à la présence d'une piste faisait disparaître le bas de l'écran sur un
+   compte qui n'avait encore rien lancé. */
+html.sd-mobile.sd-mini-on .sd-mini,
+html.sd-mobile.sd-has-track .sd-mini {
+  display: flex;
+}
+/* La feuille du lecteur recouvre le mini-lecteur : inutile de le pousser hors
+   de l'écran (un transform laissé en place le faisait « disparaître »), il
+   suffit qu'il ne reçoive plus les appuis pendant ce temps. */
+html.sd-mobile.sd-player-open .sd-mini,
+html.sd-mobile.sd-queue-open .sd-mini {
+  pointer-events: none;
+}
+
+html.sd-mobile .sd-mini-art {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--sd-bg-tint);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+html.sd-mobile .sd-mini-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  opacity: 0;
+  transition: opacity 300ms ease;
+}
+html.sd-mobile .sd-mini-art img.is-loaded {
+  opacity: 1;
+}
+
+html.sd-mobile .sd-mini-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  overflow: hidden;
+}
+html.sd-mobile .sd-mini-title,
+html.sd-mobile .sd-mini-artist {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* marquee-less, but the text "breathes" instead of being brutally cut */
+  max-width: 100%;
+}
+html.sd-mobile .sd-mini-title {
+  font-size: 13px;
+  line-height: 16px;
+  font-weight: 600;
+  color: var(--sd-text);
+}
+html.sd-mobile .sd-mini-artist {
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--sd-sub);
+}
+html.sd-mobile .sd-mini-controls {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex: 0 0 auto;
+}
+html.sd-mobile .sd-mini-controls .sd-iconbtn {
+  width: 40px;
+  height: 40px;
+}
+html.sd-mobile .sd-mini-controls .sd-iconbtn svg {
+  width: 22px;
+  height: 22px;
+}
+html.sd-mobile .sd-mini-play svg {
+  width: 26px !important;
+  height: 26px !important;
+}
+html.sd-mobile .sd-mini-like.is-active {
+  color: var(--sd-accent);
+}
+html.sd-mobile .sd-mini-like.is-active svg {
+  fill: currentColor;
+}
+
+/* Progress: 2px line pinned to the very bottom edge of the mini player, the
+   way the native app draws it (the old layer had no progress at all in the
+   bar, and up to 2 s of latency when it did report one to Android). */
+html.sd-mobile .sd-mini-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.18);
+  overflow: hidden;
+}
+html.sd-mobile.sd-theme-light .sd-mini-progress {
+  background: rgba(0, 0, 0, 0.16);
+}
+html.sd-mobile .sd-mini-progress > i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--sd-text);
+  transform-origin: left center;
+  transition: width 300ms linear;
+}
+html.sd-mobile .sd-mini.is-seeking .sd-mini-progress > i {
+  background: var(--sd-accent);
+  transition: none;
+}
+
+/* --------------------------------------------------------------------------
+   12. Tab bar
+   -------------------------------------------------------------------------- */
+html.sd-mobile .sd-tabbar {
+  position: fixed;
+  left: var(--sd-safe-l);
+  right: var(--sd-safe-r);
+  bottom: 0;
+  height: calc(var(--sd-tabbar-h) + var(--sd-safe-b));
+  padding-bottom: var(--sd-safe-b);
+  z-index: 25;
+  display: flex;
+  align-items: stretch;
+  background: var(--sd-bar);
+  backdrop-filter: blur(24px) saturate(1.6);
+  -webkit-backdrop-filter: blur(24px) saturate(1.6);
+  border-top: 1px solid var(--sd-border);
+}
+html.sd-mobile .sd-tab {
+  flex: 1 1 0;
+  min-width: 0;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--sd-sub);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 6px 0 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  transition: color 160ms ease;
+  cursor: pointer;
+  text-decoration: none;
+}
+html.sd-mobile .sd-tab svg {
+  width: 24px;
+  height: 24px;
+  fill: currentColor;
+}
+html.sd-mobile .sd-tab .sd-tab-label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+html.sd-mobile .sd-tab.is-active {
+  color: var(--sd-text);
+}
+/* Playing indicator on the active tab would be wrong (the mini player already
+   shows playback state); instead the active tab gets a subtle lift. */
+html.sd-mobile .sd-tab.is-active svg {
+  transform: translateY(-1px);
+}
+
+/* --------------------------------------------------------------------------
+   13. Full-screen player sheet
+   -------------------------------------------------------------------------- */
+html.sd-mobile .sd-player {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  background: var(--sd-player-bg, linear-gradient(to bottom, #2a2a2a 0%, #121212 42%, #000 100%));
+  color: var(--sd-text);
+  transform: translate3d(0, 100%, 0);
+  transition: transform var(--sd-dur) var(--sd-ease), visibility 0s linear var(--sd-dur);
+  visibility: hidden;
+  will-change: transform;
+  overscroll-behavior: contain;
+}
+html.sd-mobile.sd-player-open .sd-player {
+  /* **Elle s'ouvre et se ferme, mais ne se tire pas.** Le glissement vers le
+     bas pour fermer était le même geste que le défilement : c'est ce qui
+     faisait « disparaître » le lecteur quand on faisait défiler la page. */
+  transform: none;
+  visibility: visible;
+}
+/* Transitions are only killed while a finger is down, so the sheet still
+   animates in and out (setting `transition:none` on the open state — the
+   obvious thing to do — makes it appear with a hard jump). */
+html.sd-mobile .sd-player.is-dragging {
+  transition: none;
+}
+html.sd-mobile .sd-player.is-settling {
+  transition: transform var(--sd-dur) var(--sd-ease);
+}
+
+html.sd-mobile .sd-player-head {
+  flex: 0 0 auto;
+  position: relative;
+  height: calc(var(--sd-player-header-h) + var(--sd-safe-t));
+  padding: var(--sd-safe-t) 8px 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  touch-action: none; /* we own the vertical drag here */
+}
+html.sd-mobile .sd-player-head .sd-player-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sd-sub);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Grabber: the drag target is the whole header, the pill is the affordance. */
+html.sd-mobile .sd-player-head::after {
+  content: "";
+  position: absolute;
+  top: calc(var(--sd-safe-t) + 4px);
+  left: 50%;
+  width: 40px;
+  height: 4px;
+  margin-left: -20px;
+  border-radius: 4px;
+  background: currentColor;
+  opacity: 0.18;
+}
+
+html.sd-mobile .sd-player-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0 24px calc(16px + var(--sd-safe-b));
+  overflow: hidden;
+}
+
+/* Artwork: sized so the whole player fits without scrolling on the smallest
+   common phone (360×640) and scales up on bigger ones. */
+html.sd-mobile .sd-player-art {
+  flex: 0 0 auto;
+  align-self: center;
+  width: min(78vw, 42vh, 420px);
+  aspect-ratio: 1 / 1;
+  margin: 2vh auto 0;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--sd-bg-tint);
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.55);
+  position: relative;
+  transition: transform 300ms var(--sd-ease);
+}
+html.sd-mobile .sd-player-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+html.sd-mobile .sd-player-art .sd-player-art-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--sd-sub);
+}
+
+/* Track meta */
+html.sd-mobile .sd-player-meta {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: max(3vh, 16px);
+  min-width: 0;
+}
+html.sd-mobile .sd-player-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+html.sd-mobile .sd-player-track {
+  font-size: var(--sd-fs-title);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  color: var(--sd-text);
+  margin: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+html.sd-mobile .sd-player-artist {
+  display: block;
+  margin-top: 4px;
+  font-size: 14px;
+  line-height: 1.3;
+  color: var(--sd-sub);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+html.sd-mobile .sd-player-artist:hover {
+  text-decoration: underline;
+  color: var(--sd-text);
+}
+html.sd-mobile .sd-like svg {
+  width: 26px;
+  height: 26px;
+}
+html.sd-mobile .sd-like.is-active {
+  color: var(--sd-accent);
+}
+
+/* Seek bar — a real touch slider (44px hit area) instead of the desktop
+   <input type=range> the old layer poked at with synthetic events. */
+html.sd-mobile .sd-seek {
+  flex: 0 0 auto;
+  margin-top: max(2.4vh, 12px);
+  padding: 0;
+  touch-action: none;
+}
+html.sd-mobile .sd-seek-rail {
+  position: relative;
+  height: var(--sd-tap);
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+html.sd-mobile .sd-seek-track {
+  position: relative;
+  width: 100%;
+  height: 4px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.3);
+  overflow: visible;
+}
+html.sd-mobile.sd-theme-light .sd-seek-track {
+  background: rgba(0, 0, 0, 0.24);
+}
+html.sd-mobile .sd-seek-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-radius: 4px;
+  background: var(--sd-text);
+}
+html.sd-mobile .sd-seek-thumb {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 12px;
+  height: 12px;
+  margin: -6px 0 0 -6px;
+  border-radius: 50%;
+  background: var(--sd-text);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  transform: scale(0);
+  transition: transform 160ms var(--sd-ease);
+}
+html.sd-mobile .sd-seek:focus-within .sd-seek-thumb,
+html.sd-mobile .sd-seek.is-dragging .sd-seek-thumb {
+  transform: scale(1);
+}
+html.sd-mobile .sd-seek.is-dragging .sd-seek-track {
+  height: 6px;
+}
+html.sd-mobile .sd-seek.is-dragging .sd-seek-fill {
+  background: var(--sd-accent);
+}
+html.sd-mobile .sd-times {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--sd-sub);
+  padding: 0 2px;
+  margin-top: -6px;
+}
+
+/* Transport controls */
+html.sd-mobile .sd-player-controls {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: max(1.6vh, 8px);
+  gap: 4px;
+}
+html.sd-mobile .sd-player-controls .sd-iconbtn {
+  width: var(--sd-tap);
+  height: var(--sd-tap);
+}
+html.sd-mobile .sd-ctrl-shuffle svg,
+html.sd-mobile .sd-ctrl-repeat svg {
+  width: 22px;
+  height: 22px;
+}
+html.sd-mobile .sd-ctrl-prev svg,
+html.sd-mobile .sd-ctrl-next svg {
+  width: 30px;
+  height: 30px;
+}
+html.sd-mobile .sd-ctrl-play {
+  width: 64px !important;
+  height: 64px !important;
+  border-radius: 50%;
+  background: var(--sd-text);
+  color: #000;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+}
+html.sd-mobile.sd-theme-light .sd-ctrl-play {
+  background: #000;
+  color: #fff;
+}
+html.sd-mobile .sd-ctrl-play svg {
+  width: 30px;
+  height: 30px;
+}
+html.sd-mobile .sd-ctrl-play:hover {
+  transform: scale(1.04);
+  background: var(--sd-text);
+}
+html.sd-mobile .sd-ctrl-play:active {
+  transform: scale(0.96);
+}
+/* Repeat-one gets a badge instead of the desktop's colour-only affordance
+   (indistinguishable at a glance on a phone). */
+html.sd-mobile .sd-ctrl-repeat {
+  position: relative;
+}
+html.sd-mobile .sd-ctrl-repeat.is-one::after {
+  content: "1";
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  min-width: 12px;
+  height: 12px;
+  padding: 0 2px;
+  border-radius: 6px;
+  background: var(--sd-accent);
+  color: #000;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 12px;
+  text-align: center;
+}
+
+/* Bottom utility row */
+html.sd-mobile .sd-player-bottom {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: auto;
+  padding-top: max(1.4vh, 8px);
+}
+html.sd-mobile .sd-player-bottom .sd-iconbtn svg {
+  width: 22px;
+  height: 22px;
+}
+
+/* A "no track" state instead of an empty black sheet. */
+html.sd-mobile .sd-player-empty {
+  margin: auto;
+  text-align: center;
+  color: var(--sd-sub);
+  font-size: 14px;
+  padding: 24px;
+}
+
+/* --------------------------------------------------------------------------
+   14. Sheet scrim (queue panel, menus)
+   -------------------------------------------------------------------------- */
+html.sd-mobile .sd-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 35;
+  background: rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 240ms ease, visibility 0s linear 240ms;
+}
+html.sd-mobile.sd-queue-open .sd-scrim {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 240ms ease;
+}
+/* Drag handle for the queue sheet */
+html.sd-mobile .sd-sheet-grabber {
+  position: fixed;
+  bottom: calc(var(--sd-bottom) + min(64vh, 560px) - 10px);
+  left: 50%;
+  width: 40px;
+  height: 4px;
+  margin-left: -20px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.4);
+  z-index: 31;
+  display: none;
+}
+html.sd-mobile.sd-queue-open .sd-sheet-grabber {
+  display: block;
+}
+
+/* --------------------------------------------------------------------------
+   15b. Toast
+   -------------------------------------------------------------------------- */
+html.sd-mobile .sd-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--sd-bottom) + 20px);
+  z-index: 70;
+  transform: translate(-50%, 12px);
+  max-width: 84vw;
+  padding: 10px 18px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.94);
+  color: #000;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 200ms ease, transform 200ms var(--sd-ease), visibility 0s linear 200ms;
+}
+html.sd-mobile .sd-toast.is-visible {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(-50%, 0);
+  transition: opacity 200ms ease, transform 200ms var(--sd-ease);
+}
+html.sd-mobile.sd-theme-light .sd-toast {
+  background: #1f1f1f;
+  color: #fff;
+}
+
+/* --------------------------------------------------------------------------
+   16. Landscape / short screens
+   -------------------------------------------------------------------------- */
+@media (orientation: landscape) and (max-height: 560px) {
+  html.sd-mobile {
+    --sd-tabbar-h: 48px;
+    --sd-mini-h: 52px;
+  }
+  html.sd-mobile .sd-player-body {
+    flex-direction: row;
+    align-items: center;
+    gap: 24px;
+    padding: 0 32px calc(8px + var(--sd-safe-b));
+  }
+  html.sd-mobile .sd-player-art {
+    width: min(38vw, 72vh);
+    margin: 0;
+  }
+  html.sd-mobile .sd-player-right {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    max-height: 100%;
+    overflow: auto;
+  }
+  html.sd-mobile .sd-player-meta {
+    margin-top: 0;
+  }
+  html.sd-mobile .sd-player-bottom {
+    margin-top: 2vh;
+  }
+}
+
+/* Tablets / large phones: cap the width of the lists so lines don't run
+   edge to edge (the web player never does this on its own). */
+@media (min-width: 700px) {
+  html.sd-mobile .sd-player-art {
+    width: min(56vw, 380px);
+  }
+  html.sd-mobile .sd-tabbar,
+  html.sd-mobile .sd-mini {
+    max-width: none;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   17. Accessibility
+   -------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  html.sd-mobile .sd-player,
+  html.sd-mobile .sd-mini,
+  html.sd-mobile .sd-scrim,
+  html.sd-mobile .sd-seek-thumb,
+  html.sd-mobile .sd-player-art,
+  html.sd-mobile .sd-iconbtn {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+
+/* Never let the tab bar / mini player cover the soft keyboard or the
+   gesture bar when the WebView reports a viewport change. */
+@supports (height: 100dvh) {
+  html.sd-mobile .sd-player {
+    min-height: 100dvh;
+  }
+}

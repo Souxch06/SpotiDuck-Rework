@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android Auto : l'application déclare qu'elle fournit un lecteur média. Auto
+  interroge le service de navigation média (`MediaBrowserServiceCompat`) et
+  affiche la session qu'il publie — la même que l'écran verrouillé.
+-->
+<automotiveApp>
+    <uses name="media" />
+</automotiveApp>

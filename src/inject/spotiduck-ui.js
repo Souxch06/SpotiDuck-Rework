@@ -1,0 +1,8265 @@
+/* ==========================================================================
+   SpotiDuck — Mobile UI runtime
+   --------------------------------------------------------------------------
+   Turns the desktop Spotify web player into the native mobile app shell:
+
+     · bottom tab bar (Accueil · Recherche · Bibliothèque)
+     · mini player (cover, title, artist, like, play/pause, next, progress)
+     · full-screen player sheet (swipe down to close, drag the seek bar)
+     · library page + queue bottom sheet + back button on sub-pages
+
+   Design rules this file follows (and the old injected script did not):
+     1. NOTHING is written into Spotify's React tree. Everything lives in one
+        `.sd-layer` we own, so re-renders can never delete our UI.
+     2. Event driven: a MutationObserver + one rAF ticker replace the four
+        `setInterval(…, 2000|5000)` loops that made the old bar laggy and
+        drained the battery.
+     3. No global variables: a single namespaced handle `window.SpotiDuckUI`.
+     4. Every Spotify selector is a *candidate list* with a fallback, so a web
+        player redesign degrades gracefully instead of killing the UI.
+     5. Optional `AndBridge` (the Android JavascriptInterface): every call is
+        feature-detected, so the exact same bundle runs in a plain browser.
+
+   NOTE for the app side: the wrapper fakes `window.innerWidth/Height`
+   (1920×1080) so that Spotify serves the desktop layout. Layout code here
+   therefore NEVER reads `window.innerWidth` — it uses
+   `document.documentElement.clientWidth/Height`, which is the real device
+   viewport. (The old script mixed the two, which is why some measurements
+   were off on tablets.)
+   ========================================================================== */
+(function () {
+
+  "use strict";
+  /**
+   * La page de connexion e-mail + mot de passe.
+   *
+   * Mesuré en CI : `accounts.spotify.com/fr/login` ne demande que l'e-mail,
+   * `?allow_password=1` affiche les deux champs, et « /login » sur le lecteur
+   * (l'adresse utilisée jusqu'ici) **répond 404** — le bouton « connexion
+   * classique » menait donc à une page d'erreur.
+   */
+  var CLASSIC_LOGIN = "https://accounts.spotify.com/fr/login?allow_password=1";
+
+  if (window.SpotiDuckUI && window.SpotiDuckUI.version) return; // idempotent
+
+  /* La version de la **coque**, estampillée par le bundler (`tools/build.mjs`
+     pose `window.__SD_VERSION__` avec la version de `package.json`).
+     Elle était écrite à la main (« 2.9.0 ») et n'a plus jamais bougé : le
+     diagnostic d'un téléphone en 2.11 annonçait donc « SpotiDuck 2.9.0 », ce
+     qui rendait toute remontée de bug inexploitable. `dev` n'apparaît que si
+     le fichier est chargé hors build (banc, mise au point). */
+  var VERSION = (window.__SD_VERSION__ || "dev");
+  var STYLE_ID = "spotiduck-ui-style";
+  var BODY_CLASS = "sd-mobile";
+
+  /* ------------------------------------------------------------------ *
+   * 0. Tiny helpers
+   * ------------------------------------------------------------------ */
+  function $(sel, root) {
+    return (root || document).querySelector(sel) || null;
+  }
+  function $$(sel, root) {
+    return Array.prototype.slice.call((root || document).querySelectorAll(sel));
+  }
+  /** First element matching any selector of the list (ordered by priority). */
+  /**
+   * **Un candidat sur lequel un appui ne peut rien faire.**
+   *
+   * Le seul signal fiable est `disabled` : sur un bouton désactivé, le
+   * navigateur ne déclenche aucun gestionnaire — l'appui est perdu, et c'est
+   * très exactement « impossible de zapper ». Un bouton **caché**, lui, reste
+   * branché : notre propre feuille masque la barre de la disposition bureau, et
+   * un appui dessus agit quand même. Le refuser serait se priver d'un chemin
+   * qui marche (relevé au banc : c'est ce qui a fait tomber deux contrôles
+   * valides). On ne juge donc que sur `disabled`, à quoi s'ajoute, pour le
+   * classement seulement, la présence d'une boîte à l'écran.
+   */
+  function dead(el) {
+    return !el || el.disabled === true;
+  }
+
+  /**
+   * **Un élément de notre propre couche, jamais une commande de Spotify.**
+   *
+   * Nos boutons portent les mêmes libellés que ceux du lecteur (« Lecture »,
+   * « Pause », « Suivant ») : les repères par libellé ajoutés au pass 50 les
+   * attrapaient donc eux-mêmes. L'appui partait sur notre bouton, qui rappelait
+   * la même commande — deux bascules qui s'annulent, et « le bouton ne fait
+   * rien ». Le reste du code écarte déjà notre couche (`never ours`) ; les
+   * repères le font maintenant aussi.
+   */
+  function ours(el) {
+    try {
+      return !!(el && el.closest && el.closest(".sd-layer"));
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /** Les candidats, **les utilisables d'abord** — et parmi eux, ceux qui ont
+   *  vraiment une boîte à l'écran (c'est celui-là que l'utilisateur voit). */
+  function ranked(list) {
+    var alive = [];
+    var seen = 0;
+    for (var i = 0; i < list.length; i++) {
+      if (!list[i]) continue;
+      seen++;
+      if (!dead(list[i])) alive.push(list[i]);
+    }
+    /* Tout est mort : on rend la liste telle quelle, l'appelant décide (refuser,
+       se rabattre sur le clavier, le dire). Ne jamais rendre *moins* qu'avant. */
+    if (!alive.length) return list.slice();
+    var onscreen = [];
+    var other = [];
+    for (var j = 0; j < alive.length; j++) {
+      var box = null;
+      try {
+        box = alive[j].getBoundingClientRect();
+      } catch (e) {
+        box = null;
+      }
+      if (box && (box.width > 1 || box.height > 1)) onscreen.push(alive[j]);
+      else other.push(alive[j]);
+    }
+    return onscreen.concat(other);
+  }
+
+  /**
+   * **Le bon élément parmi les candidats.**
+   *
+   * `pick` rendait le **premier** trouvé ; sur une page qui contient deux copies
+   * de la barre de lecture (bureau + téléphone), c'était celle du bureau, cachée
+   * ou désactivée. Il rend maintenant le premier candidat *utilisable*, et à
+   * défaut — aucun candidat utilisable, ou environnement sans mise en page —
+   * le premier trouvé, exactement comme avant.
+   */
+  function pick(selectors) {
+    var all = [];
+    var list = typeof selectors === "string" ? [selectors] : selectors || [];
+    for (var i = 0; i < list.length; i++) {
+      var found;
+      try {
+        found = document.querySelectorAll(list[i]);
+      } catch (e) {
+        found = [];
+      }
+      for (var j = 0; j < found.length; j++) if (!ours(found[j])) all.push(found[j]);
+    }
+    if (!all.length) return null;
+    return ranked(all)[0];
+  }
+  function viewW() {
+    return document.documentElement.clientWidth || 360;
+  }
+  function viewH() {
+    return document.documentElement.clientHeight || 640;
+  }
+  function clamp(v, a, b) {
+    return v < a ? a : v > b ? b : v;
+  }
+  function fmtTime(ms) {
+    if (!isFinite(ms) || ms < 0) ms = 0;
+    var s = Math.floor(ms / 1000);
+    var m = Math.floor(s / 60);
+    var sec = s % 60;
+    if (m >= 60) {
+      var h = Math.floor(m / 60);
+      m = m % 60;
+      return h + ":" + (m < 10 ? "0" : "") + m + ":" + (sec < 10 ? "0" : "") + sec;
+    }
+    return m + ":" + (sec < 10 ? "0" : "") + sec;
+  }
+  function hashHue(str) {
+    var h = 0;
+    for (var i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) % 360;
+    return h;
+  }
+  function buzz(ms) {
+    try {
+      if (Settings.haptics && navigator.vibrate) navigator.vibrate(ms || 8);
+    } catch (e) {
+      /* not supported — ignore */
+    }
+  }
+
+  /* ------------------------------------------------------------------ *
+   * 1. Settings (persisted in the WebView, restored on next launch)
+   * ------------------------------------------------------------------ */
+  var Settings = {
+    /* Appearance */
+    theme: "auto", // auto | dark | light
+    accentFromArt: true, // colour the player with the cover art
+    reduceMotion: false, // kill our animations (battery / low-end devices)
+    /* Playback */
+    takeControl: true, // click Spotify's "Écouter sur cet appareil" prompt
+    resume: false, // resume playback when something else pauses it
+    /* Interface */
+    /* Barre d'onglets en BAS : désactivée par défaut depuis la v2.6.4 — la
+       navigation est celle de l'application d'origine, en HAUT (`.sd-nav`).
+       Le réglage reste disponible pour ceux qui préfèrent les onglets. */
+    tabbar: false,
+    /* Statistiques d'écoute : locales au téléphone, activées par défaut. */
+    stats: true,
+    haptics: true,
+    /* Accueil maison : notre page d'accueil (données de la page, mise en page
+       de l'application) au lieu de l'accueil du web player, dont la mise en page
+       de bureau ne tient pas sur un téléphone. Un interrupteur la remplace par
+       l'accueil de Spotify. */
+    homeBoard: true,
+    /* Bibliothèque maison : notre page (playlists, titres likés, albums,
+       artistes suivis, podcasts du compte) au lieu de la barre latérale de
+       Spotify, qui peut se retrouver vide sans qu'on puisse la réparer. */
+    libraryBoard: true,
+    /* Densité d'affichage : le seul réglage qui change la taille de TOUTE
+       l'interface (voir `applyDensity`) — compact | normal | large. */
+    density: "normal",
+    labels: {
+      app: "SpotiDuck",
+      home: "Accueil",
+      search: "Rechercher",
+      library: "Bibliothèque",
+      back: "Retour",
+      queue: "File d'attente",
+      devices: "Appareils",
+      share: "Partager",
+      lyrics: "Paroles",
+      like: "Ajouter aux Titres likés",
+      unlike: "Retirer des Titres likés",
+      play: "Lecture",
+      pause: "Pause",
+      next: "Suivant",
+      prev: "Précédent",
+      notifications: "Notifications",
+      friends: "Activité des amis",
+      profile: "Profil",
+      notAvailable: "Indisponible ici — Spotify ne propose pas cet écran sur cette page",
+      /* Les commandes de lecture passent par les boutons de Spotify ; quand
+         cette version de la page ne les expose pas (disposition téléphone,
+         repères renommés), on le dit au lieu de laisser un bouton muet. */
+      transportMissing: "Ces commandes ne répondent pas sur cette page : le lecteur de Spotify ne les expose pas ici",
+      /* Quand rien ne joue, les commandes de Spotify sont **désactivées** :
+         appuyer ne peut rien faire, et c'est la vraie raison. */
+      transportNoTrack: "Rien ne joue en ce moment — lancez une musique d'abord",
+      progress: "Position de lecture",
+      shuffle: "Lecture aléatoire",
+      repeat: "Répéter",
+      nowPlaying: "Lecture en cours",
+      noTrack: "Aucun titre en lecture",
+      miniSignedOut: "Non connecté",
+      miniSignedOutHint: "Appuyez pour vous connecter",
+      volume: "Volume",
+      karaoke: "Karaoké",
+      /* Accueil maison */
+      homeMorning: "Bonjour",
+      homeEvening: "Bonsoir",
+      homeSub: "Votre musique, vos podcasts",
+      homeAll: "Tout",
+      homeMusic: "Musique",
+      homePodcasts: "Podcasts",
+      homeMore: "Tout afficher",
+      homeEmptyCategory: "Rien dans cette catégorie pour l\'instant",
+      homeBoard: "Accueil SpotiDuck",
+      /* Bibliothèque maison */
+      libraryBoard: "Bibliothèque SpotiDuck",
+      libraryAll: "Tout",
+      libraryPlaylists: "Playlists",
+      libraryAlbums: "Albums",
+      libraryArtists: "Artistes",
+      libraryShows: "Podcasts",
+      libraryLiked: "Titres likés",
+      libraryTracks: "%s titres",
+      librarySummary: "Votre bibliothèque",
+      libraryLoading: "Chargement de votre bibliothèque…",
+      libraryLoadingProgress: "Chargement de votre bibliothèque… (%s/%s)",
+      libraryTimeout: "Votre bibliothèque n'a pas répondu à temps.",
+      libraryEmpty: "Aucune playlist, aucun album ni artiste enregistré pour ce compte.",
+      libraryNoToken: "Connectez-vous à Spotify pour retrouver votre bibliothèque.",
+      libraryError: "Votre bibliothèque n'a pas répondu pour l'instant.",
+      libraryWhy: "Raison : %s.",
+      libraryGuest: "Le lecteur n'est pas connecté à Spotify : connecte-toi, puis appuie sur Réessayer.",
+      libraryUnknown: "Je n'ai pas pu vérifier à quel compte appartient le lecteur.",
+      libraryAccount: "Compte %s",
+      librarySignIn: "Se connecter à Spotify",
+      libraryFromSpotify: "%s playlists lues dans Spotify",
+      libraryHeaders: "En-têtes de la page : %s",
+      libraryScan: "Lignes trouvées — %s",
+      libraryRefreshing: "Actualisation en cours…",
+      libraryMine: "Votre playlist",
+      libraryFollowed: "Suivie · %s",
+      libraryInYours: "Dans votre bibliothèque",
+      libraryLikedHint: "Vos titres likés",
+      libraryIgnored: "%s playlists recommandées ignorées (elles ne sont pas au compte)",
+      libraryIgnoredOne: "1 playlist recommandée ignorée (elle n'est pas au compte)",
+      librarySidebar: "Lus dans la liste de Spotify (%s éléments) — l'API du lecteur n'a pas répondu.",
+      libraryLog: "Détails des essais",
+      libraryLogHint: "Pourquoi l'API n'a pas répondu",
+      libraryCountOne: "%s élément",
+      libraryCountMany: "%s éléments",
+      opening: "Ouverture…",
+      openingOf: "Ouverture de « %s »…",
+      libraryTokenAge: "Jeton capté %s · /me → %s",
+      libraryTokenRefresh: "Jeton redemandé à la page : %s",
+      libraryRetry: "Réessayer",
+      libraryHint: "Vous pouvez aussi retrouver celle de Spotify : Réglages → Bibliothèque SpotiDuck.",
+      /* Statistiques d'écoute */
+      stats: "Statistiques d'écoute",
+      statsTitle: "Vos statistiques",
+      statsListened: "Temps d'écoute",
+      statsWeek: "Cette semaine",
+      statsToday: "Aujourd'hui",
+      statsTracks: "Titres différents",
+      statsArtists: "Artistes",
+      statsTopArtists: "Vos artistes du moment",
+      statsTopTracks: "Vos titres les plus écoutés",
+      statsDays: "Ces sept derniers jours",
+      statsBands: "Quand vous écoutez",
+      statsDiscovery: "Découvertes de la semaine",
+      statsStreak: "Jours d'affilée",
+      statsFavBand: "Moment préféré",
+      statsFavDay: "Jour préféré",
+      /* La page refaite : durées d'abord, nombres expliqués. */
+      statsTimeSection: "Temps écouté",
+      statsNumbersSection: "Ce que vous écoutez",
+      statsTotal: "Depuis le début",
+      statsPlayed: "Titres écoutés",
+      statsHintListen: "%s écoutées",
+      statsHintOneListen: "1 écoute",
+      statsHintTrack: "titres passés, reprises comprises",
+      statsHintDifferent: "au moins un titre chacun",
+      statsHintArtist: "au moins un titre écouté",
+      statsHintStreak: "jours de suite avec une écoute",
+      statsSince: "Depuis le %s",
+      statsLead: "Temps écouté : %s · %s",
+      statsNoteMeasure:
+        "Le temps est mesuré pendant l'écoute dans SpotiDuck, seconde par seconde ; un titre survolé moins de dix secondes ne compte pas.",
+      statsNoteEstimate:
+        "Dont %s venant de l'historique Spotify : la durée annoncée des titres, pas le temps réellement écouté.",
+      statsMinute: "%s min",
+      statsBandShare: "%s · %s %",
+      statsAt: "à %s",
+      statsEmpty: "Écoutez un titre : vos statistiques commenceront ici",
+      statsClear: "Effacer mes statistiques",
+      statsCleared: "Statistiques effacées",
+      bandNight: "La nuit",
+      bandMorning: "Le matin",
+      bandAfternoon: "L'après-midi",
+      bandEvening: "Le soir",
+      weekdays: ["Dimanche", "Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"],
+      weekdaysShort: ["D", "L", "M", "M", "J", "V", "S"],
+      likedSongs: "Titres likés",
+      blankTitle: "La page n'a rien affiché",
+      blankText:
+        "Spotify a bien répondu, mais son contenu est resté vide (%s). C'est presque toujours un chargement qui n'a pas abouti : rechargez. Si ça recommence, copiez le diagnostic et envoyez-le.",
+      reload: "Recharger",
+      reloading: "Rechargement…",
+      copyDiagnostic: "Copier le diagnostic",
+      diagnosticCopied: "Diagnostic copié",
+      close: "Fermer",
+      queueEmpty: "La file d'attente est vide",
+      /* sheets */
+      options: "Options",
+      settings: "Paramètres",
+      groupLook: "Apparence",
+      groupPlay: "Lecture",
+      groupUi: "Interface",
+      groupAbout: "À propos",
+      groupUiNative: "Interface",
+      nativeUi: "Utiliser l'interface Spotify",
+      nativeUiHint: "Ouvre le choix : interface Spotify native ou couche SpotiDuck",
+      playProtect: "Vérification Play Protect",
+      playProtectHint: "Ouvre le réglage qui bloque les installations d'applications venues d'ailleurs : dans le Play Store, décoche « Analyser les applis avec Play Protect ».",
+      playProtectManual: "Play Store → Play Protect → ⚙️ → décocher « Analyser les applis »",
+      display: "Affichage",
+      displayHint: "Appuie pour copier les infos d'affichage",
+      theme: "Thème",
+      themeAuto: "Auto",
+      themeDark: "Sombre",
+      themeLight: "Clair",
+      accent: "Couleur de la pochette",
+      reduceMotion: "Réduire les animations",
+      takeControl: "Prendre la main sur la lecture",
+      resume: "Relancer la lecture automatiquement",
+      showTabbar: "Barre de navigation",
+      haptics: "Retour haptique",
+      viewArtist: "Voir l'artiste",
+      viewAlbum: "Voir l'album",
+      reload: "Recharger le lecteur",
+      reset: "Réinitialiser les réglages",
+      version: "Version de l'interface",
+      takeover: "Lecture transférée sur cet appareil",
+      unlock: "Déblocage du lecteur…",
+      reloadPlayer: "Session expirée — rechargement du lecteur…",
+      resetDone: "Réglages réinitialisés",
+      copied: "Lien copié",
+      classicLogin: "Se connecter avec e-mail et mot de passe",
+      offline: "Hors connexion — lecture indisponible",
+      /* écran d'accueil (session déconnectée) */
+      density: "Taille de l'interface",
+      densityCompact: "Compacte",
+      densityNormal: "Normale",
+      densityLarge: "Grande",
+      welcomeTitle: "SpotiDuck",
+      welcomeText: "Connecte-toi à ton compte Spotify pour retrouver ta musique.",
+      welcomeCta: "Se connecter",
+      welcomeNote: "Connexion par e-mail et mot de passe disponible",
+      /* haptic patterns, in milliseconds */
+      buzzTap: 8,
+      buzzAction: 10,
+    },
+  };
+
+  function loadSettings() {
+    try {
+      var raw = localStorage.getItem("sd.ui.settings");
+      if (!raw) return;
+      var o = JSON.parse(raw);
+      if (o && typeof o === "object") {
+        if (o.theme) Settings.theme = o.theme;
+        if (o.density) Settings.density = o.density;
+        ["haptics", "accentFromArt", "tabbar", "takeControl", "resume", "reduceMotion"].forEach(function (k) {
+          if (typeof o[k] === "boolean") Settings[k] = o[k];
+        });
+      }
+    } catch (e) {
+      /* private mode / quota — defaults are fine */
+    }
+  }
+  function saveSettings() {
+    try {
+      localStorage.setItem(
+        "sd.ui.settings",
+        JSON.stringify({
+          theme: Settings.theme,
+          haptics: Settings.haptics,
+          accentFromArt: Settings.accentFromArt,
+          tabbar: Settings.tabbar,
+          takeControl: Settings.takeControl,
+          resume: Settings.resume,
+          reduceMotion: Settings.reduceMotion,
+          density: Settings.density,
+        })
+      );
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  /* ------------------------------------------------------------------ *
+   * 2. Spotify adapter — the only place that touches the web player's DOM
+   * ------------------------------------------------------------------ */
+  /**
+   * **Les repères par libellé, toujours dans le lecteur.**
+   *
+   * « Suivant » et « Précédent » sont aussi les libellés des boutons d'avance et
+   * de retour de la **navigation** de Spotify ; « Lecture » est celui de nos
+   * propres boutons et le début de « Activer la lecture aléatoire ». Un repère
+   * global par libellé appuie donc sur la mauvaise commande (relevé au banc :
+   * un « lecture/pause » qui ne changeait rien, et une commande « suivant » qui
+   * ne changeait pas de piste). On ne cherche ces libellés que dans les
+   * conteneurs du lecteur.
+   */
+  var PLAYER_SCOPE = [
+    "aside ",
+    '[data-testid="player-controls"] ',
+    '[data-testid="now-playing-bar"] ',
+    '[data-testid="now-playing-widget"] ',
+  ];
+  function inPlayer(labels) {
+    var list = [];
+    PLAYER_SCOPE.forEach(function (scope) {
+      labels.forEach(function (label) {
+        list.push(scope + "button[" + label + "]");
+      });
+    });
+    return list;
+  }
+
+  var SEL = {
+    mainView: ["#main-view", "main", ".main-view-container__scroll-node"],
+    sidebar: ["#Desktop_LeftSidebar_Id"],
+    panel: ["#Desktop_PanelContainer_Id"],
+    navBar: ["#global-nav-bar"],
+    homeBtn: ['#global-nav-bar button[data-testid="home-button"]', 'button[data-testid="home-button"]'],
+    searchBtn: [
+      '#global-nav-bar a[href="/search"]',
+      '#global-nav-bar button[data-testid="search-button"]',
+      'a[href="/search"]',
+      'button[data-testid="search-button"]',
+    ],
+    searchInput: ['input[data-testid="search-input"]', 'form[role="search"] input'],
+    npBar: ['aside[data-testid="now-playing-bar"]', 'aside[data-testid="now-playing-bar"] root'],
+    widget: ['div[data-testid="now-playing-widget"]'],
+    cover: [
+      'div[data-testid="now-playing-widget"] img[data-testid="cover-art-image"]',
+      'aside[data-testid="now-playing-bar"] img[data-testid="cover-art-image"]',
+      'img[data-testid="cover-art-image"]',
+    ],
+    title: ['a[data-testid="context-item-link"]', '[data-testid="context-item-link"]'],
+    artist: [
+      'a[data-testid="context-item-info-artist"]',
+      'a[data-testid="context-item-info-show"]',
+      '[data-testid="context-item-info-artist"]',
+    ],
+    like: [
+      'div[data-testid="now-playing-widget"] > div:last-child > button',
+      'button[data-testid="add-button"]',
+      'button[data-testid="now-playing-widget-like-button"]',
+    ].concat(
+      inPlayer([
+        'aria-label^="Retirer des Titres likés"',
+        'aria-label^="Ajouter aux Titres likés"',
+        'aria-label^="Enregistrer dans vos Titres"',
+        'aria-label^="Retirer des Titres"',
+        'aria-label^="Remove from Liked"',
+        'aria-label^="Save to your Liked"',
+        'aria-label^="Add to Liked"',
+      ])
+    ),
+    play: [
+      'aside button[data-testid="control-button-playpause"]',
+      'button[data-testid="control-button-playpause"]',
+      'button[data-testid="control-button-play"]',
+      'button[data-testid="control-button-pause"]',
+    ].concat(
+      /* Les libellés **commencent** par ces mots : `*=` attrapait « Activer la
+         lecture aléatoire » (le bouton du mode aléatoire). */
+      inPlayer([
+        'aria-label="Lecture"',
+        'aria-label^="Reprendre la lecture"',
+        'aria-label="Pause"',
+        'aria-label^="Mettre en pause"',
+        'aria-label="Play"',
+        'aria-label="Resume"',
+      ])
+    ),
+    next: [
+      'aside button[data-testid="control-button-skip-forward"]',
+      'button[data-testid="control-button-skip-forward"]',
+      'button[data-testid="control-button-next"]',
+    ].concat(
+      inPlayer([
+        'aria-label="Suivant"',
+        'aria-label^="Passer à la piste suivante"',
+        'aria-label="Next"',
+        'aria-label="Next track"',
+      ])
+    ),
+    prev: [
+      'aside button[data-testid="control-button-skip-back"]',
+      'button[data-testid="control-button-skip-back"]',
+      'button[data-testid="control-button-previous"]',
+    ].concat(
+      inPlayer([
+        'aria-label="Précédent"',
+        'aria-label^="Passer à la piste précédente"',
+        'aria-label="Previous"',
+        'aria-label="Previous track"',
+      ])
+    ),
+    shuffle: [
+      'aside button[data-testid="control-button-shuffle"]',
+      'button[data-testid="control-button-shuffle"]',
+    ].concat(
+      inPlayer([
+        'aria-label^="Activer la lecture aléatoire"',
+        'aria-label^="Désactiver la lecture aléatoire"',
+        'aria-label^="Shuffle"',
+      ])
+    ),
+    repeat: [
+      'aside button[data-testid="control-button-repeat"]',
+      'button[data-testid="control-button-repeat"]',
+    ].concat(
+      inPlayer([
+        'aria-label^="Activer la répétition"',
+        'aria-label^="Désactiver la répétition"',
+        'aria-label^="Répéter"',
+        'aria-label^="Repeat"',
+        'aria-label^="Enable repeat"',
+      ])
+    ),
+    progress: [
+      'div[data-testid="playback-progressbar"] input[type="range"]',
+      'aside input[type="range"][max]',
+    ],
+    lyrics: ['button[data-testid="lyrics-button"]'],
+    /* Le micro « karaoké » et le curseur de volume : Spotify les expose dans
+       sa propre barre. On ne les invente pas — s'ils sont absents, le bouton
+       correspondant n'apparaît pas (plutôt qu'un bouton mort). */
+    karaoke: ['button[data-testid="karaoke-button"]', 'button[data-testid="mic-button"]'],
+    volume: [
+      'div[data-testid="volume-bar"] input[type="range"]',
+      '[data-testid="volume-bar"] input[type="range"]',
+    ],
+    /* --- session extras (take control, links, login) --- */
+    trackLink: ['a[data-testid="context-item-link"]', '[data-testid="context-item-link"]'],
+    albumLink: [
+      'div[data-testid="now-playing-widget"] a[href*="/album/"]',
+      'aside[data-testid="now-playing-bar"] a[href*="/album/"]',
+      'div[data-testid="now-playing-widget"] img[data-testid="cover-art-image"]',
+    ],
+    /* Spotify's "this device is not playing" call-to-action. The native app
+       auto-clicks it (the old layer did it from a 5 s interval); we look for
+       it with an explicit selector first and a label regex as a fallback. */
+    takeover: [
+      'button[data-testid="takeover-button"]',
+      'div[data-testid="now-playing-bar"] div.encore-bright-accent-set button',
+      'aside[data-testid="now-playing-bar"] div.encore-bright-accent-set button',
+      'aside[data-testid="now-playing-bar"] button[aria-label]',
+    ],
+    takeoverRows: ['aside[data-testid="now-playing-bar"] ul[role="list"] li[role="listitem"] div[role="button"]'],
+    loginPage: ['div[data-testid="login-page"]', 'form[data-testid="login-form"]', '#login-username'],
+    webPlayerLink: ['button[data-testid="web-player-link"]', 'a[data-testid="web-player-link"]'],
+    pageH1: ['main h1', '#main-view h1'],
+    pageSection: ["main section[data-testid]", "#main-view section[data-testid]"],
+  };
+
+  var Spotify = {
+    /* ---- locate the live progress <input type=range> (position/duration) ---- */
+    progressInput: function () {
+      return pick(SEL.progress);
+    },
+
+    /* ------------------------------------------------------------------ *
+     * L'unité du curseur de progression.
+     *
+     * Le 25/09, le téléphone affichait « 56095 h 50 » d'écoute : sur sa page,
+     * le curseur de Spotify est gradué en **millisecondes**, alors que le code
+     * multipliait par 1000 comme s'il était en secondes — durées 1000 fois trop
+     * grandes, sur un seul titre écouté.
+     *
+     * On ne devine plus l'unité, on la **mesure** : pendant la lecture, la
+     * valeur du curseur avance de 1 par seconde s'il est en secondes, de 1000
+     * s'il est en millisecondes. La vitesse observée tranche, et le repli (audit
+     * de grandeur) ne sert qu'entre deux mesures.
+     * ------------------------------------------------------------------ */
+    unit: 0,
+    sample: null,
+    /* **Le lecteur a déjà été vu.** Une seule lecture réussie suffit : la barre
+       de lecture de Spotify quitte parfois l'arbre (défilement, rendu différé)
+       et le mini-lecteur disparaissait alors sous le doigt — signalé le 25/09 :
+       « le lecteur disparaît quand on scroll vers le bas ». */
+    seen: false,
+    /* Unité mesurée, ou repli : 1000 au-delà de 10 000 de course (un titre de
+       trois minutes fait 180 en secondes, 180 000 en millisecondes). */
+    unitFactor: function () {
+      if (this.unit) return this.unit;
+      var input = this.progressInput();
+      var max = input ? parseFloat(input.getAttribute("max")) : 0;
+      return isFinite(max) && max > 10000 ? 1000 : 1;
+    },
+
+    /**
+     * Ce que vaut **une graduation** du curseur, en millisecondes : 1000 si la
+     * page compte en millisecondes, 1 si elle compte en secondes.
+     *
+     * Les deux chemins qui touchent au curseur doivent lire **la même**
+     * graduation : lire avec l'une et écrire avec l'autre donnait un
+     * déplacement faux d'un facteur 1000 — le genre d'à-peu-près qu'on ne voit
+     * qu'à l'oreille, une fois sur dix.
+     */
+    scale: function () {
+      return this.unitFactor() === 1000 ? 1 : 1000;
+    },
+    calibrate: function () {
+      var input = this.progressInput();
+      if (!input) return this.unit;
+      var value = parseFloat(input.value);
+      var now = Date.now();
+      if (!isFinite(value)) return this.unit;
+      var last = this.sample;
+      this.sample = { v: value, t: now };
+      if (!last || !State.playing) return this.unit;
+      var elapsed = (now - last.t) / 1000;
+      var advanced = value - last.v;
+      /* Trop court pour dire quoi que ce soit, ou curseur immobile (pause
+         déguisée, publicité, mise en mémoire tampon). */
+      if (elapsed < 0.6 || advanced <= 0) return this.unit;
+      var speed = advanced / elapsed;
+      /* **Deux bandes, pas de milieu.** Un lecteur qui compte en secondes
+         avance de ~1 graduation par seconde ; en millisecondes, de ~1000. Une
+         valeur entre les deux n'est ni l'un ni l'autre : c'est un **saut** —
+         un déplacement du curseur, un changement de piste — et il ne doit pas
+         décider de l'unité. C'est ce saut qui faisait basculer la lecture en
+         millisecondes sur un lecteur en secondes, et la position se lisait
+         alors 1000 fois trop petite (« seek() did not move the position,
+         got 5 ms »). */
+      var secondsBand = speed >= 0.4 && speed <= 4;
+      var msBand = speed >= 400 && speed <= 4000;
+      if (secondsBand) this.unit = 1;
+      else if (msBand) this.unit = 1000;
+      return this.unit;
+    },
+
+    /** True when the web player has booted far enough to be driven. */
+    ready: function () {
+      return !!(pick(SEL.npBar) && (pick(SEL.play) || this.progressInput()));
+    },
+
+    /* ---------------------------------------------------------------- *
+     * Read the now-playing state out of the DOM.
+     * Everything is defensive: a missing node means "keep last value",
+     * never "reset to null" (that bug made the notification flicker).
+     * ---------------------------------------------------------------- */
+    read: function () {
+      var out = {};
+      var titleEl = pick(SEL.title);
+      if (titleEl) out.title = (titleEl.textContent || "").trim();
+
+      var artistEl = pick(SEL.artist);
+      if (artistEl) {
+        var a = (artistEl.textContent || "").trim();
+        // Spotify sometimes leaves a trailing "· Artist" separator in the node
+        out.artist = a.replace(/^[·•\s]+/, "").replace(/[·•\s]+$/, "");
+      }
+
+      var coverEl = pick(SEL.cover);
+      if (coverEl) out.cover = bestCoverUrl(coverEl);
+
+      var input = this.progressInput();
+      if (input) {
+        var factor = this.unitFactor();
+        var dur = parseFloat(input.getAttribute("max"));
+        var pos = parseFloat(input.value);
+        if (isFinite(dur) && dur > 0) out.duration = (dur / factor) * 1000;
+        if (isFinite(pos)) out.position = (pos / factor) * 1000;
+      }
+
+      var like = pick(SEL.like);
+      if (like) {
+        var checked = like.getAttribute("aria-checked");
+        if (checked === "true" || checked === "false") out.liked = checked === "true";
+        else {
+          var lbl = (like.getAttribute("aria-label") || "").toLowerCase();
+          if (/retirer|remove|enlever/.test(lbl)) out.liked = true;
+          else if (/ajouter|add|save|liked/.test(lbl)) out.liked = false;
+        }
+      }
+
+      var repeat = pick(SEL.repeat);
+      if (repeat) {
+        var rc = repeat.getAttribute("aria-checked");
+        out.repeat = rc === "true" ? "context" : rc === "mixed" ? "track" : "off";
+      }
+
+      var shuf = pick(SEL.shuffle);
+      if (shuf) out.shuffle = shuf.getAttribute("aria-checked") === "true";
+
+      var playing = this.readPlaying();
+      if (playing !== null) out.playing = playing;
+
+      out.isEpisode = !!(pick(['a[data-testid="context-item-info-show"]']));
+      return out;
+    },
+
+    /**
+     * Play/pause detection.
+     * The old script compared `aria-label === 'Play'` (English only) — on a
+     * French device the label is "Lecture", so the mini player never flipped.
+     * Strategy: localized word lists → icon shape → video element → last known.
+     */
+    readPlaying: function () {
+      var btn = pick(SEL.play);
+      if (btn) {
+        var label = (btn.getAttribute("aria-label") || "").toLowerCase();
+        if (label) {
+          if (/(pause|pausa|pausar|pauze|pausieren|暂停|一時停止|일시정지|pauza)/.test(label)) return true;
+          if (/(^|\s)(play|lecture|reprendre|reanudar|ressortir|afspelen|wiedergabe|播放|再生|재생|воспроизв)/.test(label)) return false;
+        }
+        // Shape fallback: the pause glyph is 2 shapes, the play glyph is 1.
+        var svg = btn.querySelector("svg");
+        if (svg) {
+          var shapes = svg.querySelectorAll("path, rect, polygon").length;
+          if (shapes === 2) return true;
+          if (shapes === 1) return false;
+        }
+      }
+      if (document.querySelector(".VideoPlayer__container video")) return true;
+      return null; // unknown → caller keeps its optimistic value
+    },
+
+    /* ---------------------------------------------------------------- *
+     * Control the player. All writes go through Spotify's own buttons so
+     * playback bookkeeping, shuffle order and the media session stay
+     * consistent — the old layer did this too, we just guard every call
+     * and report whether it worked so the UI can roll back.
+     * ---------------------------------------------------------------- */
+    click: function (selectors) {
+      /* **Le meilleur candidat**, pas le premier : sur la page du téléphone, la
+         barre de bureau est encore là, désactivée ou hors écran. On interroge
+         les survivants dans l'ordre d'utilité et on s'arrête au premier que
+         l'appui ne peut pas perdre. */
+      var list = typeof selectors === "string" ? [selectors] : selectors || [];
+      var all = [];
+      for (var i = 0; i < list.length; i++) {
+        var found;
+        try {
+          found = document.querySelectorAll(list[i]);
+        } catch (e) {
+          found = [];
+        }
+        for (var j = 0; j < found.length; j++) if (!ours(found[j])) all.push(found[j]);
+      }
+      var order = ranked(all);
+      for (var k = 0; k < order.length; k++) {
+        if (dead(order[k])) continue;
+        try {
+          order[k].click();
+          return true;
+        } catch (e) {
+          /* on essaie le suivant */
+        }
+      }
+      return false;
+    },
+
+    /**
+     * **Le clavier du lecteur.** Le lecteur web écoute ses propres raccourcis
+     * (`Ctrl` + flèches, espace). Quand la disposition de la page ne laisse pas
+     * trouver les boutons (repères renommés, barre absente), c'est le seul
+     * chemin qui reste — et il vaut mieux qu'un bouton muet.
+     */
+    key: function (key, extra) {
+      try {
+        var init = {
+          key: key,
+          code: key === " " ? "Space" : key,
+          bubbles: true,
+          cancelable: true,
+          ctrlKey: key === " " ? false : true,
+          shiftKey: false,
+          metaKey: false,
+          altKey: false,
+        };
+        if (extra) for (var k in extra) init[k] = extra[k];
+        var target = document.body || document.documentElement;
+        target.dispatchEvent(new KeyboardEvent("keydown", init));
+        target.dispatchEvent(new KeyboardEvent("keyup", init));
+        return true;
+      } catch (e) {
+        return false;
+      }
+    },
+    playPause: function () {
+      return this.click(SEL.play);
+    },
+    next: function () {
+      return this.click(SEL.next);
+    },
+    prev: function () {
+      return this.click(SEL.prev);
+    },
+    toggleShuffle: function () {
+      return this.click(SEL.shuffle);
+    },
+    cycleRepeat: function () {
+      return this.click(SEL.repeat);
+    },
+    toggleLike: function () {
+      return this.click(SEL.like);
+    },
+
+    /**
+     * Seek. Two things the old code got wrong:
+     *  • `input.value = x` followed by a bare `change` event is silently
+     *    dropped by React unless the value is set through the *native*
+     *    setter, so half of the seeks did nothing;
+     *  • it wrote `pos + 1` (a 1-second offset) with no clamping.
+     * We clamp, use the native setter, and dispatch both `input` and `change`.
+     */
+    seek: function (ms) {
+      var input = this.progressInput();
+      if (!input) return false;
+      var max = parseFloat(input.getAttribute("max")) || 0;
+      /* La graduation du curseur, celle avec laquelle on **lit** : on écrit
+         donc la même. (Écrire toujours des secondes déplaçait le curseur au
+         1000e de la position demandée sur un lecteur qui compte en
+         millisecondes.) */
+      var value = this.scale() === 1 ? ms : ms / 1000;
+      var seconds = clamp(value, 0, max);
+      try {
+        var proto = window.HTMLInputElement && window.HTMLInputElement.prototype;
+        var desc = proto && Object.getOwnPropertyDescriptor(proto, "value");
+        if (desc && desc.set) desc.set.call(input, String(seconds));
+        else input.value = String(seconds);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+      } catch (e) {
+        return false;
+      }
+    },
+
+    /** The page the web player currently shows. */
+    route: function () {
+      if ($('section[data-testid="home-page"]')) return "home";
+      if ($('section[data-testid="search-page"]')) return "search";
+      var sections = $$(SEL.pageSection.join(","));
+      for (var i = 0; i < sections.length; i++) {
+        var t = sections[i].getAttribute("data-testid") || "";
+        if (/-page$/.test(t) && t !== "home-page" && t !== "search-page") return "page";
+      }
+      return "other";
+    },
+
+    /**
+     * **Une sous-page, décidée par l'adresse.** Playlist, album, artiste,
+     * section, titres likés : tout ce qui n'est ni la racine du lecteur, ni la
+     * recherche, ni la connexion. Le DOM ne suffisait pas — le 25/09, une
+     * playlist ouverte depuis la bibliothèque n'était pas reconnue comme une
+     * sous-page, la barre latérale de Spotify (devenue pleine page) restait
+     * posée dessus, et l'écran paraissait noir.
+     */
+    isSubPagePath: function () {
+      var path = (location.pathname || "/").replace(/\/+$/, "");
+      if ((location.host || "").indexOf("accounts.spotify.com") >= 0) return false;
+      if (/\/login(\/|$)/.test(path)) return false;
+      if (/^\/search(\/|$)/.test(path)) return false;
+      if (Home.isHomePath()) return false;
+      return true;
+    },
+
+    /** Title of the page currently open (playlist/album/artist…). */
+    pageTitle: function () {
+      var h1 = pick(SEL.pageH1);
+      return h1 ? (h1.textContent || "").trim() : "";
+    },
+
+    goHome: function () {
+      if (this.click(SEL.homeBtn)) return true;
+      try {
+        location.assign("/");
+        return true;
+      } catch (e) {
+        return false;
+      }
+    },
+    goSearch: function () {
+      if (this.click(SEL.searchBtn)) return true;
+      try {
+        location.assign("/search");
+        return true;
+      } catch (e) {
+        return false;
+      }
+    },
+    /** Internal history, with a guard so we never leave the app. */
+    goBack: function () {
+      if (History.depth > 0) {
+        History.depth--;
+        try {
+          history.back();
+          return true;
+        } catch (e) {
+          /* fall through */
+        }
+      }
+      return this.goHome();
+    },
+    focusSearch: function () {
+      var input = pick(SEL.searchInput);
+      if (!input) return false;
+      try {
+        input.focus({ preventScroll: true });
+        return true;
+      } catch (e) {
+        return false;
+      }
+    },
+    queueButton: function () {
+      return this.findBarButton(/file d'attente|queue/i);
+    },
+    devicesButton: function () {
+      return this.findBarButton(/appareil|device|connect/i);
+    },
+    lyricsButton: function () {
+      return pick(SEL.lyrics);
+    },
+    karaokeButton: function () {
+      return pick(SEL.karaoke);
+    },
+    /** Le curseur de volume **de Spotify** : source de vérité unique, on ne
+        tient pas un second volume de notre côté (il divergerait). */
+    volumeInput: function () {
+      return pick(SEL.volume);
+    },
+    /** Absolute URL of the track that is playing (used by "Partager"). */
+    trackHref: function () {
+      var a = pick(SEL.trackLink);
+      var href = a && a.getAttribute("href");
+      if (href && href !== "#") {
+        return href.indexOf("http") === 0 ? href : "https://open.spotify.com" + href;
+      }
+      return "https://open.spotify.com/";
+    },
+    /** Clickable album/artist cover of the now-playing widget. */
+    albumLink: function () {
+      var el = pick(SEL.albumLink);
+      if (!el) return null;
+      if (el.tagName === "A" && el.getAttribute("href")) return el;
+      var a = el.closest && el.closest("a[href]");
+      return a || null;
+    },
+    /** Scan the (hidden) desktop bar for a button by aria-label. */
+    findBarButton: function (re) {
+      var bar = pick(SEL.npBar);
+      if (!bar) return null;
+      var buttons = $$("button[aria-label], [role=\"button\"][aria-label]", bar);
+      for (var i = 0; i < buttons.length; i++) {
+        var l = buttons[i].getAttribute("aria-label") || "";
+        if (re.test(l)) return buttons[i];
+      }
+      return null;
+    },
+  };
+
+  /** Highest-resolution URL available for a cover <img>. */
+  function bestCoverUrl(img) {
+    var srcset = img.getAttribute("srcset");
+    if (srcset) {
+      var best = null;
+      srcset.split(",").forEach(function (part) {
+        var bits = part.trim().split(/\s+/);
+        if (!bits[0]) return;
+        var w = parseFloat(bits[1]) || 0;
+        if (!best || w >= best.w) best = { url: bits[0], w: w };
+      });
+      if (best) return best.url;
+    }
+    return img.currentSrc || img.src || "";
+  }
+
+  /* ------------------------------------------------------------------ *
+   * 3. Android bridge (optional)
+   * ------------------------------------------------------------------ */
+  var Bridge = {
+    has: function (name) {
+      return !!(window.AndBridge && typeof window.AndBridge[name] === "function");
+    },
+    call: function (name) {
+      if (!this.has(name)) return null;
+      var args = Array.prototype.slice.call(arguments, 1);
+      try {
+        return window.AndBridge[name].apply(window.AndBridge, args);
+      } catch (e) {
+        return null;
+      }
+    },
+    /** Payload keys kept identical to the previous implementation so the
+     *  existing Kotlin/Java notification code keeps working untouched. */
+    mediaStatus: function (s) {
+      this.call(
+        "recMediaStatus",
+        JSON.stringify({
+          track: s.title || "",
+          artist: s.artist || "",
+          playing: !!s.playing,
+          repeat: s.repeat === "context" ? "true" : s.repeat === "track" ? "mixed" : "false",
+          fav: !!s.liked,
+          duration: s.duration || 0,
+          position: Math.round(s.position || 0),
+          cover: s.cover || "",
+        })
+      );
+    },
+    mediaPosition: function (ms) {
+      this.call("recMediaPosition", Math.round(ms || 0));
+    },
+    playLoaded: function () {
+      this.call("playLoaded");
+    },
+    uiReady: function () {
+      this.call("cssInjected");
+    },
+    shutdownLock: function (wantShut) {
+      this.call("manageTShut", !!wantShut);
+    },
+    sleepLock: function (wantSleep) {
+      this.call("manageTSleep", !!wantSleep);
+    },
+    wakeUp: function () {
+      this.call("wakeUp");
+    },
+    wakeOff: function () {
+      this.call("wakeOff");
+    },
+    isWoke: function () {
+      return this.call("isWoke") === true;
+    },
+    defer: function (message) {
+      this.call("deferMessage", message);
+    },
+  };
+
+  /* ------------------------------------------------------------------ *
+   * 4. State store
+   * ------------------------------------------------------------------ */
+  var State = {
+    title: "",
+    artist: "",
+    cover: "",
+    playing: false,
+    position: 0,
+    duration: 0,
+    liked: false,
+    repeat: "off",
+    shuffle: false,
+    hasTrack: false,
+    route: "other",
+    tab: "home",
+    /* local interpolation between two DOM reads, for a smooth progress bar */
+    anchorPos: 0,
+    anchorAt: 0,
+    seeking: false,
+    seekPreview: 0,
+  };
+
+  var listeners = [];
+  function onState(fn) {
+    listeners.push(fn);
+  }
+  function emit(patch, reason) {
+    var before = JSON.stringify(State);
+    for (var k in patch) if (patch[k] !== undefined && patch[k] !== null) State[k] = patch[k];
+    if (before === JSON.stringify(State)) return;
+    for (var i = 0; i < listeners.length; i++) {
+      try {
+        listeners[i](State, reason);
+      } catch (e) {
+        /* one broken listener must not break the UI */
+      }
+    }
+  }
+
+  /** The position to display right now (extrapolated while playing). */
+  function livePosition() {
+    if (State.seeking) return State.seekPreview;
+    if (!State.playing) return State.anchorPos;
+    var dt = performance.now() - State.anchorAt;
+    return clamp(State.anchorPos + dt, 0, State.duration || Infinity);
+  }
+
+  /* ------------------------------------------------------------------ *
+   * 5. Mirror — DOM → State (event driven, no 2 s polling loop)
+   * ------------------------------------------------------------------ */
+  var lastPush = { key: "", at: 0 };
+
+  function syncFromDom(reason) {
+    var patch = Spotify.read();
+    if (patch.position !== undefined) {
+      State.anchorPos = patch.position;
+      State.anchorAt = performance.now();
+    }
+    if (patch.title !== undefined) patch.hasTrack = !!patch.title;
+    emit(patch, reason || "sync");
+  }
+
+  function pushToAndroid() {
+    var key = [State.title, State.artist, State.playing, State.repeat, State.liked, State.cover].join("|");
+    var now = Date.now();
+    if (key === lastPush.key && now - lastPush.at < 30000) return;
+    lastPush.key = key;
+    lastPush.at = now;
+    Bridge.mediaStatus(State);
+    Bridge.mediaPosition(livePosition());
+  }
+
+  var Mirror = {
+    observer: null,
+    probe: null,
+    start: function () {
+      var bar = pick(SEL.npBar);
+      if (!bar) {
+        /* La barre « lecture en cours » n'existe qu'une fois le web player
+           prêt (et la session ouverte). On la guette au lieu d'abandonner :
+           la coque, elle, est déjà affichée. */
+        if (!this.probe && window.MutationObserver) {
+          var self = this;
+          this.probe = new MutationObserver(function () {
+            if (!pick(SEL.npBar)) return;
+            self.probe.disconnect();
+            self.probe = null;
+            self.start();
+            startPlayer();
+          });
+          this.probe.observe(document.body, { childList: true, subtree: true });
+        }
+        return false;
+      }
+      if (this.observer) this.observer.disconnect();
+      this.observer = new MutationObserver(function () {
+        syncFromDom("dom");
+      });
+      this.observer.observe(bar, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["aria-checked", "aria-label", "src", "value"],
+      });
+      // The progress <input> fires native input events while playing.
+      var input = Spotify.progressInput();
+      if (input) {
+        input.addEventListener("input", function () {
+          State.anchorPos = (parseFloat(input.value) || 0) * 1000;
+          State.anchorAt = performance.now();
+        });
+      }
+      return true;
+    },
+  };
+
+  /* ------------------------------------------------------------------ *
+   * 6. rAF ticker — only runs while something actually moves
+   * ------------------------------------------------------------------ */
+  var Ticker = {
+    raf: 0,
+    last: 0,
+    lastPush: 0,
+    lastMini: 0,
+    start: function () {
+      if (this.raf) return;
+      var self = this;
+      self.raf = requestAnimationFrame(function tick(now) {
+        self.raf = requestAnimationFrame(tick);
+        if (now - self.last < 100) return; // 10 fps is plenty for a progress bar
+        self.last = now;
+        /* Les statistiques se nourrissent de l'avancement du lecteur : chaque
+           seconde dont la position progresse est une seconde écoutée, et le
+           relevé a lieu même en pause (pour fermer l'écoute en cours). */
+        Stats.tick(State, Date.now());
+        /* **Le mini-lecteur est réaffirmé.** Une fois par seconde : s'il a été
+           poussé hors de l'écran (classe restée en place, geste interrompu), il
+           revient de lui-même — sans dépendre d'un chemin de code précis. */
+        if (now - self.lastMini > 1000) {
+          self.lastMini = now;
+          if (UI.reassertMini()) UI.paint(State, "réaffirmation");
+          /* **Et rien de nous sur une page ouverte** : une playlist reste
+             visible même si un chemin de code a laissé un de nos écrans en
+             place. */
+          if (UI.reassertSurfaces()) UI.paintChrome(State);
+        }
+        if (!State.playing || State.seeking) return;
+        Spotify.calibrate();
+        UI.paintProgress();
+        /* Keep the Android media session / lock-screen scrubber honest: the
+           old layer pushed a position only when it happened to scrape the DOM
+           (>4 s drift, every 2 s), which made the lock screen lag behind. */
+        if (now - self.lastPush > 15000) {
+          self.lastPush = now;
+          Bridge.mediaPosition(livePosition());
+        }
+      });
+    },
+  };
+
+  /* ------------------------------------------------------------------ *
+   * 7. Icons (24×24). Line icons where a stroked glyph reads better on a
+   *    small screen, filled where Spotify's own design is solid.
+   * ------------------------------------------------------------------ */
+  var ICONS = {
+    homeLine:
+      '<path d="M12.5 3.247a1 1 0 0 0-1 0L4 7.577V20h4.5v-6a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v6H20V7.577l-7.5-4.33zm-2-1.732a3 3 0 0 1 3 0l7.5 4.33a2 2 0 0 1 1 1.732V21a1 1 0 0 1-1 1h-6.5a1 1 0 0 1-1-1v-6h-3v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V7.577a2 2 0 0 1 1-1.732l7.5-4.33z"/>',
+    homeSolid:
+      '<path d="M13.5 1.515a3 3 0 0 0-3 0L3 5.845a2 2 0 0 0-1 1.732V21a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-6h4v6a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V7.577a2 2 0 0 0-1-1.732l-7.5-4.33z"/>',
+    searchLine:
+      '<path d="M10.533 1.279c-5.18 0-9.407 4.14-9.407 9.279s4.226 9.279 9.407 9.279c2.234 0 4.29-.77 5.907-2.058l4.353 4.353a1 1 0 1 0 1.414-1.414l-4.344-4.344a9.157 9.157 0 0 0 2.077-5.816c0-5.14-4.226-9.28-9.407-9.28zm-7.407 9.279c0-4.006 3.302-7.28 7.407-7.28s7.407 3.274 7.407 7.28-3.302 7.279-7.407 7.279-7.407-3.273-7.407-7.28z"/>',
+    searchSolid:
+      '<path d="M10.533 1.279c-5.18 0-9.407 4.14-9.407 9.279s4.226 9.279 9.407 9.279c2.234 0 4.29-.77 5.907-2.058l4.353 4.353a1 1 0 1 0 1.414-1.414l-4.344-4.344a9.157 9.157 0 0 0 2.077-5.816c0-5.14-4.226-9.28-9.407-9.28zm-4.8 9.279c0-2.77 2.03-4.8 4.8-4.8 2.77 0 4.8 2.03 4.8 4.8 0 2.77-2.03 4.8-4.8 4.8-2.77 0-4.8-2.03-4.8-4.8z"/>',
+    libraryLine:
+      '<path d="M3 22a1 1 0 0 1-1-1V3a1 1 0 0 1 2 0v18a1 1 0 0 1-1 1zm6.5 0a1 1 0 0 1-1-1V3a1 1 0 0 1 2 0v18a1 1 0 0 1-1 1zM15.8 3.2a1 1 0 0 1 1.2-.7l1.6.4a1 1 0 0 1 .7 1.2l-4.6 17.6a1 1 0 0 1-1.2.7l-1.6-.4a1 1 0 0 1-.7-1.2l4.6-17.6z"/>',
+    librarySolid:
+      '<path d="M3 22a1 1 0 0 1-1-1V3a1 1 0 0 1 2 0v18a1 1 0 0 1-1 1zM9 22a1 1 0 0 1-1-1V3a1 1 0 0 1 2 0v18a1 1 0 0 1-1 1zm7.4-19.6a1 1 0 0 1 1.2-.7l1.5.4a1 1 0 0 1 .7 1.2l-4.4 17.6a1 1 0 0 1-1.2.7l-1.5-.4a1 1 0 0 1-.7-1.2l4.4-17.6z"/>',
+    play: '<path d="M7.05 3.606l13.49 7.788a.7.7 0 0 1 0 1.212L7.05 20.394A.7.7 0 0 1 6 19.788V4.212a.7.7 0 0 1 1.05-.606z"/>',
+    pause:
+      '<path d="M5.7 3a.7.7 0 0 0-.7.7v16.6a.7.7 0 0 0 .7.7h3.6a.7.7 0 0 0 .7-.7V3.7a.7.7 0 0 0-.7-.7H5.7zm9 0a.7.7 0 0 0-.7.7v16.6a.7.7 0 0 0 .7.7h3.6a.7.7 0 0 0 .7-.7V3.7a.7.7 0 0 0-.7-.7h-3.6z"/>',
+    next: '<path d="M17.7 3a.7.7 0 0 0-.7.7v6.805L5.05 3.606A.7.7 0 0 0 4 4.212v15.576a.7.7 0 0 0 1.05.606L17 13.495V20.3a.7.7 0 0 0 .7.7h1.6a.7.7 0 0 0 .7-.7V3.7a.7.7 0 0 0-.7-.7h-1.6z"/>',
+    prev: '<path d="M6.3 3a.7.7 0 0 1 .7.7v6.805l11.95-6.899A.7.7 0 0 1 20 4.212v15.576a.7.7 0 0 1-1.05.606L7 13.495V20.3a.7.7 0 0 1-.7.7H4.7a.7.7 0 0 1-.7-.7V3.7a.7.7 0 0 1 .7-.7h1.6z"/>',
+    shuffleLine:
+      '<g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M18 4.5 21 7.5l-3 3"/><path d="M18 13.5l3 3-3 3"/><path d="M3 7.5h3.7a4 4 0 0 1 3.4 1.9l3 5.2a4 4 0 0 0 3.4 1.9H21"/><path d="M3 16.5h3.7a4 4 0 0 0 3.4-1.9l3-5.2A4 4 0 0 1 16.5 7.5H21"/></g>',
+    repeatLine:
+      '<g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3.5l3 3-3 3"/><path d="M20 6.5H7a4 4 0 0 0-4 4v1"/><path d="M7 20.5l-3-3 3-3"/><path d="M4 17.5h13a4 4 0 0 0 4-4v-1"/></g>',
+    heartLine:
+      '<path d="M12 20.7 4.9 13.9A4.9 4.9 0 0 1 12 7.2a4.9 4.9 0 0 1 7.1 6.7L12 20.7z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/>',
+    heartSolid:
+      '<path d="M12 20.7 4.9 13.9A4.9 4.9 0 0 1 12 7.2a4.9 4.9 0 0 1 7.1 6.7L12 20.7z"/>',
+    checkCircle:
+      '<path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm4.7 7.7-5.4 5.4a1 1 0 0 1-1.4 0l-2.6-2.6 1.4-1.4 1.9 1.9 4.7-4.7 1.4 1.4z"/>',
+    /* Tête de canard du logo — écran d'accueil et icône de notification. */
+    duck:
+      '<path d="M13.5 2.3a6.3 6.3 0 0 0-6.1 7.9L2.7 12a1 1 0 0 0 0 1.9l4.7 1.8A6.3 6.3 0 1 0 13.5 2.3zm1.6 4.4a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3z"/>',
+    queueLine:
+      '<g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h12M4 12h12M4 18h7"/><path d="M17.5 14.5 21.5 17l-4 2.5z" fill="currentColor" stroke="none"/></g>',
+    deviceLine:
+      '<g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><rect x="5" y="2.5" width="14" height="19" rx="1.5"/><circle cx="12" cy="9.5" r="2.6"/><circle cx="12" cy="16.5" r="1.6"/></g>',
+    lyricsLine:
+      '<g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5h8.5L18 7v13.5H6z"/><path d="M8.5 11h7M8.5 14.5h7M8.5 8h3.5"/></g>',
+    micLine:
+      '<path d="M12 1.8A3.2 3.2 0 0 0 8.8 5v6a3.2 3.2 0 0 0 6.4 0V5A3.2 3.2 0 0 0 12 1.8zm-6 9.2a1 1 0 0 1 1 1 5 5 0 0 0 10 0 1 1 0 1 1 2 0 7 7 0 0 1-6 6.93V21h2.6a1 1 0 1 1 0 2H10.4a1 1 0 1 1 0-2H13v-2.07A7 7 0 0 1 5 12a1 1 0 0 1 1-1z"/>',
+    speakerLine:
+      '<path d="M11.4 3.05a1 1 0 0 1 .6.92v16.06a1 1 0 0 1-1.62.78L6.1 17.4H4a1 1 0 0 1-1-1V7.6a1 1 0 0 1 1-1h2.1l4.28-3.41a1 1 0 0 1 1.02-.14zM15.7 8.1a1 1 0 0 1 1.4.08 5.6 5.6 0 0 1 0 7.64 1 1 0 1 1-1.49-1.33 3.6 3.6 0 0 0 0-4.98 1 1 0 0 1 .09-1.41zM18.6 5.1a1 1 0 0 1 1.41.02 9.6 9.6 0 0 1 0 13.76 1 1 0 0 1-1.44-1.39 7.6 7.6 0 0 0 0-10.98 1 1 0 0 1 .03-1.41z"/>',
+    shareLine:
+      '<g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5v11"/><path d="M8.5 7 12 3.5 15.5 7"/><path d="M5.5 11.5v8h13v-8"/></g>',
+    plusLine:
+      '<g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></g>',
+    chevronDown:
+      '<path d="M5.3 9.1a1 1 0 0 1 1.4 0L12 14.4l5.3-5.3a1 1 0 1 1 1.4 1.4L12 17.2 5.3 10.5a1 1 0 0 1 0-1.4z"/>',
+    chevronLeft:
+      '<path d="M15.7 4.3a1 1 0 0 1 0 1.4L9.4 12l6.3 6.3a1 1 0 0 1-1.4 1.4l-7-7a1 1 0 0 1 0-1.4l7-7a1 1 0 0 1 1.4 0z"/>',
+    ellipsis:
+      '<path d="M6 12a1.75 1.75 0 1 1-3.5 0 1.75 1.75 0 0 1 3.5 0zm7.75 0a1.75 1.75 0 1 1-3.5 0 1.75 1.75 0 0 1 3.5 0zm7.75 0a1.75 1.75 0 1 1-3.5 0 1.75 1.75 0 0 1 3.5 0z"/>',
+    musicNote:
+      '<path d="M20 3.2v12.3a3.5 3.5 0 1 1-2-3.2V6.6l-8 1.7v9.2a3.5 3.5 0 1 1-2-3.2V5.6l12-2.4z"/>',
+    gearLine:
+      '<g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2.8l1.2 1.9 2.2-.5.6 2.2 2 .9-.9 2 1.2 1.9-1.2 1.9.9 2-2 .9-.6 2.2-2.2-.5L12 21.2l-1.2-1.9-2.2.5-.6-2.2-2-.9.9-2L5.7 12l1.2-1.9-.9-2 2-.9.6-2.2 2.2.5z"/></g>',
+    discLine:
+      '<g fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.6"/></g>',
+    /* Barre de navigation supérieure (disposition d'origine de SpotiDuck). */
+    bellLine:
+      '<g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9.5a6 6 0 0 1 12 0c0 4 1.2 5.6 2.2 6.6.5.5.1 1.4-.6 1.4H4.4c-.7 0-1.1-.9-.6-1.4C4.8 15.1 6 13.5 6 9.5z"/><path d="M9.8 20.2a2.4 2.4 0 0 0 4.4 0"/></g>',
+    friendsLine:
+      '<g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="9.2" cy="8.6" r="3.4"/><path d="M2.8 19.4c0-3 2.9-5 6.4-5s6.4 2 6.4 5"/><path d="M16.4 6.2a3.2 3.2 0 0 1 0 6.2"/><path d="M17.6 14.8c2.2.5 3.6 1.9 3.6 4"/></g>',
+    spotifyLogo:
+      '<g><circle cx="12" cy="12" r="10"/><g fill="none" stroke="#000" stroke-width="1.9" stroke-linecap="round"><path d="M7 9c3.3-.9 6.7-.5 9.6 1.3"/><path d="M7.6 12.6c2.7-.7 5.4-.4 7.8 1.1"/><path d="M8.2 15.9c2.1-.5 4.2-.3 6 .9"/></g></g>',
+    personLine:
+      '<g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><circle cx="12" cy="8" r="3.6"/><path d="M4.8 20.4c0-3.3 3.2-5.6 7.2-5.6s7.2 2.3 7.2 5.6"/></g>',
+    refreshLine:
+      '<g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 3.6V8h-4.4"/></g>',
+    cloudOffLine:
+      '<g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 18h8a4 4 0 0 0 .8-7.9 5.5 5.5 0 0 0-8-2.6M6.6 18a3.8 3.8 0 0 1-.4-7.6"/><path d="M3.5 3.5l17 17"/></g>',
+    checkLine: '<path d="M9.6 16.3 5.3 12l-1.4 1.4 5.7 5.7L20.4 7.4 19 6z"/>',
+    infoLine:
+      '<g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5.5M12 7.6v.2"/></g>',
+    shieldLine:
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v6c0 4.2-2.9 7.6-7 9-4.1-1.4-7-4.8-7-9V6l7-3z"/><path d="M9.5 12l1.8 1.8L14.8 10"/></svg>',
+    arrowUndo:
+      '<g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></g>',
+    plusCircle:
+      '<g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></g>',
+  };
+
+  function svg(paths, cls) {
+    return (
+      '<svg class="' +
+      (cls || "") +
+      '" viewBox="0 0 24 24" aria-hidden="true" focusable="false">' +
+      paths +
+      "</svg>"
+    );
+  }
+
+  /* ------------------------------------------------------------------ *
+   * 8. UI construction
+   * ------------------------------------------------------------------ */
+  var UI = {
+    layer: null,
+    el: {},
+    built: false,
+
+    build: function () {
+      if (this.built) return;
+      var L = document.createElement("div");
+      L.className = "sd-layer";
+      L.setAttribute("data-sd-version", VERSION);
+
+      /* ---- top bar (library title / back button on sub-pages) ---- */
+      var topbar = document.createElement("header");
+      topbar.className = "sd-topbar";
+      topbar.innerHTML =
+        '<button class="sd-iconbtn sd-back" type="button" aria-label="' +
+        Settings.labels.back +
+        '">' +
+        svg(ICONS.chevronLeft) +
+        "</button>" +
+        '<div class="sd-topbar-title"></div>' +
+        '<button class="sd-iconbtn sd-topbar-gear" type="button" aria-label="' +
+        Settings.labels.settings +
+        '">' +
+        svg(ICONS.gearLine) +
+        "</button>" +
+        '<button class="sd-iconbtn sd-topbar-close" type="button" aria-label="' +
+        Settings.labels.close +
+        '">' +
+        svg(ICONS.chevronDown) +
+        "</button>";
+
+      /* ---- barre de navigation supérieure (disposition d'origine) ----
+         Maison · Bibliothèque · Recherche sont les trois vues ; le logo rappelle
+         l'application, et les trois icônes de droite ouvrent les écrans de
+         Spotify (notifications, amis, profil). Sur les sous-pages, la barre de
+         titre ci-dessus reprend la main. */
+      var nav = document.createElement("nav");
+      nav.className = "sd-nav";
+      nav.setAttribute("role", "tablist");
+      nav.setAttribute("aria-label", Settings.labels.app);
+      nav.innerHTML = [
+        navItem("home", ICONS.homeLine, ICONS.homeSolid, Settings.labels.home),
+        navItem("library", ICONS.libraryLine, ICONS.librarySolid, Settings.labels.library),
+        navItem("search", ICONS.searchLine, ICONS.searchSolid, Settings.labels.search),
+        '<span class="sd-nav-logo" aria-hidden="true">' + svg(ICONS.spotifyLogo) + "</span>",
+        '<button class="sd-iconbtn sd-nav-bell" type="button" aria-label="' +
+          Settings.labels.notifications +
+          '">' +
+          svg(ICONS.bellLine) +
+          "</button>",
+        '<button class="sd-iconbtn sd-nav-friends" type="button" aria-label="' +
+          Settings.labels.friends +
+          '">' +
+          svg(ICONS.friendsLine) +
+          "</button>",
+        '<button class="sd-iconbtn sd-nav-profile" type="button" aria-label="' +
+          Settings.labels.profile +
+          '">' +
+          svg(ICONS.personLine) +
+          "</button>",
+      ].join("");
+
+      /* ---- mini player : le lecteur complet, comme dans l'application ----
+         Ligne 1 · pochette, titre, artiste, j'aime
+         Ligne 2 · aléatoire, précédent, lecture, suivant, répétition
+         Ligne 3 · temps écoulé, barre de progression, durée totale */
+      var mini = document.createElement("div");
+      mini.className = "sd-mini";
+      mini.setAttribute("role", "button");
+      mini.setAttribute("tabindex", "0");
+      mini.setAttribute("aria-label", Settings.labels.nowPlaying);
+      mini.innerHTML =
+        '<div class="sd-mini-top">' +
+        '<div class="sd-mini-art"><img alt="" decoding="async"></div>' +
+        '<div class="sd-mini-meta">' +
+        '<span class="sd-mini-title"></span>' +
+        '<span class="sd-mini-artist"></span>' +
+        "</div>" +
+        '<button class="sd-iconbtn sd-mini-like" type="button" aria-label="' +
+        Settings.labels.like +
+        '">' +
+        svg(ICONS.heartLine, "sd-icon-line") +
+        svg(ICONS.heartSolid, "sd-icon-solid") +
+        "</button>" +
+        "</div>" +
+        '<div class="sd-mini-row">' +
+        '<button class="sd-iconbtn sd-mini-shuffle" type="button" aria-label="' +
+        Settings.labels.shuffle +
+        '">' +
+        svg(ICONS.shuffleLine) +
+        "</button>" +
+        '<button class="sd-iconbtn sd-mini-prev" type="button" aria-label="' +
+        Settings.labels.previous +
+        '">' +
+        svg(ICONS.prev) +
+        "</button>" +
+        '<button class="sd-iconbtn sd-mini-play" type="button"></button>' +
+        '<button class="sd-iconbtn sd-mini-next" type="button" aria-label="' +
+        Settings.labels.next +
+        '">' +
+        svg(ICONS.next) +
+        "</button>" +
+        '<button class="sd-iconbtn sd-mini-repeat" type="button" aria-label="' +
+        Settings.labels.repeat +
+        '">' +
+        svg(ICONS.repeatLine) +
+        "</button>" +
+        "</div>" +
+        '<div class="sd-mini-seek-row">' +
+        '<span class="sd-mini-time sd-mini-cur">0:00</span>' +
+        '<div class="sd-mini-seek" role="slider" tabindex="0" aria-label="' +
+        Settings.labels.progress +
+        '" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">' +
+        "<i></i>" +
+        "</div>" +
+        '<span class="sd-mini-time sd-mini-dur">0:00</span>' +
+        "</div>" +
+        /* Ligne 4 · ce que l'application d'origine met sous la progression :
+           paroles, karaoké, file d'attente, appareils, volume. Rien n'est
+           décoratif : chaque commande pilote celle de Spotify, et disparaît
+           si Spotify ne l'expose pas sur la page courante. */
+        '<div class="sd-mini-row2">' +
+        '<button class="sd-iconbtn sd-mini-lyrics" type="button" aria-label="' +
+        Settings.labels.lyrics +
+        '">' +
+        svg(ICONS.lyricsLine) +
+        "</button>" +
+        '<button class="sd-iconbtn sd-mini-karaoke" type="button" aria-label="' +
+        Settings.labels.karaoke +
+        '" hidden>' +
+        svg(ICONS.micLine) +
+        "</button>" +
+        '<button class="sd-iconbtn sd-mini-queue" type="button" aria-label="' +
+        Settings.labels.queue +
+        '">' +
+        svg(ICONS.queueLine) +
+        "</button>" +
+        '<button class="sd-iconbtn sd-mini-devices" type="button" aria-label="' +
+        Settings.labels.devices +
+        '" hidden>' +
+        svg(ICONS.deviceLine) +
+        "</button>" +
+        '<div class="sd-mini-volume" hidden>' +
+        '<span class="sd-mini-volicon" aria-hidden="true">' +
+        svg(ICONS.speakerLine) +
+        "</span>" +
+        '<input class="sd-mini-vol" type="range" min="0" max="100" step="1" value="100" aria-label="' +
+        Settings.labels.volume +
+        '">' +
+        "</div>" +
+        "</div>";
+
+      /* ---- tab bar ---- */
+      var tabbar = document.createElement("nav");
+      tabbar.className = "sd-tabbar";
+      tabbar.setAttribute("role", "tablist");
+      tabbar.innerHTML = [
+        tab("home", ICONS.homeLine, ICONS.homeSolid, Settings.labels.home),
+        tab("search", ICONS.searchLine, ICONS.searchSolid, Settings.labels.search),
+        tab("library", ICONS.libraryLine, ICONS.librarySolid, Settings.labels.library),
+      ].join("");
+
+      /* ---- full player sheet ---- */
+      var player = document.createElement("section");
+      player.className = "sd-player";
+      player.setAttribute("role", "dialog");
+      player.setAttribute("aria-modal", "true");
+      player.setAttribute("aria-label", Settings.labels.nowPlaying);
+      player.setAttribute("aria-hidden", "true");
+      player.innerHTML =
+        '<header class="sd-player-head">' +
+        '<button class="sd-iconbtn sd-player-close" type="button" aria-label="' +
+        Settings.labels.close +
+        '">' +
+        svg(ICONS.chevronDown) +
+        "</button>" +
+        '<div class="sd-player-title"></div>' +
+        '<button class="sd-iconbtn sd-player-menu" type="button" aria-label="' +
+        Settings.labels.queue +
+        '">' +
+        svg(ICONS.ellipsis) +
+        "</button>" +
+        "</header>" +
+        '<div class="sd-player-body">' +
+        '<div class="sd-player-art">' +
+        '<img alt="" decoding="async">' +
+        '<div class="sd-player-art-empty">' +
+        svg(ICONS.musicNote) +
+        "</div>" +
+        "</div>" +
+        '<div class="sd-player-right">' +
+        '<div class="sd-player-meta">' +
+        '<div class="sd-player-text">' +
+        '<h1 class="sd-player-track"></h1>' +
+        '<span class="sd-player-artist"></span>' +
+        "</div>" +
+        '<button class="sd-iconbtn sd-like" type="button">' +
+        svg(ICONS.heartLine, "sd-icon-line") +
+        svg(ICONS.heartSolid, "sd-icon-solid") +
+        "</button>" +
+        "</div>" +
+        '<div class="sd-seek" role="slider" tabindex="0" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">' +
+        '<div class="sd-seek-rail"><div class="sd-seek-track">' +
+        '<div class="sd-seek-fill"></div><div class="sd-seek-thumb"></div>' +
+        "</div></div>" +
+        '<div class="sd-times"><span class="sd-t-cur">0:00</span><span class="sd-t-dur">0:00</span></div>' +
+        "</div>" +
+        '<div class="sd-player-controls">' +
+        '<button class="sd-iconbtn sd-ctrl-shuffle" type="button" aria-label="' +
+        Settings.labels.shuffle +
+        '">' +
+        svg(ICONS.shuffleLine) +
+        "</button>" +
+        '<button class="sd-iconbtn sd-ctrl-prev" type="button" aria-label="' +
+        Settings.labels.prev +
+        '">' +
+        svg(ICONS.prev) +
+        "</button>" +
+        '<button class="sd-iconbtn sd-ctrl-play" type="button"></button>' +
+        '<button class="sd-iconbtn sd-ctrl-next" type="button" aria-label="' +
+        Settings.labels.next +
+        '">' +
+        svg(ICONS.next) +
+        "</button>" +
+        '<button class="sd-iconbtn sd-ctrl-repeat" type="button" aria-label="' +
+        Settings.labels.repeat +
+        '">' +
+        svg(ICONS.repeatLine) +
+        "</button>" +
+        "</div>" +
+        '<div class="sd-player-bottom">' +
+        '<button class="sd-iconbtn sd-ctrl-device" type="button" aria-label="' +
+        Settings.labels.devices +
+        '">' +
+        svg(ICONS.deviceLine) +
+        "</button>" +
+        '<button class="sd-iconbtn sd-ctrl-queue" type="button" aria-label="' +
+        Settings.labels.queue +
+        '">' +
+        svg(ICONS.queueLine) +
+        "</button>" +
+        '<button class="sd-iconbtn sd-ctrl-lyrics" type="button" aria-label="' +
+        Settings.labels.lyrics +
+        '">' +
+        svg(ICONS.lyricsLine) +
+        "</button>" +
+        '<button class="sd-iconbtn sd-ctrl-share" type="button" aria-label="' +
+        Settings.labels.share +
+        '">' +
+        svg(ICONS.shareLine) +
+        "</button>" +
+        "</div>" +
+        '<div class="sd-player-empty">' +
+        Settings.labels.noTrack +
+        "</div>" +
+        "</div>" +
+        "</div>";
+
+      /* ---- écran d'accueil (session déconnectée) ---- */
+      var welcome = document.createElement("section");
+      welcome.className = "sd-welcome";
+      welcome.setAttribute("aria-hidden", "true");
+      welcome.innerHTML =
+        '<div class="sd-welcome-card">' +
+        '<span class="sd-welcome-logo">' +
+        svg(ICONS.duck) +
+        "</span>" +
+        '<h1 class="sd-welcome-title">' +
+        Settings.labels.welcomeTitle +
+        "</h1>" +
+        '<p class="sd-welcome-text">' +
+        Settings.labels.welcomeText +
+        "</p>" +
+        '<a class="sd-btn sd-welcome-cta" href="' + CLASSIC_LOGIN + '">' +
+        Settings.labels.welcomeCta +
+        "</a>" +
+        '<p class="sd-welcome-note">' +
+        Settings.labels.welcomeNote +
+        "</p>" +
+        "</div>";
+
+      /* Le bouton de l'écran d'accueil passe par la partie native, comme
+         celui de la page de connexion : même adresse, mais chargée par la
+         WebView elle-même, sans dépendre du routeur de Spotify. Sans ça, un
+         appui qui n'aboutit pas laissait l'utilisateur sur l'écran d'accueil
+         sans aucun moyen d'avancer. */
+      var welcomeCta = welcome.querySelector(".sd-welcome-cta");
+      if (welcomeCta) {
+        welcomeCta.addEventListener("click", function (event) {
+          try {
+            if (window.AndBridge && AndBridge.openLogin) {
+              event.preventDefault();
+              Bridge.call("openLogin");
+            }
+          } catch (e) {}
+        });
+      }
+
+      /* ---- queue sheet scrim + grabber ---- */
+      var scrim = document.createElement("div");
+      scrim.className = "sd-scrim";
+      var grabber = document.createElement("div");
+      grabber.className = "sd-sheet-grabber";
+
+      /* ---- login helper + offline banner ---- */
+      var loginCta = document.createElement("a");
+      loginCta.className = "sd-login-cta";
+      loginCta.href = CLASSIC_LOGIN;
+      /* La navigation passe par la partie native quand elle est là : même
+         adresse, mais chargée par la WebView elle-même, sans dépendre du
+         routeur de Spotify. */
+      loginCta.addEventListener("click", function (event) {
+        try {
+          if (window.AndBridge && AndBridge.openLogin) {
+            event.preventDefault();
+            Bridge.call("openLogin");
+          }
+        } catch (e) {}
+      });
+      loginCta.textContent = Settings.labels.classicLogin;
+      /* Le voile d'ouverture : jamais d'écran noir pendant qu'une page
+         s'ouvre. Il couvre la **zone de contenu** — la navigation et le
+         lecteur restent à leur place et utilisables —, il dit ce qu'il ouvre,
+         et il se retire dès que la page est là (module `Open`). */
+      var openVeil = document.createElement("div");
+      openVeil.className = "sd-open";
+      openVeil.hidden = true;
+      openVeil.setAttribute("role", "status");
+      openVeil.setAttribute("aria-live", "polite");
+      openVeil.innerHTML =
+        '<span class="sd-open-bar" aria-hidden="true"></span>' +
+        '<span class="sd-open-card"><span class="sd-open-spin" aria-hidden="true"></span>' +
+        '<span class="sd-open-text"></span></span>';
+
+      var offlineBar = document.createElement("div");
+      offlineBar.className = "sd-offline-bar";
+      offlineBar.setAttribute("role", "status");
+      offlineBar.innerHTML =
+        '<span class="sd-offline-icon">' + svg(ICONS.cloudOffLine) + "</span>" +
+        "<span>" + Settings.labels.offline + "</span>";
+
+      L.appendChild(nav);
+      L.appendChild(topbar);
+      L.appendChild(mini);
+      L.appendChild(tabbar);
+      L.appendChild(scrim);
+      L.appendChild(grabber);
+      L.appendChild(player);
+      L.appendChild(loginCta);
+      L.appendChild(offlineBar);
+      L.appendChild(openVeil);
+      L.appendChild(welcome);
+      document.body.appendChild(L);
+
+      this.layer = L;
+      /* The sheets live in the same layer, so they are built once the layer
+         handle exists. */
+      Sheets.build();
+
+      this.el = {
+        topbar: topbar,
+        topbarBack: $(".sd-back", topbar),
+        topbarTitle: $(".sd-topbar-title", topbar),
+        topbarGear: $(".sd-topbar-gear", topbar),
+        topbarClose: $(".sd-topbar-close", topbar),
+        mini: mini,
+        miniImg: $(".sd-mini-art img", mini),
+        miniTitle: $(".sd-mini-title", mini),
+        miniArtist: $(".sd-mini-artist", mini),
+        miniLike: $(".sd-mini-like", mini),
+        miniShuffle: $(".sd-mini-shuffle", mini),
+        miniPrev: $(".sd-mini-prev", mini),
+        miniPlay: $(".sd-mini-play", mini),
+        miniNext: $(".sd-mini-next", mini),
+        miniRepeat: $(".sd-mini-repeat", mini),
+        miniCur: $(".sd-mini-cur", mini),
+        miniDur: $(".sd-mini-dur", mini),
+        miniSeek: $(".sd-mini-seek", mini),
+        miniProgress: $(".sd-mini-seek > i", mini),
+        miniLyrics: $(".sd-mini-lyrics", mini),
+        miniKaraoke: $(".sd-mini-karaoke", mini),
+        miniQueue: $(".sd-mini-queue", mini),
+        miniDevices: $(".sd-mini-devices", mini),
+        miniVolWrap: $(".sd-mini-volume", mini),
+        miniVol: $(".sd-mini-vol", mini),
+        nav: nav,
+        navItems: $$(".sd-nav-item", nav),
+        navBell: $(".sd-nav-bell", nav),
+        navFriends: $(".sd-nav-friends", nav),
+        navProfile: $(".sd-nav-profile", nav),
+        tabbar: tabbar,
+        tabs: $$(".sd-tab", tabbar),
+        player: player,
+        playerTitle: $(".sd-player-title", player),
+        playerClose: $(".sd-player-close", player),
+        playerMenu: $(".sd-player-menu", player),
+        art: $(".sd-player-art", player),
+        artImg: $(".sd-player-art img", player),
+        artEmpty: $(".sd-player-art-empty", player),
+        track: $(".sd-player-track", player),
+        artist: $(".sd-player-artist", player),
+        like: $(".sd-like", player),
+        seek: $(".sd-seek", player),
+        seekRail: $(".sd-seek-rail", player),
+        seekFill: $(".sd-seek-fill", player),
+        seekThumb: $(".sd-seek-thumb", player),
+        tCur: $(".sd-t-cur", player),
+        tDur: $(".sd-t-dur", player),
+        play: $(".sd-ctrl-play", player),
+        next: $(".sd-ctrl-next", player),
+        prev: $(".sd-ctrl-prev", player),
+        shuffle: $(".sd-ctrl-shuffle", player),
+        repeat: $(".sd-ctrl-repeat", player),
+        device: $(".sd-ctrl-device", player),
+        queue: $(".sd-ctrl-queue", player),
+        lyrics: $(".sd-ctrl-lyrics", player),
+        share: $(".sd-ctrl-share", player),
+        empty: $(".sd-player-empty", player),
+        right: $(".sd-player-right", player),
+        scrim: scrim,
+        grabber: grabber,
+        loginCta: loginCta,
+        offlineBar: offlineBar,
+        open: openVeil,
+        welcome: welcome,
+        welcomeCta: $(".sd-welcome-cta", welcome),
+      };
+      this.built = true;
+      this.bind();
+      this.paint(State, "build");
+    },
+
+    /* ---------------- painting ---------------- */
+    paint: function (s, reason) {
+      if (!this.built) return;
+      var e = this.el;
+
+
+      /* **Vos statistiques s'alimentent ici** — mais sur ce qui est
+         réellement écouté : `Stats.tick` suit l'avancement du lecteur et
+         attribue au titre en cours le temps passé. Noter la durée annoncée à
+         l'apparition du titre (ce qui se faisait avant) comptait quatre minutes
+         pour un titre survolé dix secondes : « les statistiques sont pas
+         bonne ». Le relevé a aussi lieu dans `Ticker`, pour la seconde près. */
+      Stats.tick(s);
+
+      /* titles — sans titre, le mini-lecteur dit où il en est plutôt que de
+         rester vide (il reste affiché, c'est le lecteur de l'application). */
+      /* Sans piste, l'état vide dit **pourquoi** : session fermée ou rien
+         lancé. Et si la session est fermée, l'appui sur la barre ouvre la
+         connexion (voir le clic plus bas). */
+      var signedOut = !s.hasTrack && !!LoginState && LoginState.state() === "out";
+      document.documentElement.classList.toggle("sd-mini-signed-out", signedOut);
+      var miniTitle = s.title || (signedOut ? Settings.labels.miniSignedOut : Settings.labels.noTrack);
+      var miniArtist = s.artist || (signedOut ? Settings.labels.miniSignedOutHint : Settings.labels.app);
+      if (e.miniTitle.textContent !== miniTitle) e.miniTitle.textContent = miniTitle;
+      if (e.miniArtist.textContent !== miniArtist) e.miniArtist.textContent = miniArtist;
+      if (e.track.textContent !== s.title) e.track.textContent = s.title || "";
+      if (e.artist.textContent !== s.artist) e.artist.textContent = s.artist || "";
+      var ctx = s.artist || Settings.labels.nowPlaying;
+      if (e.playerTitle.textContent !== ctx) e.playerTitle.textContent = ctx;
+
+      /* covers */
+      if (s.cover && e.miniImg.getAttribute("src") !== s.cover) {
+        setImage(e.miniImg, s.cover);
+      }
+      if (s.cover && e.artImg.getAttribute("src") !== s.cover) {
+        setImage(e.artImg, s.cover);
+        Accent.apply(s.cover, s.title);
+      }
+      e.artEmpty.style.display = s.cover ? "none" : "grid";
+      e.empty.style.display = s.hasTrack ? "none" : "block";
+      e.art.style.display = s.hasTrack ? "" : "none";
+
+      /* play/pause */
+      var playGlyph = svg(s.playing ? ICONS.pause : ICONS.play);
+      e.play.innerHTML = playGlyph;
+      e.miniPlay.innerHTML = playGlyph;
+      /* Sans titre : les commandes de transport sont **désactivées**, pas
+         masquées — on voit ce que l'application sait faire. */
+      [e.miniPrev, e.miniPlay, e.miniNext, e.miniShuffle, e.miniRepeat, e.miniLike].forEach(
+        function (btn) {
+          if (btn) btn.disabled = !s.hasTrack;
+        }
+      );
+      e.play.setAttribute("aria-label", s.playing ? Settings.labels.pause : Settings.labels.play);
+      e.miniPlay.setAttribute("aria-label", s.playing ? Settings.labels.pause : Settings.labels.play);
+
+      /* like */
+      toggle(e.like, "is-active", s.liked);
+      toggle(e.miniLike, "is-active", s.liked);
+      e.like.setAttribute("aria-label", s.liked ? Settings.labels.unlike : Settings.labels.like);
+
+      /* shuffle / repeat (feuille du lecteur **et** mini-lecteur) */
+      [e.shuffle, e.miniShuffle].forEach(function (btn) {
+        if (!btn) return;
+        toggle(btn, "is-active", !!s.shuffle);
+        btn.setAttribute("aria-checked", s.shuffle ? "true" : "false");
+      });
+      [e.repeat, e.miniRepeat].forEach(function (btn) {
+        if (!btn) return;
+        toggle(btn, "is-active", s.repeat !== "off");
+        toggle(btn, "is-one", s.repeat === "track");
+        btn.setAttribute(
+          "aria-checked",
+          s.repeat === "off" ? "false" : s.repeat === "track" ? "mixed" : "true"
+        );
+      });
+
+      /* disable what the web player cannot do here */
+      e.lyrics.hidden = !Spotify.lyricsButton();
+      e.device.hidden = !Spotify.devicesButton();
+      e.queue.hidden = !Spotify.queueButton() && !$("#Desktop_PanelContainer_Id");
+      /* … et la rangée bonus du mini-lecteur, qui suit les mêmes capacités :
+         un bouton qui ne peut rien faire ne s'affiche pas du tout. */
+      e.miniLyrics.hidden = !Spotify.lyricsButton();
+      e.miniKaraoke.hidden = !Spotify.karaokeButton();
+      e.miniDevices.hidden = !Spotify.devicesButton();
+      e.miniQueue.hidden = !Spotify.queueButton() && !$("#Desktop_PanelContainer_Id");
+      /* Paroles et karaoké : Spotify expose `aria-pressed` sur ses propres
+         boutons. On le reflète, sinon nos boutons ne diraient jamais qu'ils
+         sont actifs (et l'audit se plaint d'une classe jamais stylée). */
+      [
+        [e.miniLyrics, Spotify.lyricsButton()],
+        [e.miniKaraoke, Spotify.karaokeButton()],
+      ].forEach(function (pair) {
+        var btn = pair[0];
+        var src2 = pair[1];
+        var on =
+          !!src2 &&
+          (src2.getAttribute("aria-pressed") === "true" ||
+            src2.getAttribute("aria-checked") === "true");
+        toggle(btn, "is-active", on);
+        btn.setAttribute("aria-pressed", on ? "true" : "false");
+      });
+      var volInput = Spotify.volumeInput();
+      e.miniVolWrap.hidden = !volInput;
+      if (volInput) {
+        var vol = clamp(Math.round(Number(volInput.value) || 0), 0, 100);
+        if (e.miniVol.value !== String(vol)) e.miniVol.value = String(vol);
+        toggle(e.miniVolWrap, "is-muted", vol === 0);
+      }
+
+      /* duration (feuille du lecteur + mini-lecteur) */
+      e.tDur.textContent = fmtTime(s.duration);
+      if (e.miniDur) e.miniDur.textContent = fmtTime(s.duration);
+      this.paintProgress();
+
+      /* route chrome */
+      this.paintChrome(s);
+      pushToAndroid();
+    },
+
+    paintProgress: function () {
+      if (!this.built) return;
+      var s = State;
+      var pos = livePosition();
+      var ratio = s.duration > 0 ? clamp(pos / s.duration, 0, 1) : 0;
+      this.el.miniProgress.style.width = (ratio * 100).toFixed(2) + "%";
+      if (this.el.miniCur && !s.seeking) this.el.miniCur.textContent = fmtTime(pos);
+      if (this.el.miniSeek) {
+        var pct = String(Math.round(ratio * 100));
+        if (this.el.miniSeek.getAttribute("aria-valuenow") !== pct) {
+          this.el.miniSeek.setAttribute("aria-valuenow", pct);
+        }
+      }
+      if (!s.seeking) {
+        this.el.seekFill.style.width = (ratio * 100).toFixed(2) + "%";
+        this.el.seekThumb.style.left = (ratio * 100).toFixed(2) + "%";
+        this.el.tCur.textContent = fmtTime(pos);
+        if (this.el.seek.getAttribute("aria-valuenow") !== String(Math.round(ratio * 100))) {
+          this.el.seek.setAttribute("aria-valuenow", String(Math.round(ratio * 100)));
+        }
+      }
+    },
+
+    /**
+     * **Le mini-lecteur ne reste pas « parti ».**
+     *
+     * Il peut être poussé hors de l'écran par une classe restée en place ou par
+     * un transform laissé par un geste interrompu. Plutôt que d'espérer qu'un
+     * chemin de code le remette, on le **réaffirme** : la classe qui l'affiche,
+     * et pas de transform en trop. Une fois par seconde, sans rien recalculer
+     * d'autre — et jamais pendant qu'un doigt le déplace.
+     */
+    reassertMini: function () {
+      if (!this.built || !this.el || !this.el.mini) return false;
+      var html = document.documentElement;
+      var fixed = false;
+      if (!html.classList.contains("sd-mini-on")) {
+        html.classList.add("sd-mini-on");
+        fixed = true;
+      }
+      var mini = this.el.mini;
+      if (!mini.classList.contains("is-dragging") && mini.style.transform) {
+        mini.style.transform = "";
+        fixed = true;
+      }
+      if (mini.hidden) {
+        mini.hidden = false;
+        fixed = true;
+      }
+      /* Et si la feuille du lecteur n'est plus ouverte, la classe qui l'affiche
+         ne doit pas rester : c'est elle qui cache le mini-lecteur. */
+      if (!Player.open && html.classList.contains("sd-player-open")) {
+        html.classList.remove("sd-player-open");
+        fixed = true;
+      }
+      /* **Un dialogue fermé ne doit pas éteindre le lecteur.** La classe qui
+         fait reculer notre coque devant un dialogue de Spotify était posée par
+         une simple présence dans le DOM : un dialogue resté monté une fois
+         fermé l'éteignait **pour de bon** (« le lecteur disparaît »). On la
+         revérifie donc ici — une fois par seconde, et seulement quand elle est
+         posée. */
+      if (html.classList.contains("sd-native-modal") && Polish.syncOverlay()) fixed = true;
+      return fixed;
+    },
+
+    /**
+     * **Aucun de nos écrans ne recouvre une page ouverte.**
+     *
+     * « Quand on clique sur les playlists, y'a un écran noir » (25/09). Une
+     * playlist ouverte **depuis** la bibliothèque laissait nos écrans pleine
+     * page — accueil maison, bibliothèque — par-dessus, ou la barre latérale de
+     * Spotify restait en pleine page. Plutôt que d'espérer que chaque chemin de
+     * code range ce qu'il a ouvert, on le **réaffirme** : dès que la vue est une
+     * sous-page, nos écrans pleine page sont rangés, la classe d'état est
+     * remise d'aplomb et le garde-fou de contenu est réappliqué. Une fois par
+     * seconde, comme le mini-lecteur — et sans rien recalculer d'autre.
+     */
+    reassertSurfaces: function () {
+      if (!this.built || !this.el) return false;
+      /* Le chemin décide (voir `Spotify.isSubPagePath`) : une playlist ouverte
+         depuis la bibliothèque n'est pas reconnue par le DOM tout de suite. */
+      if (!Spotify.isSubPagePath()) return false;
+      var html = document.documentElement;
+      var changed = false;
+      if (this.el.home && !this.el.home.hidden) {
+        Home.hide();
+        changed = true;
+      }
+      if (this.el.lib && !this.el.lib.hidden) {
+        Library.leave();
+        changed = true;
+      }
+      if (html.classList.contains("sd-lib-on")) {
+        html.classList.remove("sd-lib-on");
+        changed = true;
+      }
+      if (html.classList.contains("sd-welcome-on")) {
+        Welcome.hide();
+        changed = true;
+      }
+      if (!html.classList.contains("sd-subpage")) {
+        html.classList.add("sd-subpage");
+        changed = true;
+      }
+      /* Et le contenu ne peut pas rester masqué par une de nos règles (§31). */
+      Content.apply();
+      return changed;
+    },
+
+    /** Header / tab-bar visibility for the current route + tab. */
+    paintChrome: function (s) {
+      var e = this.el;
+      var html = document.documentElement;
+      var isLibrary = s.tab === "library";
+      var isSubPage = s.route === "page";
+
+      /* **Une page ouverte reste ouverte.** `sd-subpage` était annulé sur
+         l'onglet Bibliothèque : une playlist ouverte depuis la bibliothèque
+         n'était donc pas reconnue, et la barre latérale de Spotify — que la
+         feuille transforme en page pleine sur cet onglet — restait posée
+         par-dessus (« quand on clique sur les playlists, il y a un écran
+         noir », 25/09). La vue fait foi, pas l'onglet. */
+      html.classList.toggle("sd-subpage", isSubPage);
+      html.classList.toggle("sd-has-track", !!s.hasTrack);
+      /* **Le lecteur ne disparaît plus.** `sd-mini-on` dépendait d'une lecture
+         instantanée de l'état : la barre de lecture de Spotify quitte l'arbre
+         pendant un défilement (rendu différé) et, à ce moment-là, la classe
+         tombait — le lecteur s'effaçait sous le doigt. Vu une fois, il reste
+         donc affiché (voir `Spotify.seen`). */
+      /* Le mini-lecteur suit le **lecteur**, pas la piste : dès qu'un lecteur
+         existe, il est là — avec l'état vide « Aucun titre en lecture ». Avant,
+         il n'existait qu'avec une piste : sur un compte qui n'a rien lancé,
+         l'écran restait vide en bas (le fameux « des trucs n'apparaissent
+         pas »). */
+      /* **Le lecteur ne disparaît pas.** Il y avait trois conditions pour
+         l'afficher — une piste, un lecteur prêt, « vu une fois depuis le
+         chargement de la page » — et chacune pouvait manquer : après un
+         rechargement, sur une session fermée, ou pendant un rendu différé, le
+         bas de l'écran se vidait. « Le lecteur a de nouveau disparu » (25/09).
+         La barre est donc **toujours** là : c'est le lecteur de l'application.
+         La page de connexion, elle, la masque explicitement (`html.sd-login`). */
+      Spotify.seen = Spotify.seen || !!s.hasTrack || Spotify.ready();
+      html.classList.add("sd-mini-on");
+      html.classList.toggle("sd-mini-empty", !s.hasTrack);
+      /* The stylesheet keys the whole layout off these three classes
+         (`html.sd-tab-search` restyles the desktop top bar into a mobile
+         search field, `html.sd-tab-library` turns the desktop sidebar into a
+         full-screen page). Missing them was the reason the library/search
+         pages kept their desktop chrome. */
+      html.classList.toggle("sd-tab-home", s.tab === "home");
+      html.classList.toggle("sd-tab-search", s.tab === "search");
+      html.classList.toggle("sd-tab-library", s.tab === "library");
+
+      e.tabs.forEach(function (t) {
+        var name = t.getAttribute("data-tab");
+        var active = name === s.tab;
+        t.classList.toggle("is-active", active);
+        t.setAttribute("aria-selected", active ? "true" : "false");
+      });
+
+      /* Barre de navigation supérieure : présente sur les trois vues
+         (accueil, recherche, bibliothèque). Sur une sous-page — playlist,
+         album, artiste —, c'est la barre de titre ci-dessous qui prend la
+         main, avec son bouton retour. */
+      /* Barre de navigation ou barre de titre — jamais les deux : elles
+         occupent le **même** bord, collées en haut, donc l'une recouvrait
+         l'autre et la barre de titre (retour + nom de la page) était
+         invisible sur la bibliothèque. L'application d'origine fait pareil :
+         on quitte la bibliothèque par « Fermer », pas par l'onglet. */
+      /* **La barre de navigation reste aussi sur la bibliothèque.** C'est la
+         seule navigation de l'application (la barre d'onglets du bas est
+         désactivée par défaut) : la masquer là enfermait l'utilisateur —
+         « quand on clique sur l'onglet bibliothèque, la barre en haut disparaît
+         et rien d'autre n'apparaît ; je reste bloqué ». Seules les sous-pages
+         (playlist, album) prennent la barre, avec leur bouton retour. */
+      var navOn = !isSubPage;
+      html.classList.toggle("sd-nav-on", navOn);
+      var key = s.tab + "/" + s.route;
+      /* Un changement de vue remplace le contenu : c'est le moment de
+         revérifier que notre feuille n'a rien effacé. */
+      /* `key` est calculé **avant** d'être lu : déclaré après, il valait
+         `undefined` au premier passage (les `var` sont remontées), donc le bloc
+         se croyait toujours sur une nouvelle vue et se rejouait à chaque
+         repeint. */
+      if (UI.lastRouteKey !== key) {
+        UI.lastRouteKey = key;
+        Content.apply();
+        Home.refresh("vue");
+        Library.enter();
+      }
+      e.navItems.forEach(function (item) {
+        var name = item.getAttribute("data-tab");
+        var active = name === s.tab;
+        item.classList.toggle("is-active", active);
+        item.setAttribute("aria-selected", active ? "true" : "false");
+      });
+
+      /* Barre de titre : **sous-pages seulement** (retour + nom de la page).
+         Sur la bibliothèque, c'est la page elle-même qui porte son titre, et la
+         barre de navigation reste au-dessus : deux barres au même bord se
+         recouvriraient, et c'est la navigation qui doit gagner. */
+      e.topbar.classList.toggle("is-visible", isSubPage);
+      e.topbarBack.style.display = isSubPage ? "" : "none";
+      e.topbarClose.style.display = "none";
+      if (isSubPage) {
+        e.topbarTitle.classList.remove("is-large");
+        var label = Spotify.pageTitle() || "";
+        if (e.topbarTitle.textContent !== label) e.topbarTitle.textContent = label;
+      }
+
+      // Class-driven so the mini player docks correctly when the bar is off
+      // (see `html.sd-no-tabbar` in the stylesheet).
+      html.classList.toggle("sd-no-tabbar", !Settings.tabbar);
+      document.body.classList.toggle("sd-player-open", Player.open);
+      document.body.classList.toggle("sd-panel-open", Queue.open);
+      /* **La classe qui montre la feuille et cache le mini-lecteur est posée
+         ici** — au même endroit que l'état qui la décide. Elle n'était posée
+         qu'à l'ouverture : un chemin de fermeture qui n'appelait pas
+         `closeSheet` la laissait en place, et le mini-lecteur restait hors de
+         l'écran (`transform: 120 %`) : « le lecteur a de nouveau disparu ». */
+      html.classList.toggle("sd-player-open", Player.open);
+      html.classList.toggle("sd-queue-open", Queue.open);
+    },
+
+    /* ---------------- events ---------------- */
+    bind: function () {
+      var e = this.el;
+      var self = this;
+
+      /* tab bar (bas, désactivée par défaut) */
+      e.tabbar.addEventListener("click", function (ev) {
+        var btn = ev.target.closest(".sd-tab");
+        if (!btn) return;
+        Router.tab(btn.getAttribute("data-tab"));
+      });
+
+      /* barre de navigation supérieure : mêmes trois vues, plus les écrans de
+         Spotify (notifications, amis, profil) */
+      e.nav.addEventListener("click", function (ev) {
+        var item = ev.target.closest(".sd-nav-item");
+        if (item) {
+          Router.tab(item.getAttribute("data-tab"));
+          return;
+        }
+        if (ev.target.closest(".sd-nav-bell")) Actions.spotifyButton("bell");
+        else if (ev.target.closest(".sd-nav-friends")) Actions.spotifyButton("friends");
+        else if (ev.target.closest(".sd-nav-profile")) Actions.spotifyButton("profile");
+      });
+
+      /* mini player: tap = open, controls stop propagation */
+      e.mini.addEventListener("click", function (ev) {
+        if (ev.target.closest(".sd-iconbtn")) return;
+        /* Pas de session : le lecteur ne peut rien ouvrir d'utile — l'appui
+           mène à la connexion, comme le bouton de l'écran d'accueil. */
+        if (document.documentElement.classList.contains("sd-mini-signed-out")) {
+          location.href = CLASSIC_LOGIN;
+          return;
+        }
+        Player.openSheet();
+      });
+      e.mini.addEventListener("keydown", function (ev) {
+        if (ev.key === "Enter" || ev.key === " ") {
+          ev.preventDefault();
+          Player.openSheet();
+        }
+      });
+
+      /* **Le défilement ne doit rien effacer.** Spotify remonte et redescend
+         ses barres pendant qu'on fait défiler la page : on réapplique l'état de
+         la coque au fil du défilement, à cadence douce. « Le lecteur disparaît
+         quand on scroll vers le bas » — deux fois signalé. */
+      var scrollPaint = 0;
+      document.addEventListener(
+        "scroll",
+        function () {
+          var now = Date.now();
+          if (now - scrollPaint < 120) return;
+          scrollPaint = now;
+          UI.paint(State, "défilement");
+        },
+        true
+      );
+      e.miniPlay.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        Actions.playPause();
+      });
+      e.miniNext.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        Actions.next();
+      });
+      e.miniPrev.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        Actions.prev();
+      });
+      e.miniShuffle.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        Actions.shuffle();
+      });
+      e.miniRepeat.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        Actions.repeat();
+      });
+      e.miniLike.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        Actions.like();
+      });
+      /* Rangée bonus : paroles, karaoké, file d'attente, appareils, volume.
+         `stopPropagation` partout : le mini-lecteur, lui, ouvre le lecteur
+         plein écran au moindre appui. */
+      e.miniLyrics.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        var b = Spotify.lyricsButton();
+        if (b) b.click();
+      });
+      e.miniKaraoke.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        var b = Spotify.karaokeButton();
+        if (b) b.click();
+      });
+      e.miniQueue.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        /* **Ouvrir *et* fermer** : ce bouton n'appelait qu'`openSheet`, donc un
+           second appui ne faisait rien (mesuré au banc : `sd-queue-open` restait
+           après deux appuis). La feuille du lecteur, elle, basculait déjà. */
+        Queue.toggle();
+      });
+      e.miniDevices.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        var b = Spotify.devicesButton();
+        if (b) b.click();
+      });
+      ["input", "change", "click", "pointerdown", "touchstart"].forEach(function (name) {
+        e.miniVol.addEventListener(name, function (ev) {
+          ev.stopPropagation();
+          if (name === "input" || name === "change") Volume.set(this.value);
+        });
+      });
+
+      /* player sheet */
+      e.playerClose.addEventListener("click", function () {
+        Player.closeSheet();
+      });
+      e.play.addEventListener("click", function () {
+        Actions.playPause();
+      });
+      e.next.addEventListener("click", function () {
+        Actions.next();
+      });
+      e.prev.addEventListener("click", function () {
+        Actions.prev();
+      });
+      e.shuffle.addEventListener("click", function () {
+        Actions.shuffle();
+      });
+      e.repeat.addEventListener("click", function () {
+        Actions.repeat();
+      });
+      e.like.addEventListener("click", function () {
+        Actions.like();
+      });
+      e.queue.addEventListener("click", function () {
+        Queue.toggle();
+      });
+      /* "…" opens our options sheet (queue, lyrics, devices, links, share,
+         settings) instead of jumping straight to the queue. */
+      e.playerMenu.addEventListener("click", function () {
+        Sheets.open("menu");
+      });
+      e.topbarGear.addEventListener("click", function () {
+        Sheets.open("settings");
+      });
+      e.device.addEventListener("click", function () {
+        var b = Spotify.devicesButton();
+        if (b) b.click();
+      });
+      e.lyrics.addEventListener("click", function () {
+        var b = Spotify.lyricsButton();
+        if (b) b.click();
+      });
+      e.share.addEventListener("click", function () {
+        Actions.share();
+      });
+      e.artist.addEventListener("click", function () {
+        Actions.openArtist();
+      });
+      e.topbarBack.addEventListener("click", function () {
+        Spotify.goBack();
+      });
+      e.topbarClose.addEventListener("click", function () {
+        Router.tab("home");
+      });
+      e.scrim.addEventListener("click", function () {
+        if (Sheets.active) Sheets.close();
+        else Queue.close();
+      });
+
+      /* keyboard */
+      document.addEventListener("keydown", function (ev) {
+        if (ev.key === "Escape") {
+          if (Sheets.active) Sheets.close();
+          else if (Queue.open) Queue.close();
+          else if (Player.open) Player.closeSheet();
+          return;
+        }
+        if (ev.target && /INPUT|TEXTAREA/.test(ev.target.tagName)) return;
+        if (ev.key === " " && Player.open) {
+          ev.preventDefault();
+          Actions.playPause();
+        }
+      });
+
+      /* pointer gestures */
+      Gestures.bind();
+    },
+  };
+
+  /**
+   * Élément de la barre de navigation **supérieure** : c'est la disposition de
+   * l'application d'origine (maison · bibliothèque · recherche · logo ·
+   * notifications · amis · profil), pas les onglets du bas.
+   */
+  function navItem(name, line, solid, label) {
+    return (
+      '<button class="sd-nav-item" type="button" role="tab" data-tab="' +
+      name +
+      '" aria-label="' +
+      label +
+      '" aria-selected="false">' +
+      svg(line, "sd-icon-line") +
+      svg(solid, "sd-icon-solid") +
+      "</button>"
+    );
+  }
+
+  function tab(name, line, solid, label) {
+    return (
+      '<button class="sd-tab" type="button" role="tab" data-tab="' +
+      name +
+      '" aria-label="' +
+      label +
+      '" aria-selected="false">' +
+      svg(line, "sd-icon-line") +
+      svg(solid, "sd-icon-solid") +
+      '<span class="sd-tab-label">' +
+      label +
+      "</span></button>"
+    );
+  }
+  function toggle(el, cls, on) {
+    if (!el) return;
+    el.classList.toggle(cls, !!on);
+  }
+  function setImage(img, url) {
+    if (!img) return;
+    img.classList.remove("is-loaded");
+    var done = function () {
+      img.classList.add("is-loaded");
+    };
+    img.onload = done;
+    img.onerror = done; // a broken cover must not leave an empty grey square
+    img.setAttribute("src", url);
+    // Cached images sometimes resolve before the listener is attached.
+    if (img.complete && img.naturalWidth > 0) done();
+  }
+
+  /* ------------------------------------------------------------------ *
+   * 9. Accent colour (cover art → player gradient)
+   *    Cross-origin covers can taint the canvas: every step is guarded and
+   *    falls back to a deterministic hue derived from the track name, so the
+   *    player never ends up with a flat black background.
+   * ------------------------------------------------------------------ */
+  var Accent = {
+    cache: {},
+    apply: function (url, seed) {
+      var html = document.documentElement;
+      if (!Settings.accentFromArt || !url) {
+        html.style.removeProperty("--sd-player-bg");
+        html.style.removeProperty("--sd-mini-bg");
+        return;
+      }
+      if (this.cache[url]) {
+        this.set(this.cache[url]);
+        return;
+      }
+      var self = this;
+      var img = new Image();
+      img.crossOrigin = "anonymous";
+      img.onload = function () {
+        var rgb = self.sample(img);
+        if (!rgb) rgb = self.fallback(seed || url);
+        self.cache[url] = rgb;
+        self.set(rgb);
+      };
+      img.onerror = function () {
+        var rgb = self.fallback(seed || url);
+        self.cache[url] = rgb;
+        self.set(rgb);
+      };
+      img.src = url;
+    },
+    /** Average the most saturated pixel cluster of a 24×24 thumbnail. */
+    sample: function (img) {
+      try {
+        var c = document.createElement("canvas");
+        c.width = c.height = 24;
+        var ctx = c.getContext("2d", { willReadFrequently: true });
+        ctx.drawImage(img, 0, 0, 24, 24);
+        var data = ctx.getImageData(0, 0, 24, 24).data;
+        var r = 0, g = 0, b = 0, n = 0, best = null, bestScore = -1;
+        for (var i = 0; i < data.length; i += 4) {
+          var R = data[i], G = data[i + 1], B = data[i + 2];
+          var max = Math.max(R, G, B), min = Math.min(R, G, B);
+          var sat = max === 0 ? 0 : (max - min) / max;
+          var lum = (R * 0.299 + G * 0.587 + B * 0.114) / 255;
+          var score = sat * (1 - Math.abs(lum - 0.45));
+          if (score > bestScore) {
+            bestScore = score;
+            best = [R, G, B];
+          }
+          r += R; g += G; b += B; n++;
+        }
+        var avg = [r / n, g / n, b / n];
+        var base = bestScore > 0.25 ? best : avg;
+        return [Math.round(base[0]), Math.round(base[1]), Math.round(base[2])];
+      } catch (e) {
+        return null; // tainted canvas (no CORS header) → caller falls back
+      }
+    },
+    fallback: function (seed) {
+      var hue = hashHue(String(seed || "spotiduck"));
+      var c = hslToRgb(hue, 0.45, 0.28);
+      return c;
+    },
+    /** Darken/saturate for a real-looking Spotify gradient. */
+    set: function (rgb) {
+      var deep = mix(rgb, [0, 0, 0], 0.62);
+      var html = document.documentElement;
+      html.style.setProperty(
+        "--sd-player-bg",
+        "linear-gradient(to bottom, rgb(" + deep.join(",") + ") 0%, #121212 46%, #000 100%)"
+      );
+      html.style.setProperty("--sd-mini-bg", "rgb(" + mix(rgb, [0, 0, 0], 0.76).join(",") + ")");
+      html.style.setProperty("--sd-accent", "rgb(" + rgb.join(",") + ")");
+    },
+  };
+
+  function mix(a, b, t) {
+    return [
+      Math.round(a[0] + (b[0] - a[0]) * t),
+      Math.round(a[1] + (b[1] - a[1]) * t),
+      Math.round(a[2] + (b[2] - a[2]) * t),
+    ];
+  }
+  function hslToRgb(h, s, l) {
+    h = ((h % 360) + 360) % 360;
+    var c = (1 - Math.abs(2 * l - 1)) * s;
+    var x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+    var m = l - c / 2;
+    var rgb = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+    return rgb.map(function (v) {
+      return Math.round((v + m) * 255);
+    });
+  }
+
+  /* ------------------------------------------------------------------ *
+   * 10. Actions — optimistic UI + verification
+   *     The old layer wrote `isfav = true` / `repmode = 'mixed'` in JS and
+   *     *hoped* the web player agreed. Here every action updates the UI
+   *     immediately, then re-reads the DOM shortly after so the two can
+   *     never drift apart.
+   * ------------------------------------------------------------------ */
+  /**
+   * Boutons de droite de la barre de navigation : ils ouvrent **les** écrans de
+   * Spotify (notifications, activité des amis, menu du profil) en cliquant le
+   * bouton correspondant du web player. Si Spotify ne propose pas ce bouton
+   * (page de connexion, autre version), on le dit au lieu de laisser un bouton
+   * qui ne fait rien.
+   */
+  var SPOTIFY_BUTTONS = {
+    bell: [
+      '[data-testid="notification-button"]',
+      'button[aria-label*="otification"]',
+      '[data-testid="whats-new-button"]',
+      'button[aria-label*="ouveaut"]',
+    ],
+    friends: [
+      '[data-testid="friends-button"]',
+      'button[aria-label*="ctivit"]',
+      'button[aria-label*="riends"]',
+      'button[aria-label*="rofil d"]',
+    ],
+    profile: [
+      '[data-testid="user-widget-link"]',
+      'button[data-testid="user-widget-link"]',
+      '[data-testid="user-widget-dropdown"]',
+      'button[aria-label*="rofil"]',
+      'button[aria-label*="count"]',
+    ],
+  };
+
+  var Actions = {
+    /* Play Protect interrompt parfois l'installation d'un APK signé hors du
+       Play Store. L'application ne peut pas le désactiver (c'est un service
+       Google, pas une permission Android) mais elle ouvre le réglage — sinon
+       il faut le chercher dans le Play Store. */
+    playprotect: function () {
+      if (Bridge.call("openPlayProtect")) {
+        Toast.show(Settings.labels.playProtectHint, 4200);
+        return true;
+      }
+      Toast.show(Settings.labels.playProtectManual, 4200);
+      return false;
+    },
+    settle: function (delay) {
+      clearTimeout(Actions._t);
+      Actions._t = setTimeout(function () {
+        syncFromDom("settle");
+      }, delay || 700);
+    },
+    /**
+     * **Ce qu'on dit quand la commande n'a pas trouvé de bouton vivant.**
+     *
+     * Deux cas très différents, et un seul message juste : si rien ne joue, les
+     * commandes de Spotify sont désactivées — le dire est exact et actionnable ;
+     * si une musique joue, c'est la page qui n'expose pas la commande.
+     */
+    blame: function () {
+      Toast.show(State.title ? Settings.labels.transportMissing : Settings.labels.transportNoTrack, 2800);
+    },
+    /**
+     * **Dernier recours : le clavier du lecteur.**
+     *
+     * Le lecteur web écoute ses propres raccourcis (`Espace`, `Ctrl` + flèches) :
+     * c'est le seul chemin qui reste quand la disposition de la page ne laisse
+     * pas trouver ses boutons — et il vaut mieux qu'un bouton muet. On ne parle
+     * qu'ensuite, et seulement si rien ne joue (le raccourci n'aurait alors rien
+     * pu faire).
+     */
+    fallback: function (key, watch, avant) {
+      var self = this;
+      var ref = typeof avant === "string" ? avant : this.snapshot(watch);
+      Spotify.key(key);
+      /* **Vérifier, comme partout ailleurs.** Le raccourci a très bien pu agir :
+         on relit le lecteur peu après, et on ne parle que si rien n'a bougé —
+         une alarme à tort est un défaut, un bouton muet aussi. */
+      setTimeout(function () {
+        syncFromDom("fallback");
+        if (self.snapshot(watch) === ref) self.blame();
+      }, 800);
+    },
+    /** Ce qu'on regarde pour savoir si la commande a fait quelque chose. */
+    snapshot: function (watch) {
+      if (watch === "playing") return String(State.playing);
+      if (watch === "shuffle") return String(State.shuffle);
+      if (watch === "repeat") return State.repeat;
+      return (State.title || "") + "|" + (State.artist || "");
+    },
+    playPause: function () {
+      var want = !State.playing;
+      Auto.wantPlay = want;
+      Auto.selfPaused = !want;
+      if (want) {
+        Auto.stuckTries = 0;
+        Auto.resumeCount = 0;
+      }
+      emit({ playing: want }, "optimistic");
+      buzz(Settings.labels.buzzTap);
+      /* Le bouton de Spotify d'abord ; s'il n'y en a pas de vivant, le clavier
+         du lecteur — et on ne revient sur l'affichage optimiste que si rien ne
+         joue, seule situation où l'on sait que rien n'a pu se passer. */
+      if (!Spotify.playPause()) {
+        /* La référence est la **vérité du DOM avant l'affichage optimiste** :
+           c'est avec elle qu'on jugera si le raccourci a changé quelque chose. */
+        this.fallback(" ", "playing", String(!want));
+      } else if (want) {
+        /* Starting playback may require the "Écouter sur cet appareil"
+           hand-off first, and Spotify sometimes swallows the first request
+           entirely — both cases are handled by the Auto module. */
+        setTimeout(function () {
+          Auto.maybeTakeover();
+        }, 400);
+        Auto.armStuck();
+      }
+      Bridge.mediaStatus(State);
+      Bridge.mediaPosition(livePosition());
+      this.syncLocks();
+      this.settle();
+    },
+    /**
+     * Mirrors the old `manageAll(playing)` behaviour on the Android side:
+     * keep the CPU awake + arm the sleep timer while playing, and the
+     * inverse (shutdown on pause) when stopped. Same two bridge calls the
+     * native code already implements.
+     */
+    syncLocks: function () {
+      if (State.playing) {
+        Bridge.sleepLock(true);
+        Bridge.shutdownLock(false);
+      } else {
+        Bridge.sleepLock(false);
+        Bridge.shutdownLock(true);
+      }
+    },
+    next: function () {
+      buzzer();
+      Auto.wantPlay = true;
+      Auto.selfPaused = false;
+      if (!Spotify.next()) {
+        this.fallback("ArrowRight", "track");
+        return;
+      }
+      setTimeout(function () {
+        Auto.maybeTakeover();
+      }, 400);
+      emit({ anchorPos: 0, position: 0, anchorAt: performance.now() }, "optimistic");
+      Actions.settle(900);
+    },
+    prev: function () {
+      buzzer();
+      // Native behaviour: restart the track first if we're past 3 seconds.
+      if (livePosition() > 3000) Spotify.seek(0);
+      else if (!Spotify.prev()) {
+        this.fallback("ArrowLeft", "track");
+        return;
+      }
+      emit({ anchorPos: 0, position: 0, anchorAt: performance.now() }, "optimistic");
+      Actions.settle(900);
+    },
+    shuffle: function () {
+      buzzer();
+      var want = !State.shuffle;
+      emit({ shuffle: want }, "optimistic");
+      if (!Spotify.toggleShuffle()) {
+        emit({ shuffle: !want }, "rollback");
+        this.blame();
+      }
+      this.settle(500);
+    },
+    repeat: function () {
+      buzzer();
+      var order = { off: "context", context: "track", track: "off" };
+      var want = order[State.repeat] || "context";
+      emit({ repeat: want }, "optimistic");
+      if (!Spotify.cycleRepeat()) {
+        emit({ repeat: State.repeat }, "rollback");
+        this.blame();
+      }
+      this.settle(500);
+    },
+    /** Ouvre un écran de Spotify depuis la barre de navigation supérieure. */
+    spotifyButton: function (which) {
+      var list = SPOTIFY_BUTTONS[which] || [];
+      for (var i = 0; i < list.length; i++) {
+        var el = $(list[i]);
+        if (el && el.getClientRects().length) {
+          try {
+            el.click();
+            return true;
+          } catch (e) {
+            /* on essaie le suivant */
+          }
+        }
+      }
+      Toast.show(Settings.labels.notAvailable, 2200);
+      return false;
+    },
+
+    like: function () {
+      buzzer();
+      var want = !State.liked;
+      emit({ liked: want }, "optimistic");
+      if (!Spotify.toggleLike()) emit({ liked: !want }, "rollback");
+      Bridge.mediaStatus(State);
+      this.settle(1200);
+    },
+    seek: function (ms) {
+      emit({ anchorPos: ms, position: ms, anchorAt: performance.now(), seeking: false }, "seek");
+      // Spotify needs a moment to confirm; re-anchor from the DOM after that.
+      if (!Spotify.seek(ms)) return;
+      setTimeout(function () {
+        var input = Spotify.progressInput();
+        if (input) {
+          var p = (parseFloat(input.value) || 0) * 1000;
+          emit({ anchorPos: p, anchorAt: performance.now() }, "seek-confirm");
+          Bridge.mediaPosition(p);
+        }
+      }, 400);
+    },
+    share: function () {
+      /* Share the *real* track URL (the old layer shared the open.spotify.com
+         home page, which made the feature useless). */
+      var url = Spotify.trackHref();
+      var copy = function () {
+        try {
+          navigator.clipboard.writeText(url);
+          Toast.show(Settings.labels.copied);
+        } catch (e) {
+          Toast.show(url, 2600);
+        }
+      };
+      if (navigator.share) {
+        var p = null;
+        try {
+          p = navigator.share({ title: State.title, text: State.artist, url: url });
+        } catch (e) {
+          p = null; // not allowed (not a user gesture) → clipboard
+        }
+        if (p && typeof p.then === "function") {
+          p.then(null, function () {
+            /* cancelled — no need to shout about it */
+          });
+          return;
+        }
+        if (p) return;
+      }
+      copy();
+    },
+    openArtist: function () {
+      var a = pick(SEL.artist);
+      if (a && a.tagName === "A" && a.getAttribute("href")) location.assign(a.getAttribute("href"));
+    },
+    openAlbum: function () {
+      var a = Spotify.albumLink();
+      if (a && a.getAttribute("href")) location.assign(a.getAttribute("href"));
+    },
+  };
+  function buzzer() {
+    buzz(10);
+  }
+
+  /* ------------------------------------------------------------------ *
+   * 10-quater. Content — notre feuille ne doit jamais effacer la page
+   *
+   * Le 24/09, la capture du téléphone a montré exactement ceci : notre barre du
+   * haut, et **un écran noir en dessous**. La cause est une règle de notre
+   * propre feuille : `#global-nav-bar` et `#Desktop_LeftSidebar_Id` sont
+   * masquées (c'est voulu : ce sont les barres de bureau de Spotify, la nôtre
+   * les remplace) — mais sur la disposition actuelle de la page, l'une des deux
+   * **contient** le contenu. Masquer la barre masquait donc toute la page.
+   *
+   * Plutôt que de deviner lequel des deux conteneurs est l'ancêtre aujourd'hui,
+   * on le **mesure** : à partir de l'élément de contenu, on remonte la chaîne
+   * des ancêtres, et tout ancêtre que notre feuille a masqué est rétabli
+   * (`display` et `visibility` en style en ligne, donc prioritaires sur nos
+   * règles, mais uniquement sur **ces** éléments-là). Un ancêtre marqué
+   * `data-sd-unhidden` reste visible dans le diagnostic et dans la sonde.
+   *
+   * Ce que ça ne fait pas : rétablir ce qui est masqué légitimement (la barre
+   * latérale de bureau, la barre du haut de Spotify, le panneau de droite) —
+   * elles ne sont pas des ancêtres du contenu.
+   * ------------------------------------------------------------------ */
+  var CONTENT_ANCHORS = [
+    '[data-testid="home-page"]',
+    "#main-view",
+    "main[data-testid]",
+    ".Root__main-view",
+    "main",
+  ];
+
+  var Content = {
+    restored: [],
+    /** Rétablit les ancêtres du contenu masqués par notre feuille. */
+    apply: function () {
+      var anchor = pick(CONTENT_ANCHORS);
+      if (!anchor || !anchor.parentNode) return 0;
+      var fixed = 0;
+      var node = anchor.parentNode;
+      while (node && node.nodeType === 1 && node !== document.body && node !== document.documentElement) {
+        var cs = window.getComputedStyle(node);
+        var hidden = cs.display === "none" || cs.visibility === "hidden";
+        if (hidden) {
+          node.style.setProperty("display", "block", "important");
+          node.style.setProperty("visibility", "visible", "important");
+          node.setAttribute("data-sd-unhidden", "1");
+          Content.restored.push(node.id || node.getAttribute("class") || node.tagName);
+          fixed++;
+        }
+        node = node.parentNode;
+      }
+      var html = document.documentElement;
+      if (fixed) html.classList.add("sd-content-restored");
+      html.classList.toggle("sd-content-hidden", fixed === 0 && !!anchor && anchor.getBoundingClientRect().height < 4);
+      return fixed;
+    },
+    /**
+     * Ce qui est **rendu** dans l'ancre de contenu.
+     *
+     * `innerText` n'existe que pour du texte réellement affiché (un texte caché
+     * n'y figure pas) ; le nombre d'éléments rendus se compte sur des boîtes non
+     * vides. C'est la seule mesure qui distingue « la page est noire » de « la
+     * page est une colonne étroite mais pleine ».
+     */
+    rendered: function (anchor) {
+      var text = 0;
+      try {
+        var raw = typeof anchor.innerText === "string" ? anchor.innerText : anchor.textContent;
+        text = String(raw || "").replace(/\s+/g, " ").trim().length;
+      } catch (e) {
+        text = 0;
+      }
+      var nodes = anchor.querySelectorAll("button, [role=button], a[href], img, input, iframe, svg, canvas");
+      var els = 0;
+      for (var i = 0; i < nodes.length; i++) {
+        var r = nodes[i].getBoundingClientRect();
+        if (r.width > 2 && r.height > 2) els++;
+      }
+      return { text: text, els: els };
+    },
+
+    /**
+     * Le contenu attendu est-il là ? On mesure **ce qui est rendu**, pas la
+     * largeur d'une boîte.
+     *
+     * Le 25/09, le téléphone a affiché l'alarme « la page n'a rien affiché »
+     * avec, dans son propre diagnostic, `contenu 29×2756` : la page avait
+     * 2 756 px de contenu, mais l'élément choisi ne faisait que 29 px de large —
+     * et le test `largeur < 40 px`, écrit pour une autre disposition de la page,
+     * la déclarait vide. Un seuil de largeur ne dit rien de ce qu'on voit ; ce
+     * qui le dit, c'est du texte rendu et des éléments rendus. L'alarme ne se
+     * déclenche donc plus que quand **rien** n'est rendu — le noir du 24/09.
+     */
+    state: function () {
+      var anchor = pick(CONTENT_ANCHORS);
+      if (!anchor) return { ok: false, why: "aucun élément de contenu" };
+      var rect = anchor.getBoundingClientRect();
+      var r = this.rendered(anchor);
+      var size = Math.round(rect.width) + "×" + Math.round(rect.height);
+      var why =
+        "contenu " + size +
+        " · rendu " + r.text + " car. / " + r.els + " élément" + (r.els > 1 ? "s" : "");
+      if (r.text < 20 && r.els === 0) return { ok: false, why: why };
+      return { ok: true, why: why };
+    },
+
+    /**
+     * Si l'écran reste vide, on le **dit** — au lieu de laisser un écran noir
+     * muet (« on voit rien »). Le panneau nomme l'état mesuré, propose de
+     * recharger, et sait copier le diagnostic (une seule ligne à coller pour
+     * savoir ce qui se passe sur un téléphone qu'on n'a pas sous la main).
+     */
+    /**
+     * **Un écran noir se dit, même en changeant de page.** Jusqu'ici l'alerte
+     * n'était armée qu'au démarrage : une playlist ouverte plus tard qui
+     * n'affichait rien restait un écran noir muet (signalé : « quand on clique
+     * sur les playlists, y'a un écran noir »). On la réarme donc après chaque
+     * changement de vue, une fois, sans boucle.
+     */
+    alertSoon: function (ms) {
+      var self = this;
+      window.clearTimeout(this.alertTimer);
+      this.alertTimer = window.setTimeout(function () {
+        self.alertTimer = 0;
+        self.alertIfBlank();
+      }, typeof ms === "number" ? ms : 1500);
+      return true;
+    },
+
+    alertIfBlank: function () {
+      var state = this.state();
+      var html = document.documentElement;
+      if (state.ok) {
+        this.hideAlert();
+        return false;
+      }
+      html.classList.add("sd-content-blank");
+      this.showAlert(state.why);
+      return true;
+    },
+
+    hideAlert: function () {
+      document.documentElement.classList.remove("sd-content-blank");
+      if (this.alert) this.alert.hidden = true;
+    },
+
+    showAlert: function (why) {
+      if (!this.alert) {
+        var el = document.createElement("div");
+        el.className = "sd-content-alert";
+        el.setAttribute("role", "alert");
+        el.innerHTML =
+          '<div class="sd-content-alert-card">' +
+          '<span class="sd-content-alert-title"></span>' +
+          '<p class="sd-content-alert-text"></p>' +
+          '<pre class="sd-content-alert-diag"></pre>' +
+          '<div class="sd-content-alert-actions">' +
+          '<button class="sd-content-alert-reload" type="button"></button>' +
+          '<button class="sd-content-alert-copy" type="button"></button>' +
+          '<button class="sd-content-alert-close" type="button"></button>' +
+          "</div></div>";
+        this.alert = el;
+        UI.layer.appendChild(el);
+        var self = this;
+        $(".sd-content-alert-reload", el).addEventListener("click", function () {
+          Toast.show(Settings.labels.reloading);
+          try {
+            location.reload();
+          } catch (e) {
+            /* rien de plus */
+          }
+        });
+        $(".sd-content-alert-copy", el).addEventListener("click", function () {
+          var text = self.diagnose();
+          var done = function () {
+            Toast.show(Settings.labels.diagnosticCopied);
+          };
+          try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(text).then(done, function () {
+                Toast.show(text.slice(0, 120));
+              });
+              return;
+            }
+          } catch (e) {
+            /* repli ci-dessous */
+          }
+          Toast.show(text.slice(0, 120));
+        });
+        $(".sd-content-alert-close", el).addEventListener("click", function () {
+          self.hideAlert();
+        });
+      }
+      $(".sd-content-alert-title", this.alert).textContent = Settings.labels.blankTitle;
+      $(".sd-content-alert-text", this.alert).textContent = Settings.labels.blankText.replace("%s", why);
+      $(".sd-content-alert-diag", this.alert).textContent = this.diagnose();
+      $(".sd-content-alert-reload", this.alert).textContent = Settings.labels.reload;
+      $(".sd-content-alert-copy", this.alert).textContent = Settings.labels.copyDiagnostic;
+      $(".sd-content-alert-close", this.alert).textContent = Settings.labels.close;
+      this.alert.hidden = false;
+      /* Le contenu peut encore arriver (un chargement lent, pas un échec) : on
+         revérifie sans boucle serrée, et le panneau s'efface tout seul. */
+      var self = this;
+      var tries = 0;
+      (function recheck() {
+        if (++tries > 10) return;
+        window.setTimeout(function () {
+          if (self.alert && !self.alert.hidden && self.state().ok) {
+            self.hideAlert();
+            return;
+          }
+          if (self.alert && self.alert.hidden) return;
+          recheck();
+        }, 2000);
+      })();
+    },
+
+    /**
+     * Un extrait de ce que la page **dit** (ses propres mots, rendus).
+     *
+     * Sans lui, une remontée de bug dit « ça ne marche pas » et il faut deviner
+     * quelle page l'utilisateur avait sous les yeux. Avec lui, la capture
+     * contient la réponse : « Choisissez votre langue », « Connectez-vous pour
+     * écouter », ou les titres des rangées de son accueil.
+     */
+    excerpt: function () {
+      var anchor = pick(CONTENT_ANCHORS);
+      if (!anchor) return "";
+      var raw = "";
+      try {
+        raw = typeof anchor.innerText === "string" ? anchor.innerText : anchor.textContent;
+      } catch (e) {
+        raw = anchor.textContent || "";
+      }
+      return String(raw || "").replace(/\s+/g, " ").trim().slice(0, 60);
+    },
+
+    /**
+     * La version à montrer : celle de **l'application** (par le pont) et celle
+     * de la **coque** (estampillée au build). Les deux doivent coïncider ; si
+     * elles diffèrent, c'est que l'APK installé n'est pas celui qu'on croit — et
+     * c'est précisément ce qu'il faut voir dans une remontée de bug.
+     */
+    version: function () {
+      var app = Bridge.has("version") ? String(Bridge.call("version") || "") : "";
+      if (app && app !== VERSION) return app + " (coque " + VERSION + ")";
+      return VERSION;
+    },
+
+    /** Une ligne à coller : ce qu'un écran qu'on ne voit pas dit de lui-même. */
+    diagnose: function () {
+      var s = this.state();
+      var vp = Viewport.measure();
+      var extrait = this.excerpt();
+      return (
+        "SpotiDuck " + this.version() +
+        " · interface " + (Bridge.has("uiMode") ? Bridge.call("uiMode") : "coque SpotiDuck") +
+        " · vue " + vp.layout + "×" + viewH() + " px (écran " + (vp.device || "?") + ")" +
+        " · unité " + Device.base.toFixed(2) +
+        " · contenu " + s.why +
+        " · ancres " + this.anchors() +
+        (extrait ? ' · extrait \"' + extrait + '\"' : "") +
+        /* La session **réelle** (cookie du lecteur), qui ne se devine pas dans
+           le DOM : la page peut afficher un accueil sans qu'un compte soit
+           connecté (Spotify le fait), et l'utilisateur, lui, veut ses playlists. */
+        " · session " + (Bridge.has("session") ? (Bridge.call("session") ? "oui" : "non") : "?") +
+        " · accueil " + Home.describe() +
+        " · biblio " + Library.describe() +
+        " · " + Content.describe() +
+        " · page " + location.pathname +
+        " · lecteur " + (Spotify.ready() ? "prêt" : "absent") +
+        /* Par où passent nos appels d'API, et ce qui a manqué : sans ça, une
+           bibliothèque vide ne dit pas si c'est le jeton, le réseau ou le
+           contrôle d'accès du navigateur. */
+        " · api " + Net.describe()
+      );
+    },
+
+    /**
+     * Toutes les ancres candidates, mesurées.
+     *
+     * L'ancre choisie ne suffit pas à comprendre : « contenu 29×2756 » a laissé
+     * deux hypothèses ouvertes — la page n'a pas de `#main-view` (donc ce n'est
+     * pas l'accueil du lecteur), ou elle en a un que **notre** feuille a écrasé.
+     * Les mesurer toutes les départage en une ligne.
+     */
+    anchors: function () {
+      var parts = [];
+      for (var i = 0; i < CONTENT_ANCHORS.length; i++) {
+        var sel = CONTENT_ANCHORS[i];
+        var name = sel.replace(/^\[data-testid="?|"?\]$/g, "").replace(/^#/, "");
+        var el = document.querySelector(sel);
+        if (!el) {
+          parts.push(name + " absent");
+          continue;
+        }
+        var r = el.getBoundingClientRect();
+        var cs = window.getComputedStyle(el);
+        parts.push(name + " " + Math.round(r.width) + "×" + Math.round(r.height) + " " + cs.display);
+      }
+      return parts.join(" · ");
+    },
+
+    /** Une ligne pour le diagnostic : ce qui a dû être rétabli, et pourquoi. */
+    describe: function () {
+      if (!Content.restored.length) return "contenu : rien à rétablir";
+      return "contenu rétabli : " + Content.restored.slice(0, 3).join(" > ");
+    },
+  };
+
+  /* ------------------------------------------------------------------ *
+   * 10-ter. Volume — celui de Spotify, pas un second
+   * ------------------------------------------------------------------ */
+  var Volume = {
+    get: function () {
+      var i = Spotify.volumeInput();
+      return i ? clamp(Math.round(Number(i.value) || 0), 0, 100) : 0;
+    },
+    set: function (value) {
+      var i = Spotify.volumeInput();
+      if (!i) return;
+      var v = clamp(Math.round(Number(value) || 0), 0, 100);
+      i.value = String(v);
+      /* Spotify écoute `input` ; `change` est là pour les moteurs qui ne
+         relâchent qu'au relâchement du doigt. */
+      i.dispatchEvent(new Event("input", { bubbles: true }));
+      i.dispatchEvent(new Event("change", { bubbles: true }));
+    },
+  };
+
+  /* ------------------------------------------------------------------ *
+   * 11. Toast (tiny, replaces nothing but keeps feedback possible)
+   * ------------------------------------------------------------------ */
+  var Toast = {
+    el: null,
+    timer: 0,
+    show: function (text, ms) {
+      if (!this.el) {
+        this.el = document.createElement("div");
+        this.el.className = "sd-toast";
+        this.el.setAttribute("role", "status");
+        UI.layer.appendChild(this.el);
+      }
+      this.el.textContent = text;
+      this.el.classList.add("is-visible");
+      clearTimeout(this.timer);
+      var self = this;
+      this.timer = setTimeout(function () {
+        self.el.classList.remove("is-visible");
+      }, ms || 1800);
+    },
+  };
+
+  /* ------------------------------------------------------------------ *
+   * 11b. Bottom sheets — the player's "…" menu and the settings screen
+   *      Both are ours (the queue reuses Spotify's own panel), so they share
+   *      one animation, one drag-to-dismiss and one back-button contract with
+   *      the full player sheet.
+   * ------------------------------------------------------------------ */
+  var MENU = {
+    queue: { icon: ICONS.queueLine, label: Settings.labels.queue, run: function () { Queue.openSheet(); } },
+    /* Remise à zéro des statistiques : elles sont locales et à nous, mais elles
+       restent les siennes — un appui doit suffire à les effacer. */
+    "stats-clear": {
+      icon: ICONS.refreshLine,
+      label: Settings.labels.statsClear,
+      run: function () {
+        Stats.clear();
+        Toast.show(Settings.labels.statsCleared, 1800);
+      },
+    },
+    lyrics: {
+      icon: ICONS.lyricsLine,
+      label: Settings.labels.lyrics,
+      need: function () {
+        return !!Spotify.lyricsButton();
+      },
+      run: function () {
+        var b = Spotify.lyricsButton();
+        if (b) b.click();
+        else Toast.show(Settings.labels.lyricsUnavailable || Settings.labels.lyrics);
+      },
+    },
+    devices: {
+      icon: ICONS.deviceLine,
+      label: Settings.labels.devices,
+      need: function () {
+        return !!Spotify.devicesButton();
+      },
+      run: function () {
+        var b = Spotify.devicesButton();
+        if (b) b.click();
+      },
+    },
+    artist: {
+      icon: ICONS.personLine,
+      label: Settings.labels.viewArtist,
+      need: function () {
+        return !!pick(SEL.artist);
+      },
+      run: function () {
+        Actions.openArtist();
+      },
+    },
+    album: {
+      icon: ICONS.discLine,
+      label: Settings.labels.viewAlbum,
+      need: function () {
+        return !!Spotify.albumLink();
+      },
+      run: function () {
+        Actions.openAlbum();
+      },
+    },
+    share: { icon: ICONS.shareLine, label: Settings.labels.share, run: function () { Actions.share(); } },
+    settings: { icon: ICONS.gearLine, label: Settings.labels.settings, run: function () { Sheets.open("settings"); } },
+  };
+
+  /* Factory defaults, used by the "reset" row. */
+  var DEFAULTS = {
+    theme: "auto",
+    accentFromArt: true,
+    reduceMotion: false,
+    takeControl: true,
+    resume: false,
+    tabbar: true,
+    stats: true,
+    haptics: true,
+    homeBoard: true,
+    libraryBoard: true,
+    /* Densité d'affichage : les télémétries Android et la WebView ne rendent
+       pas la même chose sur tous les appareils — c'est le seul réglage qui
+       touche à la taille de toute l'interface. */
+    density: "normal",
+  };
+
+  /* ------------------------------------------------------------------ *
+   * 10-bis. Viewport
+   *
+   * Le web player est un site « bureau » : il ne déclare aucun
+   * `<meta name="viewport">`. Une WebView qui n'en trouve pas se donne une
+   * largeur de mise en page de **980 px** — les media queries, les unités `vw`
+   * et toutes les tailles de police de la couche visent alors un écran deux à
+   * trois fois plus large que le téléphone : l'interface paraît énorme, coupée
+   * sur la droite, et il faut la faire glisser pour atteindre les boutons.
+   *
+   * `document.documentElement.clientWidth` *est* cette largeur de mise en page
+   * (pas `window.innerWidth`, que le mode bêta redéfinit). On pose donc le meta
+   * nous-mêmes, et on le signale dans le diagnostic « Affichage » : si la
+   * largeur de mise en page ne correspond pas à celle de l'écran, la ligne
+   * l'écrit noir sur blanc.
+   * ------------------------------------------------------------------ */
+  var VIEWPORT_CONTENT =
+    "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover";
+
+  var Viewport = {
+    /** Pose (ou corrige) le meta viewport. Idempotent, appelable à tout moment. */
+    ensure: function () {
+      var head = document.head || document.documentElement;
+      if (!head) return false;
+      var metas = $$('meta[name="viewport"]');
+      var meta = metas[0];
+      if (!meta) {
+        meta = document.createElement("meta");
+        meta.setAttribute("name", "viewport");
+        head.appendChild(meta);
+      }
+      for (var i = 1; i < metas.length; i++) {
+        if (metas[i].parentNode) metas[i].parentNode.removeChild(metas[i]);
+      }
+      if (meta.getAttribute("content") !== VIEWPORT_CONTENT) {
+        meta.setAttribute("content", VIEWPORT_CONTENT);
+      }
+      return true;
+    },
+
+    /** Largeur de mise en page réelle, et largeur de l'écran en pixels CSS. */
+    measure: function () {
+      var layout = document.documentElement.clientWidth || 0;
+      var screenW = Math.round((window.screen && window.screen.width) || 0);
+      var dpr = window.devicePixelRatio || 1;
+      /* `screen.width` est en **pixels CSS** sur les WebView récentes (385 sur
+         le téléphone) et en pixels **physiques** sur d'anciennes (1080). On ne
+         devine pas : on ne divise par la densité que si la valeur est
+         manifestement physique. Le téléphone annonçait « écran 137 » à côté de
+         « vue 384 » — parce que 385 était déjà en pixels CSS — et le
+         avertissement « mise en page 384px pour un écran de 137px » se
+         déclenchait donc pour rien. */
+      var device = screenW ? (screenW > 1000 && dpr > 1 ? Math.round(screenW / dpr) : screenW) : 0;
+      return {
+        layout: layout,
+        screen: screenW,
+        device: device, // pixels CSS : c'est ce que devrait valoir `layout`
+        ok: !device || (layout >= device * 0.8 && layout <= device * 1.25),
+      };
+    },
+  };
+
+  /**
+   * Ce que la WebView voit réellement : c'est la seule façon de savoir
+   * pourquoi un rendu diffère d'un appareil à l'autre (le réglage de taille
+   * du système Android n'est pas transmis au CSS, donc on mesure).
+   */
+  function describeDisplay(withUA) {
+    var d = document.documentElement;
+    var cs = window.getComputedStyle(d);
+    var u = parseFloat(cs.getPropertyValue("--sd-u")) || 1;
+    var vp = Viewport.measure();
+    var txt =
+      d.clientWidth +
+      "×" +
+      d.clientHeight +
+      " · " +
+      (window.devicePixelRatio || 1).toFixed(2) +
+      "× · " +
+      Math.round(u * 100) +
+      " %";
+    if (!vp.ok) {
+      txt += " · ⚠ mise en page " + vp.layout + "px pour un écran de " + vp.device + "px";
+    }
+    if (withUA) {
+      txt +=
+        " · innerWidth " +
+        window.innerWidth +
+        " · " +
+        (navigator.userAgent || "").replace(/^Mozilla\/5\.0 /, "");
+    }
+    return txt;
+  }
+
+  /* ------------------------------------------------------------------ *
+   * 11h. Device — l'unité de l'interface, déduite de l'appareil
+   *
+   * `--sd-u` dimensionne **tout** : barres, typographie, pochette du
+   * mini-lecteur, feuilles, lecteur plein écran. Elle était figée à 1 — la même
+   * interface pour un téléphone de 360 px et une tablette de 800, avec un
+   * réglage manuel pour compenser les différences. Le réglage manuel reste
+   * (c'est devenu un *facteur*), mais la base est désormais **mesurée** :
+   *
+   *     base = clamp(0,92 ; min(largeur / 412 ; hauteur / 915) ; 1,15)
+   *
+   *   · 360×800   → 0,92   (plancher : le texte ne descend pas sous Material)
+   *   · 412×915   → 1,00   (la référence du projet)
+   *   · 480×1040  → 1,14
+   *   · 800×1280  → 1,15   (plafond : au-delà, c'est la place qui gagne)
+   *   · 915×412   → 0,92   (paysage : les barres restent fines)
+   *
+   * La hauteur compte autant que la largeur, sinon un téléphone en paysage
+   * aurait des barres plus hautes que le tiers de son écran. Le plancher existe
+   * pour la même raison : sur un petit écran on resserre la mise en page, on ne
+   * rétrécit pas le texte.
+   *
+   * Les paliers (`sd-size-compact`, `sd-size-normal`, `sd-size-wide`,
+   * `sd-orient-landscape`) sont posés ici et consommés par la feuille
+   * `76-device.css` : c'est là que se règlent les hauteurs de barres, pas dans
+   * le script.
+   * ------------------------------------------------------------------ */
+  var Device = {
+    base: 1,
+    apply: function () {
+      var html = document.documentElement;
+      var w = viewW();
+      var h = viewH();
+      /* clamp(valeur, mini, maxi) : l'ancienne forme donnait `0,92` comme
+         valeur et la mesure comme minimum — d'où 1,40 sur une tablette au lieu
+         du plafond de 1,15. */
+      var base = clamp(Math.min(w / 412, h / 915), 0.92, 1.15);
+      base = Math.round(base * 1000) / 1000;
+      this.base = base;
+      html.style.setProperty("--sd-u-base", String(base));
+      var wide = w >= 600;
+      var compact = w < 380;
+      html.classList.toggle("sd-size-compact", compact && !wide);
+      html.classList.toggle("sd-size-normal", !compact && !wide);
+      html.classList.toggle("sd-size-wide", wide);
+      html.classList.toggle("sd-orient-landscape", w > h);
+    },
+    /** Une ligne pour le diagnostic : c'est ce qui explique un rendu. */
+    describe: function () {
+      var html = document.documentElement;
+      return (
+        "unité " + this.base.toFixed(2) +
+        " · " + viewW() + "×" + viewH() + " px" +
+        (html.classList.contains("sd-orient-landscape") ? " · paysage" : " · portrait") +
+        (html.classList.contains("sd-size-wide") ? " · écran large" : "")
+      );
+    },
+  };
+
+  /** Applique la densité choisie : un **facteur**, multiplié par la base
+      mesurée de l'appareil (voir `Device`). */
+  function applyDensity(value) {
+    var html = document.documentElement;
+    html.classList.remove("sd-density-compact", "sd-density-normal", "sd-density-large");
+    html.classList.add("sd-density-" + (value === "compact" || value === "large" ? value : "normal"));
+  }
+
+  /** Single entry point for every setting change (UI + public API). */
+  function applySetting(key, value) {
+    if (!(key in Settings) || typeof Settings[key] === "function") return false;
+    Settings[key] = value;
+    saveSettings();
+    if (key === "theme") Theme.apply();
+    if (key === "density") applyDensity(value);
+    if (key === "reduceMotion") document.documentElement.classList.toggle("sd-reduce-motion", !!value);
+    if (key === "tabbar") UI.paintChrome(State);
+    UI.paint(State, "settings");
+    Sheets.paint();
+    return true;
+  }
+
+  var Sheets = {
+    active: null, // "menu" | "settings"
+    el: {},
+    built: false,
+
+    build: function () {
+      if (this.built) return;
+      var self = this;
+      var frag = document.createDocumentFragment();
+
+      ["menu", "settings"].forEach(function (name) {
+        var s = self.mk("section", "sd-sheet sd-sheet-" + name);
+        s.setAttribute("role", "dialog");
+        s.setAttribute("aria-modal", "true");
+        s.setAttribute("aria-hidden", "true");
+        s.appendChild(
+          self.mk(
+            "div",
+            "sd-sheet-head",
+            '<span class="sd-sheet-title"></span>' +
+              '<button class="sd-iconbtn sd-sheet-close" type="button" aria-label="' +
+              Settings.labels.close +
+              '">' +
+              svg(ICONS.chevronDown) +
+              "</button>"
+          )
+        );
+        s.appendChild(self.mk("div", "sd-sheet-body"));
+        $(".sd-sheet-title", s).textContent = name === "menu" ? Settings.labels.options : Settings.labels.settings;
+        $(".sd-sheet-close", s).addEventListener("click", function () {
+          self.close();
+        });
+        s.addEventListener("click", function (ev) {
+          var sw = ev.target.closest("[data-switch]");
+          if (sw) {
+            var k = sw.getAttribute("data-switch");
+            applySetting(k, !Settings[k]);
+            buzz(8);
+            return;
+          }
+          var segBtn = ev.target.closest(".sd-seg button");
+          if (segBtn) {
+            var seg = ev.target.closest("[data-seg]");
+            applySetting(seg.getAttribute("data-seg"), segBtn.getAttribute("data-value"));
+            buzz(8);
+            return;
+          }
+          var row = ev.target.closest("[data-row]");
+          if (!row || row.hasAttribute("disabled") || row.hidden) return;
+          self.activate(row.getAttribute("data-row"));
+        });
+        self.drag(s);
+        frag.appendChild(s);
+        self.el[name] = s;
+        self.el[name + "Body"] = $(".sd-sheet-body", s);
+      });
+
+      /* --- player "…" menu --- */
+      Object.keys(MENU).forEach(function (id) {
+        self.el.menuBody.appendChild(self.row(id, MENU[id].icon, MENU[id].label));
+      });
+
+      /* --- settings --- */
+      self.el.settingsBody.appendChild(
+        self.group(Settings.labels.groupLook, [
+          self.segRow("theme", Settings.labels.theme, [
+            ["auto", Settings.labels.themeAuto],
+            ["dark", Settings.labels.themeDark],
+            ["light", Settings.labels.themeLight],
+          ]),
+          self.switchRow("accentFromArt", Settings.labels.accent),
+          self.segRow("density", Settings.labels.density, [
+            ["compact", Settings.labels.densityCompact],
+            ["normal", Settings.labels.densityNormal],
+            ["large", Settings.labels.densityLarge],
+          ]),
+          self.switchRow("reduceMotion", Settings.labels.reduceMotion),
+        ])
+      );
+      self.el.settingsBody.appendChild(
+        self.group(Settings.labels.groupPlay, [
+          self.switchRow("takeControl", Settings.labels.takeControl),
+          self.switchRow("resume", Settings.labels.resume),
+        ])
+      );
+      /* Bascule vers l'interface mobile de Spotify : le choix est natif (le
+         user-agent change et la page se recharge), donc on délègue au pont
+         Android au lieu d'essayer de le faire ici. */
+      var nativeRow = self.actionRow("uimode", Settings.labels.nativeUi, ICONS.deviceLine);
+      nativeRow.removeAttribute("data-row");
+      nativeRow.setAttribute("title", Settings.labels.nativeUiHint);
+      nativeRow.addEventListener("click", function () {
+        if (!Bridge.call("showUiChooser")) {
+          Toast.show(Settings.labels.nativeUiHint, 3200);
+        }
+      });
+      self.el.settingsBody.appendChild(
+        self.group(Settings.labels.groupUi, [
+          nativeRow,
+          self.switchRow("homeBoard", Settings.labels.homeBoard),
+          self.switchRow("libraryBoard", Settings.labels.libraryBoard),
+          self.switchRow("stats", Settings.labels.stats),
+          self.actionRow("stats-clear", Settings.labels.statsClear, ICONS.refreshLine),
+          self.switchRow("tabbar", Settings.labels.showTabbar),
+          self.switchRow("haptics", Settings.labels.haptics),
+        ])
+      );
+      self.el.settingsBody.appendChild(
+        self.group(Settings.labels.groupAbout, [
+          (self.el.diagRow = self.infoRow(Settings.labels.display, "")),
+          self.infoRow(Settings.labels.version, VERSION),
+          /* Play Protect refuse parfois l'installation d'un APK signé hors du
+             Play Store, et le réglage qui le désactive est enterré dans le Play
+             Store : cette ligne y mène directement. */
+          self.actionRow("playprotect", Settings.labels.playProtect, ICONS.shieldLine),
+          self.actionRow("reload", Settings.labels.reload, ICONS.refreshLine),
+          self.actionRow("reset", Settings.labels.reset, ICONS.arrowUndo),
+        ])
+      );
+
+      /* La ligne « Affichage » sert au diagnostic à distance : taille réellement
+         vue par la WebView, densité de pixels et facteur appliqué. Un appui la
+         copie — c'est ce que l'on demande quand un rendu diffère d'un appareil
+         à l'autre. */
+      this.el.diagValue = $(".sd-row-value", this.el.diagRow);
+      this.el.diagRow.setAttribute("title", Settings.labels.displayHint);
+      this.el.diagRow.addEventListener("click", function () {
+        var txt = describeDisplay(true);
+        try {
+          navigator.clipboard.writeText(txt);
+          Toast.show(Settings.labels.copied);
+        } catch (e) {
+          Toast.show(txt, 4000);
+        }
+      });
+
+      UI.layer.appendChild(frag);
+      this.built = true;
+      Back.sync();
+    },
+
+    /* ---------------- tiny DOM builders ---------------- */
+    mk: function (tag, cls, html) {
+      var n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (html != null) n.innerHTML = html;
+      return n;
+    },
+    row: function (id, icon, label) {
+      var b = this.mk(
+        "button",
+        "sd-row",
+        '<span class="sd-row-icon">' +
+          svg(icon || ICONS.chevronDown) +
+          '</span><span class="sd-row-label">' +
+          label +
+          "</span>"
+      );
+      b.type = "button";
+      b.setAttribute("data-row", id);
+      return b;
+    },
+    actionRow: function (id, label, icon) {
+      var b = this.row(id, icon, label);
+      b.classList.add("sd-row-lead");
+      return b;
+    },
+    infoRow: function (label, value) {
+      var d = this.mk(
+        "div",
+        "sd-row sd-row-info",
+        '<span class="sd-row-label">' + label + '</span><span class="sd-row-value">' + value + "</span>"
+      );
+      return d;
+    },
+    switchRow: function (key, label) {
+      var b = this.mk(
+        "button",
+        "sd-row sd-row-switch",
+        '<span class="sd-row-label">' +
+          label +
+          '</span><span class="sd-switch" aria-hidden="true"><i></i></span>'
+      );
+      b.type = "button";
+      b.setAttribute("data-switch", key);
+      b.setAttribute("role", "switch");
+      b.setAttribute("aria-checked", "false");
+      return b;
+    },
+    segRow: function (key, label, options) {
+      var w = this.mk("div", "sd-row sd-row-seg", '<span class="sd-row-label">' + label + "</span>");
+      w.setAttribute("data-seg", key);
+      var seg = this.mk("div", "sd-seg");
+      seg.setAttribute("role", "radiogroup");
+      seg.setAttribute("aria-label", label);
+      options.forEach(function (o) {
+        var b = document.createElement("button");
+        b.type = "button";
+        b.setAttribute("role", "radio");
+        b.setAttribute("data-value", o[0]);
+        b.textContent = o[1];
+        seg.appendChild(b);
+      });
+      w.appendChild(seg);
+      return w;
+    },
+    group: function (title, rows) {
+      var s = this.mk("section", "sd-group");
+      var h = document.createElement("h2");
+      h.textContent = title;
+      s.appendChild(h);
+      rows.forEach(function (r) {
+        s.appendChild(r);
+      });
+      return s;
+    },
+
+    /* ---------------- behaviour ---------------- */
+    open: function (name) {
+      if (!this.built) return;
+      if (this.active === name) {
+        this.close();
+        return;
+      }
+      this.close(false);
+      this.active = name;
+      var s = this.el[name];
+      s.classList.add("is-open");
+      s.setAttribute("aria-hidden", "false");
+      document.documentElement.classList.add("sd-sheet-open");
+      document.body.classList.add("sd-sheet-open");
+      this.paint();
+      Back.sync();
+      buzz(8);
+    },
+    close: function (silent) {
+      var name = this.active;
+      if (name) {
+        var s = this.el[name];
+        s.classList.remove("is-open", "is-dragging");
+        s.setAttribute("aria-hidden", "true");
+        s.style.removeProperty("--sd-sheet-drag");
+      }
+      this.active = null;
+      document.documentElement.classList.remove("sd-sheet-open");
+      document.body.classList.remove("sd-sheet-open");
+      if (name && silent !== false) Back.release();
+    },
+    activate: function (id) {
+      if (id === "reload") {
+        Toast.show(Settings.labels.reloadPlayer);
+        Api.repair(true);
+        return;
+      }
+      if (id === "reset") {
+        Object.keys(DEFAULTS).forEach(function (k) {
+          applySetting(k, DEFAULTS[k]);
+        });
+        Toast.show(Settings.labels.resetDone);
+        return;
+      }
+      if (id === "playprotect") {
+        Actions.playprotect();
+        return;
+      }
+      var row = MENU[id];
+      if (!row) return;
+      /* Close first so the menu never sits on top of what it opened. */
+      this.close();
+      buzz(10);
+      setTimeout(row.run, 180);
+    },
+    /** Re-evaluate row availability + control states. */
+    paint: function () {
+      if (!this.built) return;
+
+      /* Diagnostic d'affichage : mesuré à chaque ouverture de la feuille. */
+      if (this.el.diagValue) {
+        var d = describeDisplay(false);
+        if (this.el.diagValue.textContent !== d) this.el.diagValue.textContent = d;
+      }
+
+      var menu = this.el.menuBody;
+      $$("[data-row]", menu).forEach(function (row) {
+        var def = MENU[row.getAttribute("data-row")];
+        row.hidden = !!(def && def.need && !def.need());
+      });
+      $$("[data-switch]", this.el.settingsBody).forEach(function (sw) {
+        var on = !!Settings[sw.getAttribute("data-switch")];
+        sw.setAttribute("aria-checked", on ? "true" : "false");
+        sw.classList.toggle("is-on", on);
+      });
+      $$("[data-seg]", this.el.settingsBody).forEach(function (w) {
+        var value = Settings[w.getAttribute("data-seg")];
+        $$("button", w).forEach(function (b) {
+          var on = b.getAttribute("data-value") === value;
+          b.setAttribute("aria-checked", on ? "true" : "false");
+          b.classList.toggle("is-on", on);
+        });
+      });
+    },
+    /** Swipe the header down to dismiss (same thresholds as the player). */
+    drag: function (s) {
+      var head = $(".sd-sheet-head", s);
+      if (!head || !window.PointerEvent) return;
+      var start = null;
+      head.addEventListener("pointerdown", function (ev) {
+        start = { y: ev.clientY, t: Date.now() };
+        s.classList.add("is-dragging");
+        try {
+          head.setPointerCapture(ev.pointerId);
+        } catch (e) {}
+      });
+      head.addEventListener("pointermove", function (ev) {
+        if (!start) return;
+        s.style.setProperty("--sd-sheet-drag", Math.max(0, ev.clientY - start.y) + "px");
+      });
+      var end = function (ev) {
+        if (!start) return;
+        var dy = Math.max(0, (ev.clientY || 0) - start.y);
+        var speed = dy / Math.max(1, Date.now() - start.t);
+        var h = s.getBoundingClientRect().height || 1;
+        start = null;
+        s.classList.remove("is-dragging");
+        if (dy > h * 0.22 || speed > 0.8) {
+          s.style.setProperty("--sd-sheet-drag", "100%");
+          setTimeout(function () {
+            s.style.removeProperty("--sd-sheet-drag");
+          }, 300);
+          Sheets.close();
+        } else {
+          s.style.removeProperty("--sd-sheet-drag");
+        }
+      };
+      head.addEventListener("pointerup", end);
+      head.addEventListener("pointercancel", end);
+    },
+  };
+
+  /* ------------------------------------------------------------------ *
+   * 11c. Back — the Android back button closes our panels first.
+   *      Opening a panel pushes ONE history entry, so the WebView never
+   *      leaves the app by accident (the old layer had no handling at all).
+   * ------------------------------------------------------------------ */
+  var Back = {
+    pushed: false,
+    top: function () {
+      if (Sheets.active) return "sheet";
+      if (Queue.open) return "queue";
+      if (Player.open) return "player";
+      return null;
+    },
+    sync: function () {
+      if (this.top() && !this.pushed) {
+        this.pushed = true;
+        try {
+          history.pushState({ sd: "panel" }, "");
+        } catch (e) {}
+      }
+    },
+    release: function () {
+      if (!this.pushed) return;
+      this.pushed = false;
+      try {
+        history.back();
+      } catch (e) {}
+    },
+    /** Returns true when the press was consumed by us. */
+    handle: function () {
+      var t = this.top();
+      if (!t) return false;
+      this.pushed = false; // set first: close() must not pop twice
+      if (t === "sheet") Sheets.close(false);
+      else if (t === "queue") Queue.close();
+      else Player.closeSheet();
+      if (this.top()) this.sync(); // a sheet closed over the player → one more
+      return true;
+    },
+  };
+  window.addEventListener("popstate", function () {
+    /* L'événement que **nous** émettons pour ouvrir une page n'est pas un
+       retour de l'utilisateur : il ne doit pas fermer un panneau. */
+    if (Open.synthetic) return;
+    if (Back.pushed) Back.handle();
+  });
+
+  /* ------------------------------------------------------------------ *
+   * 11e. Open — ouvrir une page **dans** le lecteur, jamais en
+   *      rechargeant l'application.
+   *
+   * Signalé le 25/09 : « quand on appuie sur une playlist, écran noir » — et
+   * le retour ne ramenait pas à la bibliothèque. Nos lignes de bibliothèque
+   * sont des liens : l'appui faisait donc charger l'adresse par la WebView
+   * comme un premier chargement. La page se vidait, Spotify se rechargeait en
+   * entier (plusieurs secondes de noir), notre coque repartait de zéro, et le
+   * bouton retour sortait de la page au lieu de revenir en arrière.
+   *
+   * Le lecteur est une application d'une **seule page** : il sait afficher ses
+   * propres adresses sans se recharger. On lui passe donc la main, dans cet
+   * ordre :
+   *   1. le lien de Spotify pour la **même** adresse, s'il est dans la page —
+   *      c'est lui qui a le routeur et l'historique ;
+   *   2. sinon l'adresse est poussée dans l'historique et l'événement de
+   *      navigation est émis : c'est ainsi qu'une application d'une seule page
+   *      apprend qu'une adresse a changé ;
+   *   3. et si la page n'a pas suivi après trois vérifications, on navigue pour
+   *      de vrai — mais **le voile est déjà posé**, donc l'écran n'est jamais
+   *      noir : il dit ce qu'il ouvre.
+   * ------------------------------------------------------------------ */
+  var Open = {
+    busy: false,
+    tries: 0,
+    /* Vrai pendant l'émission de notre propre événement de navigation. */
+    synthetic: false,
+
+    bind: function () {
+      if (this.bound) return false;
+      this.bound = true;
+      var self = this;
+      /* En capture : nos liens n'ont pas de routeur, la page en a un. */
+      document.addEventListener(
+        "click",
+        function (ev) {
+          if (ev.defaultPrevented) return;
+          if (ev.button > 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+          var a = ev.target && ev.target.closest ? ev.target.closest("a[href]") : null;
+          if (!a || !a.closest || !a.closest(".sd-layer")) return;
+          var href = a.getAttribute("href") || "";
+          /* Un lien externe (la connexion, un partage) ne nous regarde pas. */
+          if (href.charAt(0) !== "/") return;
+          ev.preventDefault();
+          var nom = $(".sd-lib-name", a) || $(".sd-home-title", a);
+          self.open(href, nom ? (nom.textContent || "").trim() : "");
+        },
+        true
+      );
+      return true;
+    },
+
+    /** Le lien de Spotify pour la même adresse, hors de notre coque. */
+    twin: function (href) {
+      var cible = href.split("?")[0].replace(/\/+$/, "");
+      var links = $$('a[href^="/"]');
+      for (var i = 0; i < links.length; i++) {
+        var a = links[i];
+        if (a.closest && a.closest(".sd-layer")) continue;
+        var h = (a.getAttribute("href") || "").split("?")[0].replace(/\/+$/, "");
+        if (h === cible) return a;
+      }
+      return null;
+    },
+
+    open: function (href, name) {
+      if (!href || href.charAt(0) !== "/") return false;
+      if (this.busy) return false;
+      this.busy = true;
+      this.href = href.split("?")[0].replace(/\/+$/, "");
+      this.tries = 0;
+      this.veil(name);
+      var twin = this.twin(href);
+      this.parLien = !!twin;
+      if (twin) {
+        try {
+          twin.click();
+        } catch (e) {}
+      } else {
+        try {
+          history.pushState({ sd: "open", open: href }, "", href);
+        } catch (e) {}
+        this.pulse();
+      }
+      var self = this;
+      /* Filet de sécurité : le voile ne reste jamais plus longtemps que ça,
+         même si la page ne dit rien. */
+      clearTimeout(this.lettre);
+      this.lettre = setTimeout(function () {
+        self.done();
+      }, OPEN_LIMIT);
+      this.check();
+      return true;
+    },
+
+    /**
+     * **L'événement de navigation.** Une application d'une seule page affiche
+     * une adresse ainsi : on la pousse, puis on lui dit qu'elle a changé.
+     * Nos propres écouteurs savent que celui-ci vient de nous (`synthetic`) —
+     * sinon l'historique se décrémentait deux fois et le retour tombait à côté.
+     */
+    pulse: function () {
+      var ev = null;
+      try {
+        ev = typeof PopStateEvent === "function" ? new PopStateEvent("popstate", { state: { sd: "open" } }) : null;
+        if (!ev) {
+          ev = document.createEvent("Event");
+          ev.initEvent("popstate", true, false);
+        }
+      } catch (e) {
+        return false;
+      }
+      this.synthetic = true;
+      try {
+        window.dispatchEvent(ev);
+      } catch (e) {
+        /* rien : la vérification qui suit décidera */
+      }
+      this.synthetic = false;
+      return true;
+    },
+
+    /** La page demandée est-elle arrivée ? */
+    arrive: function () {
+      /* Une sous-page est rendue : c'est la réponse la plus sûre. */
+      if (Spotify.route() === "page") return true;
+      /* Certaines adresses n'ont pas de section à elles : si **le routeur a
+         suivi le lien de Spotify** et que l'adresse est la bonne, c'est arrivé. */
+      if (this.parLien && location.pathname.replace(/\/+$/, "") === this.href) return true;
+      return false;
+    },
+
+    check: function () {
+      var self = this;
+      clearTimeout(this.timer);
+      this.timer = setTimeout(function () {
+        if (!self.busy) return;
+        if (self.arrive()) {
+          self.done();
+          return;
+        }
+        if (++self.tries >= OPEN_TRIES) {
+          /* La page n'a pas suivi (adresse que son routeur ignore, routeur
+             absent) : on navigue pour de vrai — le voile est déjà posé, donc
+             l'écran montre « Ouverture… », jamais du noir. */
+          self.busy = false;
+          clearTimeout(self.lettre);
+          try {
+            location.assign(self.href);
+          } catch (e) {
+            self.done();
+          }
+          return;
+        }
+        self.check();
+      }, OPEN_STEP);
+    },
+
+    /** Le voile : l'écran dit ce qu'il fait pendant que la page s'ouvre. */
+    veil: function (name) {
+      var node = (UI.el && UI.el.open) || $(".sd-open");
+      if (!node) return false;
+      var text = $(".sd-open-text", node);
+      if (text) text.textContent = name ? Settings.labels.openingOf.replace("%s", name) : Settings.labels.opening;
+      node.hidden = false;
+      return true;
+    },
+
+    hide: function () {
+      var node = (UI.el && UI.el.open) || $(".sd-open");
+      if (node) node.hidden = true;
+      return !!node;
+    },
+
+    /** La page est là (ou on renonce) : le voile se retire. */
+    done: function (keep) {
+      this.busy = false;
+      this.tries = 0;
+      clearTimeout(this.timer);
+      clearTimeout(this.lettre);
+      if (!keep) this.hide();
+      return true;
+    },
+
+    /** Le retour pendant l'ouverture : on annule ce qu'on a poussé. */
+    cancel: function () {
+      var pousse = this.busy && !this.parLien;
+      this.done();
+      if (pousse) {
+        try {
+          history.back();
+        } catch (e) {}
+      }
+      return true;
+    },
+  };
+
+  /* ------------------------------------------------------------------ *
+   * 11d. Auto — playback hand-off, stuck-player recovery, screen wake
+   *      (everything the native app did from a 5 s interval, event driven)
+   * ------------------------------------------------------------------ */
+  var Auto = {
+    /* The user asked for playback through our UI (play/pause, next, a library
+       tap…). Everything that "pushes" Spotify around is gated on this. */
+    wantPlay: false,
+    takeoverBusy: false,
+    stuckTries: 0,
+    selfPaused: false,
+    resumeCount: 0,
+    TAKEOVER_RE: /(couter sur cet appareil|listen on this device|prendre le contr|take control|transf[ée]rer|continuer la lecture)/i,
+
+    start: function () {
+      this.watch();
+      this.wake();
+      document.addEventListener("visibilitychange", function () {
+        Auto.wake();
+        if (document.visibilityState === "visible") {
+          syncFromDom("visible");
+          Login.apply();
+        }
+      });
+      window.addEventListener("online", Offline.check);
+      window.addEventListener("offline", Offline.check);
+    },
+
+    /* ---- "Écouter sur cet appareil" ---------------------------------- */
+    /** Spotify only offers the transfer button when another device is
+     *  playing; we watch the bar instead of polling it every 5 seconds. */
+    watch: function () {
+      if (!window.MutationObserver) return;
+      var bar = pick(SEL.npBar);
+      if (!bar) return;
+      /* NB: never pass a method straight to `debounce` — it calls back with a
+         null `this`, which is exactly how a bound-less module method breaks. */
+      var obs = new MutationObserver(
+        debounce(function () {
+          Auto.maybeTakeover();
+        }, 300)
+      );
+      obs.observe(bar, { childList: true, subtree: true });
+      var panel = pick(SEL.panel);
+      if (panel) obs.observe(panel, { childList: true, subtree: true });
+    },
+    takeoverButton: function () {
+      for (var i = 0; i < SEL.takeover.length; i++) {
+        var nodes = $$(SEL.takeover[i]);
+        for (var j = 0; j < nodes.length; j++) {
+          var el = nodes[j];
+          if (el.closest && el.closest(".sd-layer")) continue; // never ours
+          var label = (el.getAttribute("aria-label") || el.textContent || "").trim();
+          if (this.TAKEOVER_RE.test(label)) return el;
+        }
+      }
+      /* Last resort: when the bar has no track loaded at all, the only bright
+         accent button of the bar is the transfer call-to-action. */
+      if (!State.hasTrack) {
+        var green = pick(['aside[data-testid="now-playing-bar"] div.encore-bright-accent-set button']);
+        if (green) return green;
+      }
+      return null;
+    },
+    maybeTakeover: function () {
+      if (!Settings.takeControl || this.takeoverBusy) return;
+      /* Only ever take playback over when the user *asked* for playback from
+         this UI (or enabled the auto-resume option). Clicking the prompt just
+         because it appeared would steal playback from a speaker that is
+         happily playing — the old layer's behaviour bug in reverse. */
+      if (!this.wantPlay) return;
+      var btn = this.takeoverButton();
+      if (!btn) return;
+      this.takeoverBusy = true;
+      var self = this;
+      try {
+        btn.click();
+      } catch (e) {
+        /* the button may vanish between the observer callback and the click */
+      }
+      Toast.show(Settings.labels.takeover);
+      buzz(12);
+      /* Spotify then asks *which* device to hand playback to: click the first
+         row of that list, exactly like the native app does. */
+      setTimeout(function () {
+        var row = pick(SEL.takeoverRows);
+        if (row) {
+          try {
+            row.click();
+          } catch (e) {}
+        }
+        self.takeoverBusy = false;
+      }, 600);
+      if (this.wantPlay) this.armStuck();
+    },
+
+    /* ---- stuck-player recovery --------------------------------------- */
+    /** Spotify occasionally swallows the first play request. The old layer
+     *  waited 10 s, told Android (`deferMessage('unlock')`) and skipped to the
+     *  next track — same recovery, but never more than twice per request. */
+    armStuck: function () {
+      clearTimeout(this._stuck);
+      this._stuck = setTimeout(function () {
+        if (State.playing || !Auto.wantPlay || Auto.stuckTries >= 2) return;
+        Auto.stuckTries++;
+        Bridge.defer("unlock");
+        Toast.show(Settings.labels.unlock);
+        if (!Spotify.next()) Spotify.playPause();
+      }, 10000);
+    },
+
+    /* ---- optional auto-resume ---------------------------------------- */
+    maybeResume: function () {
+      if (!Settings.resume || this.selfPaused || !State.hasTrack) return;
+      if (document.visibilityState === "hidden" || this.resumeCount >= 3) return;
+      this.resumeCount++;
+      setTimeout(function () {
+        if (!State.playing && Settings.resume && !Auto.selfPaused) Spotify.playPause();
+      }, 600);
+    },
+
+    /* ---- screen wake lock for video/canvas playback ------------------ */
+    wake: function () {
+      if (!Bridge.has("wakeUp")) return;
+      var video = $(".VideoPlayer__container video");
+      try {
+        if (State.playing && video && document.visibilityState === "hidden") Bridge.wakeUp();
+        else if (document.visibilityState === "visible" && !video && Bridge.isWoke()) Bridge.wakeOff();
+      } catch (e) {
+        /* bridge hiccup — never break the UI over it */
+      }
+    },
+  };
+
+  /* ------------------------------------------------------------------ *
+   * 11e. Login — mobile login page + "logged in" hand-off to Android
+   * ------------------------------------------------------------------ */
+  var Login = {
+    done: false,
+    apply: function () {
+      var html = document.documentElement;
+      var onLogin = !!pick(SEL.loginPage) || /\/login/.test(location.pathname);
+      html.classList.toggle("sd-login", onLogin);
+      /* Écran d'accueil : décidé à chaque passage, y compris quand on n'est
+         ni sur la page de connexion ni dans l'application (page marketing). */
+      Welcome.apply();
+      /* Et l'état de session part vers Android au même rythme : c'est lui qui
+         confirme la session à la connexion (et la range), et qui distingue une
+         déconnexion volontaire d'un lancement sans session. */
+      LoginState.report();
+      if (!onLogin) {
+        html.classList.remove("sd-login-classic", "sd-need-password");
+        return;
+      }
+      /* The WebView's OAuth pop-ups are unreliable; offer the classic form
+         (`?allow_password=1`) the way the native app does — but as a button
+         inside OUR layer, never as a node inside Spotify's React tree. */
+      var classic = !!$('form[data-testid="login-form"], #login-username');
+      html.classList.toggle("sd-login-classic", classic);
+      html.classList.toggle("sd-need-password", !classic && !/allow_password=1/.test(location.search));
+      var wpl = pick(SEL.webPlayerLink);
+      if (wpl && !this.done) {
+        this.done = true;
+        Bridge.call("loginDetected");
+        html.classList.add("sd-login-done");
+        try {
+          wpl.click();
+        } catch (e) {}
+      }
+    },
+  };
+
+  /* ------------------------------------------------------------------ *
+   * 11e-ter. Session — l'état de connexion, rapporté à Android.
+   *
+   * Le mode mobile rapportait `in` / `out` / `login` ; la coque, non (elle se
+   * contentait de `loginDetected`). Tant que le défaut était la page mobile,
+   * ça passait inaperçu ; depuis que la coque est livrée par défaut,
+   * l'application ne recevait plus « connecté » : la session n'était donc ni
+   * confirmée ni rangée à la connexion, et une déconnexion volontaire n'était
+   * plus distinguée d'un lancement sans session.
+   *
+   * On tient ici **exactement** le contrat du mode mobile : mêmes trois états,
+   * même silence quand on ne sait pas — le pont ignore ce qu'il ne comprend
+   * pas, et un « je ne sais pas » ne doit pas faire jeter une session valable.
+   * ------------------------------------------------------------------ */
+  var LoginState = {
+    sent: null,
+    count: 0,
+    isLoginPage: function () {
+      return (
+        document.documentElement.classList.contains("sd-login") ||
+        /(^|\.)accounts\.spotify\.com$/.test(location.hostname) ||
+        !!pick(SEL.loginPage)
+      );
+    },
+    signedIn: function () {
+      return !!(pick(SEL.mainView) || pick(SEL.npBar));
+    },
+    signedOut: function () {
+      return !this.signedIn() && !!spotifyLoginLink();
+    },
+    /** « login » (page de connexion), « in », « out », ou « ? » (pas d'avis). */
+    state: function () {
+      return this.isLoginPage() ? "login" : this.signedIn() ? "in" : this.signedOut() ? "out" : "?";
+    },
+    report: function () {
+      var state = this.state();
+      if (state === "?") state = null;
+      /* Inconnu : on ne dit rien. (Le pont écarte de toute façon ce qu'il ne
+         comprend pas ; autant ne pas l'appeler pour rien.) */
+      if (!state) return null;
+      /* Le même constat part trois fois — l'application peut s'attacher après
+         le premier passage — puis seulement quand il change. */
+      if (state === this.sent && this.count > 2) return state;
+      this.sent = state;
+      this.count++;
+      Bridge.call("loginState", state);
+      return state;
+    },
+  };
+
+  /* ------------------------------------------------------------------ *
+   * 11e-bis. Welcome — écran d'accueil maison.
+   *
+   * Quand la session est déconnectée, open.spotify.com sert sa page
+   * marketing desktop : sur un téléphone c'est illisible et ça ne ressemble
+   * pas à une application. On affiche à la place un écran SpotiDuck sobre
+   * (logo, texte, bouton) par-dessus, avec l'accès à la connexion classique
+   * par e-mail/mot de passe.
+   * ------------------------------------------------------------------ */
+  /* Un lien de connexion **de Spotify**, pas le nôtre.
+     Le calcul naïf (`a[href*="/login"]`) comptait aussi les liens de notre
+     propre coque — son écran d'accueil en contient deux, et la barre du haut un
+     troisième. Résultat : sur toute page sans lecteur, la coque se « prouvait »
+     à elle-même que la page était la page marketing de Spotify, son écran
+     d'accueil se rendait vrai tout seul… et il ne se retirait plus, masquant la
+     coque entière (mesuré sur le banc : `haut/bas/mini/en-tête = MASQUÉ 0×0`,
+     classe `sd-welcome-on`, alors que la coque était construite). C'est le
+     « c'est le bordel » reproduit au laboratoire.
+     Même piège pour l'état de session : compter notre propre lien faisait
+     rapporter « déconnecté » à l'application pendant un chargement, donc une
+     session valable pouvait être jetée. */
+  function spotifyLoginLink() {
+    /* Liens **et boutons** : la page d'atterrissage de Spotify
+       (`open.spotify.com/intl-fr/`) sert parfois sa connexion par un bouton
+       piloté en JavaScript, sans `href` — et l'écran d'accueil maison ne
+       s'affichait alors pas là où il est le plus utile (session fermée). */
+    var links = document.querySelectorAll(
+      'a[href^="/login"], a[href*="/login"], a[href*="accounts.spotify.com"],' +
+        ' button[data-testid*="login"], button[data-testid*="signup"]'
+    );
+    for (var i = 0; i < links.length; i++) {
+      var node = links[i];
+      var ours = false;
+      while (node && node.nodeType === 1) {
+        if (node.classList && node.classList.contains("sd-layer")) {
+          ours = true;
+          break;
+        }
+        node = node.parentNode;
+      }
+      if (!ours) return links[i];
+    }
+    return null;
+  }
+
+  var Welcome = {
+    /** Ranger l'écran d'accueil — une seule façon de le faire. */
+    hide: function () {
+      document.documentElement.classList.remove("sd-welcome-on");
+      if (UI.el.welcome) UI.el.welcome.setAttribute("aria-hidden", "true");
+      return false;
+    },
+    apply: function () {
+      var html = document.documentElement;
+      var login = html.classList.contains("sd-login");
+      var app = !!(pick(SEL.mainView) || pick(SEL.npBar));
+      var marketing = !!spotifyLoginLink();
+      /* **Jamais** sur la page de connexion. C'était le défaut : la coque
+         s'installe aussi sur `accounts.spotify.com`, y reconnaît une page de
+         connexion (`sd-login`) et posait l'écran d'accueil **par-dessus le
+         formulaire** ; son bouton menait à la page déjà affichée, donc « le
+         bouton ne fait rien » et l'utilisateur restait bloqué là. L'écran
+         d'accueil n'a de sens que sur la page marketing du lecteur, quand
+         personne n'est connecté et qu'il n'y a rien à remplir. */
+      var show = !app && !login && !LoginState.isLoginPage() && marketing;
+      if (!show) return this.hide();
+      html.classList.add("sd-welcome-on");
+      if (UI.el.welcome) UI.el.welcome.setAttribute("aria-hidden", "false");
+      return show;
+    },
+  };
+
+
+  /* ------------------------------------------------------------------ *
+   * 11e-ter. Home — **notre** page d'accueil
+   *
+   * Le 24/09, l'accueil du web player a été repris trois fois (mise en page de
+   * bureau, quatre colonnes de pochettes de 59 px, conteneurs de 440 px rognés
+   * dans une page de 412) et il restait « coupé » et « pas très beau ». Décision
+   * prise avec l'utilisateur : l'application affiche **son propre** accueil.
+   *
+   * Le principe : on ne recopie pas Spotify, on **lit** la page. Titres de
+   * rangées, pochettes, liens : tout vient du DOM réel (donc c'est bien la
+   * musique de l'utilisateur, ses recommandations, sa bibliothèque), et on le
+   * rend avec notre mise en page — qui, elle, est écrite pour un téléphone et
+   * n'a aucune métrique de bureau à rattraper.
+   *
+   * Ce que ça garantit :
+   *   · rien ne peut être « coupé » : la grille est en `auto-fill` sur une
+   *     largeur de carte utile, la pochette remplit sa case ;
+   *   · chaque commande fait quelque chose : les cartes et « Tout afficher »
+   *     sont de vrais liens de la page, les filtres filtrent, les raccourcis
+   *     utilisent le routeur existant ;
+   *   · si nos données sont vides (page de connexion, session fermée, écran de
+   *     rangées qui n'existe pas), l'accueil **s'efface** et la page reprend la
+   *     main : jamais d'écran maison vide par-dessus un écran vide.
+   * ------------------------------------------------------------------ */
+
+  var HOME_MAX_SHELVES = 8;
+  var HOME_MAX_CARDS = 12;
+
+  var Home = {
+    el: null,
+    built: false,
+    data: [],
+    filter: "all",
+    greeting: "",
+
+    /** Les rangées de la page : titre, lien « tout afficher », cartes. */
+    readPage: function () {
+      var shelves = $$('section[data-testid="component-shelf"], div[data-testid="grid-container"]');
+      /* `rows`, pas `out` : l'audit de cohérence lit les objets du fichier sans
+         tenir compte des portées, et un `out` local homonyme d'un objet global
+         lui fait croire à un appel de méthode manquant. */
+      var rows = [];
+      var seen = {};
+      for (var i = 0; i < shelves.length && rows.length < HOME_MAX_SHELVES; i++) {
+        var shelf = shelves[i];
+        var head = shelf.querySelector("h2, .encore-text-headline-large, [data-encore-id=\"text\"]");
+        var title = head ? (head.textContent || "").replace(/\s+/g, " ").trim() : "";
+        if (!title) continue;
+        /* **Une carte n'est pas forcément un lien.** Sur la vraie page, les
+           cartes de l'accueil sont des `div[role=button]` (la mesure du 24/09 :
+           `CARTE div.OniARfz…`), et la première version de ce lecteur ne
+           cherchait que des `a[href]` : elle ne trouvait rien, l'accueil se
+           masquait, et l'utilisateur revoyait exactement l'écran de Spotify
+           (« rien n'a changé »). On accepte donc les deux formes, et quand il
+           n'y a pas d'adresse, on **clique la carte d'origine** au moment de
+           l'appui (voir `openOriginal`). */
+        var CARD_SEL =
+          'a[href], [role="button"], [data-testid="card-clickable"], div[data-encore-id="card"], [data-testid="shortcut-card"]';
+        var candidates = shelf.querySelectorAll(CARD_SEL);
+        var cards = [];
+        var seenHref = {};
+        var seenLabel = {};
+        for (var j = 0; j < candidates.length && cards.length < HOME_MAX_CARDS; j++) {
+          var node = candidates[j];
+          var img = node.querySelector("img");
+          if (!img) continue;
+          /* L'adresse : celle de la carte, ou celle d'un lien qu'elle contient. */
+          var inner = node.querySelector("a[href]");
+          var href = node.getAttribute("href") || (inner ? inner.getAttribute("href") : "") || "";
+          if (href === "#") href = "";
+          /* Le libellé : nom accessible, puis texte de la carte, puis l'image. */
+          var label = (node.getAttribute("aria-label") || "").replace(/\s+/g, " ").trim();
+          if (!label) {
+            var t = node.querySelector("p, span.encore-text, [data-encore-id=\"text\"]");
+            label = t ? (t.textContent || "").replace(/\s+/g, " ").trim() : "";
+          }
+          if (!label) label = (img.getAttribute("alt") || "").trim();
+          if (!label && href) label = decodeURIComponent(href.split("/").filter(Boolean).pop() || "");
+          label = label.replace(/\s*·\s*/g, " · ").slice(0, 60);
+          if (!label || label.length < 2) continue;
+          var dedupe = href || label.toLowerCase();
+          if (seenHref[dedupe] || seenLabel[label.toLowerCase()]) continue;
+          seenHref[dedupe] = 1;
+          seenLabel[label.toLowerCase()] = 1;
+          var sub = node.querySelector("span.encore-text-body-small, p.encore-text-body-small");
+          cards.push({
+            href: href,
+            img: img.currentSrc || img.getAttribute("src") || "",
+            title: label,
+            sub: sub ? (sub.textContent || "").replace(/\s+/g, " ").trim().slice(0, 40) : "",
+            type: Home.typeOf(href, title, label),
+            /* Pour retrouver la carte d'origine : le rang de la rangée et celui de
+               la carte dans cette rangée. */
+            shelf: i,
+            card: j,
+          });
+        }
+        if (!cards.length) continue;
+        /* Le lien « Tout afficher » : Spotify l'écrit, le nomme parfois
+           seulement en `aria-label`, et pointe toujours vers une section
+           (`/section/…`). Trois lectures valent mieux qu'une : le texte, le
+           libellé d'accessibilité, et la destination. */
+        var more = null;
+        var headLinks = shelf.querySelectorAll("a[href]");
+        for (var k = 0; k < headLinks.length; k++) {
+          var link = headLinks[k];
+          var said = (link.textContent || "") + " " + (link.getAttribute("aria-label") || "");
+          var href = link.getAttribute("href") || "";
+          if (/tout afficher|show all|see all|afficher tout/i.test(said) || /\/section\//.test(href)) {
+            more = href;
+            break;
+          }
+        }
+        var key = title.toLowerCase();
+        if (seen[key]) continue;
+        seen[key] = 1;
+        rows.push({ title: title, more: more, cards: cards });
+      }
+      return rows;
+    },
+
+    /** Clique la carte **d'origine** de la page (quand elle n'est pas un lien).
+        Les cartes sont relues au moment de l'appui : entre l'affichage et le
+        clic, Spotify a pu reconstruire ses rangées. */
+    openOriginal: function (shelfIndex, cardIndex) {
+      var shelves = $$('section[data-testid="component-shelf"], div[data-testid="grid-container"]');
+      var shelf = shelves[shelfIndex];
+      if (!shelf) return false;
+      var CARD_SEL =
+        'a[href], [role="button"], [data-testid="card-clickable"], div[data-encore-id="card"], [data-testid="shortcut-card"]';
+      var candidates = [];
+      var all = shelf.querySelectorAll(CARD_SEL);
+      for (var i = 0; i < all.length; i++) {
+        if (all[i].querySelector("img")) candidates.push(all[i]);
+      }
+      var node = candidates[cardIndex];
+      if (!node) return false;
+      var link = node.tagName === "A" && node.getAttribute("href") ? node : node.querySelector("a[href]");
+      if (link && link.getAttribute("href")) {
+        location.assign(link.getAttribute("href"));
+        return true;
+      }
+      node.click();
+      return true;
+    },
+
+    /** Musique, podcast, ou autre — d'après l'adresse et les mots du titre. */
+    typeOf: function (href, shelfTitle, label) {
+      var h = (href || "").toLowerCase();
+      var s = ((shelfTitle || "") + " " + (label || "")).toLowerCase();
+      if (/\/(show|episode)\//.test(h) || /podcast|episode|emission/.test(s)) return "podcast";
+      if (/\/(album|artist|track|playlist|collection|section)\//.test(h)) return "music";
+      return "other";
+    },
+
+    /** **Le chemin fait foi.** La détection de vue (`State.route`) dépend du DOM
+        de Spotify : quand elle se trompait, l'accueil se croyait « ailleurs » et
+        ne s'affichait jamais — c'est l'autre moitié du « rien n'a changé ».
+        L'adresse, elle, ne se trompe pas : la racine du web player est
+        l'accueil, tout le reste (playlist, album, artiste, recherche) est une
+        autre page. */
+    isHomePath: function () {
+      var path = (location.pathname || "/").replace(/\/+$/, "") || "";
+      if (path === "" || path === "/" || path === "/home") return true;
+      /* `/fr`, `/fr-FR`, `/en`… **et `/intl-fr`** : c'est le chemin que Spotify
+         sert réellement en France (relevé sur le téléphone : `page /intl-fr/`).
+         La première version ne l'acceptait pas — donc l'accueil maison ne
+         s'affichait pas là où l'utilisateur arrive. Une sous-page (playlist,
+         album, artiste, `/section/…`) n'est jamais un chemin d'accueil. */
+      return /^\/(?:intl-)?[a-z]{2}(?:-[a-z]{2})?$/i.test(path);
+    },
+
+    /**
+     * L'état de l'accueil, en une phrase, pour le diagnostic.
+     *
+     * « Rien n'a changé » a coûté deux versions parce que le diagnostic ne
+     * disait pas **pourquoi** l'accueil ne s'affichait pas : il fallait deviner
+     * entre les données, le chemin, la session et le réglage. Cette phrase
+     * nomme la raison, et le nombre de rangées quand il s'affiche.
+     */
+    describe: function () {
+      if (!Settings.homeBoard) return "désactivé (réglage)";
+      if (!this.built) return "pas construit";
+      if (!this.data.length && !Stats.hasData()) return "masqué (aucune donnée)";
+      if (!this.isHomePath()) return "masqué (hors accueil)";
+      if (LoginState.isLoginPage()) return "masqué (page de connexion)";
+      if (!LoginState.signedIn()) return "masqué (session fermée)";
+      var cards = this.el ? this.el.querySelectorAll(".sd-home-card").length : 0;
+      return (this.el && this.el.hidden ? "masqué" : "affiché") + " " + this.data.length + " rangées/" + cards + " cartes";
+    },
+
+    shouldShow: function () {
+      if (!Settings.homeBoard) return false;
+      if (!this.built) return false;
+      /* **L'onglet fait foi.** Signalé le 25/09 : « quand on clique sur l'onglet
+         bibliothèque, la barre en haut disparaît et rien d'autre n'apparaît ; je
+         reste bloqué sur l'écran d'accueil ». L'accueil ne regardait que le
+         chemin de l'URL — or un appui sur l'onglet Bibliothèque **ne change pas
+         d'URL** (c'est la barre latérale de Spotify qui est montrée) : l'accueil
+         se croyait donc toujours à sa place et couvrait l'écran. */
+      if (State.tab !== "home") return false;
+      /* Les statistiques suffisent : l'accueil est **notre** écran, il n'a pas
+         besoin que Spotify publie des rangées pour exister. */
+      if (!this.data.length && !Stats.hasData()) return false;
+      if (!this.isHomePath()) return false;
+      if (LoginState.isLoginPage()) return false;
+      if (!LoginState.signedIn()) return false;
+      return true;
+    },
+
+    /** Construit (une fois) le squelette de l'accueil. */
+    build: function () {
+      if (this.built) return true;
+      var el = document.createElement("div");
+      el.className = "sd-home";
+      el.setAttribute("role", "region");
+      el.setAttribute("aria-label", Settings.labels.home);
+      el.innerHTML =
+        '<div class="sd-home-greet">' +
+        '<span class="sd-home-hello"></span>' +
+        '<span class="sd-home-sub"></span>' +
+        "</div>" +
+        '<div class="sd-home-chips" role="tablist">' +
+        '<button class="sd-chip sd-chip-all is-active" type="button" role="tab" data-filter="all"></button>' +
+        '<button class="sd-chip sd-chip-music" type="button" role="tab" data-filter="music"></button>' +
+        '<button class="sd-chip sd-chip-podcast" type="button" role="tab" data-filter="podcast"></button>' +
+        "</div>" +
+        '<div class="sd-home-stats"></div>' +
+        '<div class="sd-home-shortcuts"></div>' +
+        '<div class="sd-home-sections"></div>';
+      this.el = el;
+      UI.layer.appendChild(el);
+
+      /* Les filtres : c'est le seul endroit de l'accueil où l'appui ne navigue
+         pas — il filtre, et l'état « actif » se voit (aria-selected). */
+      var self = this;
+      $$(".sd-chip", el).forEach(function (chip) {
+        chip.addEventListener("click", function () {
+          self.setFilter(chip.getAttribute("data-filter"));
+        });
+      });
+      this.built = true;
+      return true;
+    },
+
+    /** Les raccourcis : trois commandes réelles, jamais décoratives. */
+    buildShortcuts: function () {
+      var box = $(".sd-home-shortcuts", this.el);
+      if (!box || box.childNodes.length) return;
+      var items = [
+        { key: "search", label: Settings.labels.search, icon: ICONS.searchLine, run: function () { Router.tab("search"); } },
+        { key: "library", label: Settings.labels.library, icon: ICONS.libraryLine, run: function () { Router.tab("library"); } },
+        { key: "settings", label: Settings.labels.settings, icon: ICONS.gearLine, run: function () { Sheets.open("settings"); } },
+        { key: "liked", label: Settings.labels.likedSongs || Settings.labels.library, icon: ICONS.heartLine, run: function () {
+            var a = pick(['a[href*="/collection/tracks"]', 'a[href*="/collection"]']);
+            if (a) location.assign(a.getAttribute("href"));
+            else Router.tab("library");
+          } },
+      ];
+      items.forEach(function (item) {
+        var b = document.createElement("button");
+        b.type = "button";
+        b.className = "sd-shortcut sd-shortcut-" + item.key;
+        b.innerHTML =
+          '<span class="sd-shortcut-icon">' + svg(item.icon) + "</span>" +
+          '<span class="sd-shortcut-label"></span>';
+        $(".sd-shortcut-label", b).textContent = item.label;
+        b.addEventListener("click", item.run);
+        box.appendChild(b);
+      });
+    },
+
+    setFilter: function (name) {
+      this.filter = name === "music" || name === "podcast" ? name : "all";
+      $$(".sd-chip", this.el).forEach(function (chip) {
+        var on = chip.getAttribute("data-filter") === Home.filter;
+        chip.classList.toggle("is-active", on);
+        chip.setAttribute("aria-selected", on ? "true" : "false");
+      });
+      this.renderSections();
+      var visible = $$(".sd-home-card", this.el).length;
+      if (!visible) Toast.show(Settings.labels.homeEmptyCategory, 1600);
+    },
+
+    /* ---------------- statistiques ---------------- */
+
+    /**
+     * Le bloc « Vos statistiques », refait le 25/09 : « les statistiques sont
+     * pas bonne il me semble. Rends les statistiques plus compréhensible ».
+     *
+     * Trois principes :
+     *  1. **le temps d'abord** — trois durées (aujourd'hui, sept jours, depuis
+     *     le début), dans la même unité, avec le nombre d'écoutes en dessous ;
+     *  2. **les nombres expliqués** — chaque compteur dit ce qu'il compte
+     *     (« jours de suite avec une écoute »), dans une section à part ;
+     *  3. **une seule unité par graphique** — les sept derniers jours et les
+     *     moments de la journée sont en temps écouté, comme les durées du
+     *     haut, et chaque barre porte sa valeur.
+     */
+    renderStats: function () {
+      var box = $(".sd-home-stats", this.el);
+      if (!box) return false;
+      var L = Settings.labels;
+      var sum = Stats.summary();
+      box.textContent = "";
+      box.hidden = false;
+
+      /* En-tête : le titre, et le bouton d'effacement à droite. */
+      var head = document.createElement("div");
+      head.className = "sd-home-head";
+      var h = document.createElement("h2");
+      h.className = "sd-home-section-title";
+      h.textContent = L.statsTitle;
+      head.appendChild(h);
+      var reset = document.createElement("button");
+      reset.type = "button";
+      reset.className = "sd-stat-reset";
+      reset.textContent = L.statsClear;
+      reset.addEventListener("click", function () {
+        Stats.clear();
+        Toast.show(L.statsCleared, 1600);
+      });
+      head.appendChild(reset);
+      box.appendChild(head);
+
+      if (!sum.total) {
+        var empty = document.createElement("p");
+        empty.className = "sd-stat-empty";
+        empty.textContent = L.statsEmpty;
+        box.appendChild(empty);
+        return true;
+      }
+
+      var plays = this.plays(sum.plays);
+
+      /* La ligne de tête : le temps écouté, en clair, et la période couverte. */
+      var lead = document.createElement("p");
+      lead.className = "sd-stat-lead";
+      lead.textContent =
+        L.statsLead.replace("%s", Stats.human(sum.seconds)).replace("%s", plays) +
+        (sum.playsToday ? " · " + L.statsToday + " " + Stats.human(sum.secondsToday) : "");
+      box.appendChild(lead);
+
+      /* 1. Le temps écouté — la question que l'on se pose d'abord. */
+      var timeCard = document.createElement("div");
+      timeCard.className = "sd-stat-card";
+      timeCard.appendChild(this.statTitle(L.statsTimeSection));
+      var tiles = document.createElement("div");
+      tiles.className = "sd-stat-tiles";
+      [
+        [Stats.human(sum.secondsToday), L.statsToday, this.plays(sum.playsToday)],
+        [Stats.human(sum.secondsWeek), L.statsDays.replace(/^(Ces|ces) /, ""), this.plays(sum.playsWeek)],
+        [
+          Stats.human(sum.seconds),
+          L.statsTotal,
+          sum.first ? L.statsSince.replace("%s", Stats.dayLabel(sum.first)) : plays,
+        ],
+      ].forEach(function (triple) {
+        tiles.appendChild(Home.statTile(triple[0], triple[1], triple[2]));
+      });
+      timeCard.appendChild(tiles);
+      var measureNote = document.createElement("p");
+      measureNote.className = "sd-stat-note";
+      measureNote.textContent = L.statsNoteMeasure;
+      timeCard.appendChild(measureNote);
+      if (sum.estimatedPlays) {
+        var estNote = document.createElement("p");
+        estNote.className = "sd-stat-note sd-stat-note-est";
+        estNote.textContent = L.statsNoteEstimate.replace("%s", Stats.human(sum.estimated));
+        timeCard.appendChild(estNote);
+      }
+      box.appendChild(timeCard);
+
+      /* 2. Les nombres : chacun dit ce qu'il compte. */
+      var numbersCard = document.createElement("div");
+      numbersCard.className = "sd-stat-card";
+      numbersCard.appendChild(this.statTitle(L.statsNumbersSection));
+      var numbers = document.createElement("div");
+      numbers.className = "sd-stat-tiles";
+      [
+        [String(sum.plays), L.statsPlayed, L.statsHintTrack],
+        [String(sum.trackCount), L.statsTracks, L.statsHintDifferent],
+        [String(sum.artistCount), L.statsArtists, L.statsHintArtist],
+        [String(sum.streak), L.statsStreak, L.statsHintStreak],
+      ].forEach(function (triple) {
+        numbers.appendChild(Home.statTile(triple[0], triple[1], triple[2]));
+      });
+      numbersCard.appendChild(numbers);
+      box.appendChild(numbersCard);
+
+      /* 3. Les sept derniers jours, en temps écouté : hauteur = minutes. */
+      var week = document.createElement("div");
+      week.className = "sd-stat-card";
+      week.appendChild(this.statTitle(L.statsDays));
+      var weekSum = sum.secondsWeek || 0;
+      var maxSec = 1;
+      sum.byDay.forEach(function (d) {
+        if (d.sec > maxSec) maxSec = d.sec;
+      });
+      var chart = document.createElement("div");
+      chart.className = "sd-stat-chart";
+      var todayIndex = sum.byDay.length - 1;
+      sum.byDay.forEach(function (d, index) {
+        var col = document.createElement("div");
+        col.className = "sd-stat-col" + (index === todayIndex ? " is-today" : "");
+        var count = document.createElement("span");
+        count.className = "sd-stat-count";
+        count.textContent = d.sec ? Stats.human(d.sec) : "";
+        count.setAttribute(
+          "title",
+          Stats.weekdayLabel(d.day) + " · " + Stats.human(d.sec) + " · " + Home.plays(d.n)
+        );
+        var bar = document.createElement("span");
+        bar.className = "sd-stat-bar";
+        bar.style.height = Math.max(d.sec ? 6 : 2, Math.round((d.sec / maxSec) * 100)) + "%";
+        var label = document.createElement("span");
+        label.className = "sd-stat-day";
+        label.textContent = Stats.weekdayLabel(d.day);
+        col.appendChild(count);
+        col.appendChild(bar);
+        col.appendChild(label);
+        chart.appendChild(col);
+      });
+      week.appendChild(chart);
+      var weekNote = document.createElement("p");
+      weekNote.className = "sd-stat-note";
+      weekNote.textContent = L.statsLead.replace("%s", Stats.human(weekSum)).replace("%s", this.plays(sum.playsWeek));
+      week.appendChild(weekNote);
+      box.appendChild(week);
+
+      /* 4. Quand vous écoutez : temps écouté, part, et le moment préféré. */
+      var bands = document.createElement("div");
+      bands.className = "sd-stat-card";
+      bands.appendChild(this.statTitle(L.statsBands));
+      var bandBox = document.createElement("div");
+      bandBox.className = "sd-stat-bands";
+      var bandMax = 1;
+      ["morning", "afternoon", "evening", "night"].forEach(function (key) {
+        if (sum.bands[key] > bandMax) bandMax = sum.bands[key];
+      });
+      ["morning", "afternoon", "evening", "night"].forEach(function (key) {
+        var row = document.createElement("div");
+        row.className = "sd-stat-band" + (Stats.bandLabel(key) === sum.favBand ? " is-fav" : "");
+        var name = document.createElement("span");
+        name.className = "sd-stat-band-name";
+        name.textContent = Stats.bandLabel(key);
+        var track = document.createElement("span");
+        track.className = "sd-stat-bar-track";
+        var fill = document.createElement("i");
+        fill.style.width = Math.max(3, Math.round((sum.bands[key] / bandMax) * 100)) + "%";
+        track.appendChild(fill);
+        var value = document.createElement("span");
+        value.className = "sd-stat-bar-value";
+        value.textContent = sum.seconds
+          ? L.statsBandShare.replace("%s", Stats.human(sum.bands[key])).replace(
+              "%s",
+              String(Math.round((sum.bands[key] / sum.seconds) * 100))
+            )
+          : Home.plays(sum.bandPlays[key]);
+        row.appendChild(name);
+        row.appendChild(track);
+        row.appendChild(value);
+        bandBox.appendChild(row);
+      });
+      bands.appendChild(bandBox);
+      var facts = document.createElement("div");
+      facts.className = "sd-stat-facts";
+      [
+        [L.statsFavBand, sum.favBand],
+        [L.statsFavDay, sum.favDay],
+      ].forEach(function (pair) {
+        if (!pair[1]) return;
+        var fact = document.createElement("span");
+        fact.className = "sd-stat-fact";
+        fact.innerHTML = "<b></b><span></span>";
+        $("b", fact).textContent = pair[1];
+        $("span", fact).textContent = pair[0];
+        facts.appendChild(fact);
+      });
+      if (facts.childNodes.length) bands.appendChild(facts);
+      box.appendChild(bands);
+
+      /* 5. Les classements : « N écoutes · temps », jamais un nombre nu. */
+      if (sum.topTracks.length) {
+        var tracks = document.createElement("div");
+        tracks.className = "sd-stat-card";
+        tracks.appendChild(this.statTitle(L.statsTopTracks));
+        tracks.appendChild(
+          this.statBars(
+            sum.topTracks.map(function (item) {
+              return {
+                name: item.title,
+                ratio: item.n,
+                value: Home.plays(item.n) + " · " + Stats.human(item.sec),
+              };
+            })
+          )
+        );
+        box.appendChild(tracks);
+      }
+      if (sum.topArtists.length) {
+        var artists = document.createElement("div");
+        artists.className = "sd-stat-card";
+        artists.appendChild(this.statTitle(L.statsTopArtists));
+        artists.appendChild(
+          this.statBars(
+            sum.topArtists.map(function (artist) {
+              return {
+                name: artist.name,
+                ratio: artist.n,
+                value: Home.plays(artist.n) + " · " + Stats.human(artist.sec),
+              };
+            })
+          )
+        );
+        box.appendChild(artists);
+      }
+
+      /* 6. Découvertes de la semaine. */
+      if (sum.discovery.length) {
+        var disc = document.createElement("div");
+        disc.className = "sd-stat-card";
+        disc.appendChild(this.statTitle(L.statsDiscovery));
+        var chips = document.createElement("div");
+        chips.className = "sd-stat-chips";
+        sum.discovery.forEach(function (artist) {
+          var chip = document.createElement("span");
+          chip.className = "sd-stat-chip";
+          chip.textContent = artist.name;
+          chips.appendChild(chip);
+        });
+        disc.appendChild(chips);
+        box.appendChild(disc);
+      }
+      return true;
+    },
+
+    /** « 1 écoute », « 12 écoutes » — jamais « 1 écoutes ». */
+    plays: function (n) {
+      var L = Settings.labels;
+      var count = Math.max(0, Math.round(Number(n) || 0));
+      return count === 1 ? L.statsHintOneListen : L.statsHintListen.replace("%s", String(count));
+    },
+
+    /** Une tuile : la valeur, ce qu'elle est, et ce qu'elle compte. */
+    statTile: function (value, label, hint) {
+      var tile = document.createElement("div");
+      tile.className = "sd-stat-tile";
+      var v = document.createElement("span");
+      v.className = "sd-stat-value";
+      v.textContent = value;
+      var l = document.createElement("span");
+      l.className = "sd-stat-label";
+      l.textContent = label;
+      tile.appendChild(v);
+      tile.appendChild(l);
+      if (hint) {
+        var hintEl = document.createElement("span");
+        hintEl.className = "sd-stat-hint";
+        hintEl.textContent = hint;
+        tile.appendChild(hintEl);
+      }
+      return tile;
+    },
+
+    /** Des barres comparables : la plus longue vaut 100 %. */
+    statBars: function (rows) {
+      var list = document.createElement("div");
+      list.className = "sd-stat-bars";
+      var top = 1;
+      rows.forEach(function (row) {
+        if (row.ratio > top) top = row.ratio;
+      });
+      rows.forEach(function (row) {
+        var el = document.createElement("div");
+        el.className = "sd-stat-bar-row";
+        var name = document.createElement("span");
+        name.className = "sd-stat-bar-label";
+        name.textContent = row.name;
+        var track = document.createElement("span");
+        track.className = "sd-stat-bar-track";
+        var fill = document.createElement("i");
+        fill.style.width = Math.max(4, Math.round((row.ratio / top) * 100)) + "%";
+        track.appendChild(fill);
+        var value = document.createElement("span");
+        value.className = "sd-stat-bar-value";
+        value.textContent = row.value;
+        el.appendChild(name);
+        el.appendChild(track);
+        el.appendChild(value);
+        list.appendChild(el);
+      });
+      return list;
+    },
+
+    statTitle: function (text) {
+      var h = document.createElement("h3");
+      h.className = "sd-stat-card-title";
+      h.textContent = text;
+      return h;
+    },
+
+    renderSections: function () {
+      var box = $(".sd-home-sections", this.el);
+      if (!box) return;
+      box.textContent = "";
+      var shown = 0;
+      for (var i = 0; i < this.data.length; i++) {
+        var sec = this.data[i];
+        var cards = sec.cards.filter(
+          function (c) {
+            if (Home.filter === "all") return true;
+            return c.type === Home.filter;
+          }
+        );
+        if (!cards.length) continue;
+        shown++;
+        var node = document.createElement("section");
+        node.className = "sd-home-section";
+        var head = document.createElement("div");
+        head.className = "sd-home-head";
+        var h = document.createElement("h2");
+        h.className = "sd-home-section-title";
+        h.textContent = sec.title;
+        head.appendChild(h);
+        if (sec.more) {
+          var more = document.createElement("a");
+          more.className = "sd-home-more";
+          more.href = sec.more;
+          more.textContent = Settings.labels.homeMore;
+          more.addEventListener("click", function (ev) {
+            /* Un vrai lien de la page : on laisse la navigation se faire, mais on
+               referme l'accueil d'abord pour ne pas le retrouver par-dessus la
+               playlist ouverte. */
+            ev.stopPropagation();
+            Home.hide();
+          });
+          head.appendChild(more);
+        }
+        node.appendChild(head);
+        var grid = document.createElement("div");
+        grid.className = "sd-home-grid";
+        cards.forEach(function (c) {
+          /* Avec une adresse : un lien réel (menu contextuel, copie, partage).
+             Sans adresse : un bouton qui clique la carte d'origine — « chaque
+             commande reliée à quelque chose ». */
+          var a = document.createElement(c.href ? "a" : "button");
+          if (c.href) a.href = c.href;
+          else a.type = "button";
+          a.className = "sd-home-card sd-home-card-" + c.type;
+          a.innerHTML =
+            '<span class="sd-home-cover"></span>' +
+            '<span class="sd-home-meta"><span class="sd-home-title"></span><span class="sd-home-sub"></span></span>';
+          $(".sd-home-title", a).textContent = c.title;
+          $(".sd-home-sub", a).textContent = c.sub;
+          var cover = $(".sd-home-cover", a);
+          if (c.img) {
+            var img = document.createElement("img");
+            img.loading = "lazy";
+            img.decoding = "async";
+            img.alt = "";
+            img.src = c.img;
+            cover.appendChild(img);
+          }
+          a.addEventListener("click", function (ev) {
+            Home.hide();
+            if (!c.href) {
+              ev.preventDefault();
+              Home.openOriginal(c.shelf, c.card);
+            }
+          });
+          grid.appendChild(a);
+        });
+        node.appendChild(grid);
+        box.appendChild(node);
+      }
+      this.el.classList.toggle("sd-home-empty", shown === 0);
+      box.setAttribute("data-empty", Settings.labels.homeEmptyCategory);
+      return shown;
+    },
+
+    /** Rafraîchit les données de la page, puis montre ou cache l'accueil. */
+    refresh: function (reason) {
+      if (!Settings.homeBoard) return this.hide();
+      if (!this.build()) return false;
+      this.data = this.readPage();
+      this.greeting = new Date().getHours() < 18 ? Settings.labels.homeMorning : Settings.labels.homeEvening;
+      $(".sd-home-hello", this.el).textContent = this.greeting;
+      $(".sd-home-sub", this.el).textContent = Settings.labels.homeSub;
+      $$(".sd-chip", this.el).forEach(function (chip) {
+        var name = chip.getAttribute("data-filter");
+        chip.textContent =
+          name === "music" ? Settings.labels.homeMusic : name === "podcast" ? Settings.labels.homePodcasts : Settings.labels.homeAll;
+      });
+      this.buildShortcuts();
+      this.renderStats();
+      this.renderSections();
+      var show = this.shouldShow();
+      this.el.hidden = !show;
+      if (!show) this.hide();
+      return show;
+    },
+
+    hide: function () {
+      if (!this.el) return false;
+      this.el.hidden = true;
+      return true;
+    },
+  };
+
+  /* ------------------------------------------------------------------ *
+   * 11e-quinquies. Library — **notre** bibliothèque
+   *
+   * Signalé le 25/09 : « sur l'onglet bibliothèque, je ne vois aucune de mes
+   * playlists enregistrées sur mon compte ».
+   *
+   * L'onglet ne faisait qu'afficher la barre latérale de Spotify
+   * (`#Desktop_LeftSidebar_Id`, `.YourLibraryX`) en plein écran, avec notre
+   * feuille par-dessus. Quand son rendu ne suit pas — liste vide, conteneur
+   * replié, classe renommée par Spotify — il ne reste rien à voir, et on ne
+   * peut pas réparer depuis ici une liste qu'on ne lit pas.
+   *
+   * Cette page lit donc la bibliothèque **à la source** : l'API du lecteur, avec
+   * le jeton que la page utilise déjà (`Api.authToken`, le même que les
+   * statistiques d'écoute). Playlists (créées et suivies), titres likés, albums
+   * enregistrés, artistes suivis, podcasts enregistrés — puis notre mise en
+   * page : lignes de 64 px, pochettes de 56 px, filtres par type, compteurs, et
+   * des adresses réelles (`/playlist/…`, `/album/…`) que le routeur de Spotify
+   * ouvre comme n'importe quel lien.
+   *
+   * Prudence : rien ne s'affiche tant qu'il n'y a rien à montrer. Si le jeton
+   * manque ou si l'API ne répond pas, la barre latérale de Spotify reste visible
+   * telle quelle (le comportement d'avant) — on ne peut pas perdre l'accès à sa
+   * musique en installant cette version.
+   * ------------------------------------------------------------------ */
+
+  /* ------------------------------------------------------------------ *
+   * 11e-quinquies-bis. Net — les appels à l'API du lecteur
+   *
+   * Constaté le 25/09 sur le téléphone : la page de bibliothèque s'affichait
+   * mais annonçait « Votre bibliothèque n'a pas répondu pour l'instant »,
+   * avec un jeton pourtant bien capté. La cause est dans la console de la
+   * vraie page : le `fetch` du navigateur vers `api.spotify.com` **depuis**
+   * `open.spotify.com` est refusé par le contrôle d'accès (l'API répond au
+   * contrôle préalable sans en-tête `Access-Control-Allow-Origin`), donc la
+   * requête n'aboutit jamais.
+   *
+   * L'application sait déjà faire ces requêtes **elle-même** : `AndBridge.nFetch`
+   * est la voie que l'interface d'origine utilise pour ses appels de lecture
+   * (mêmes en-têtes, mêmes cookies, hors navigateur). Un appel natif ne connaît
+   * pas le CORS : la bibliothèque et l'historique d'écoute passent par là
+   * d'abord, et retombent sur `fetch` quand il n'y a pas de pont (banc de test,
+   * navigateur de bureau).
+   *
+   * Rien n'échoue en silence : la raison exacte (code HTTP, jeton refusé,
+   * requête bloquée, pont indisponible) est gardée dans `Net.reason` et
+   * affichée sur la page — une capture suffit alors à savoir ce qui manque.
+   * ------------------------------------------------------------------ */
+  var API_ROOT = "https://api.spotify.com/v1";
+  var Net = {
+    /* « pont » (natif) ou « navigateur » — d'où a répondu la dernière requête. */
+    via: "",
+    status: 0,
+    reason: "",
+    at: 0,
+    /* Les requêtes en attente d'une réponse du pont : `id` → résolveur. */
+    pending: {},
+    ids: 0,
+    /* Sans réponse du pont, on rend la main au bout de ce délai. */
+    timeoutMs: 12000,
+    /* Le pont s'est tu : inutile de refaire attendre chaque appel suivant. */
+    asyncDead: false,
+    /* Les derniers essais, en clair : « /me → pont 401 ». C'est ce que la page
+       montre quand elle n'a rien à afficher — une capture dit alors tout. */
+    history: [],
+    path: "",
+
+    hasBridge: function () {
+      return Bridge.has("nFetch");
+    },
+
+    /* La voie **non bloquante** : c'est celle que la coque utilise. `nFetch`
+       s'exécute sur le fil JavaScript de la WebView — la page entière attend le
+       réseau, les boutons du lecteur ne répondent plus. */
+    hasAsync: function () {
+      return Bridge.has("nFetchAsync");
+    },
+
+    /** Android rappelle ici : `window.__sdNet(id, {status, body})`. */
+    install: function () {
+      var self = this;
+      window.__sdNet = function (id, raw) {
+        return self.answer(id, raw);
+      };
+    },
+
+    answer: function (id, raw) {
+      var finish = this.pending[id];
+      if (!finish) return false;
+      var answer = null;
+      try {
+        answer = typeof raw === "string" ? JSON.parse(raw) : raw;
+      } catch (e) {
+        answer = null;
+      }
+      if (!answer || typeof answer !== "object") {
+        finish({ status: 0, data: null, why: "réponse du pont illisible", bridge: true });
+        return true;
+      }
+      var status = Number(answer.status) || 0;
+      if (status !== 200) {
+        finish({ status: status, data: null, why: Net.statusWhy(status), bridge: true });
+        return true;
+      }
+      var data = null;
+      try {
+        data = JSON.parse(answer.body || "null");
+      } catch (e) {
+        data = null;
+      }
+      if (!data || typeof data !== "object") {
+        finish({ status: status, data: null, why: "réponse illisible (JSON)", bridge: true });
+        return true;
+      }
+      finish({ status: status, data: data, why: "", bridge: true });
+      return true;
+    },
+
+    throughBridgeAsync: function (url, token) {
+      var self = this;
+      var id = "n" + ++this.ids + "-" + this.at;
+      return new Promise(function (resolve) {
+        var settled = false;
+        var finish = function (r) {
+          if (settled) return;
+          settled = true;
+          delete self.pending[id];
+          resolve(r);
+        };
+        self.pending[id] = finish;
+        setTimeout(function () {
+          if (!self.pending[id]) return;
+          /* Muet : on le retient, pour que les appels suivants ne fassent pas
+             attendre à leur tour. */
+          self.asyncDead = true;
+          finish({
+            status: 0,
+            data: null,
+            why: "le pont n'a pas répondu (" + Math.round(self.timeoutMs / 1000) + " s)",
+            bridge: true,
+            dead: true,
+          });
+        }, self.timeoutMs);
+        try {
+          Bridge.call(
+            "nFetchAsync",
+            id,
+            url,
+            JSON.stringify({ method: "GET", headers: self.requestHeaders(false) })
+          );
+        } catch (e) {
+          finish({ status: 0, data: null, why: "pont indisponible", bridge: true });
+        }
+      });
+    },
+
+    /**
+     * Une réponse JSON de l'API, ou `null`. Jamais d'exception : l'appelant
+     * décide de ce qu'il montre, et `Net.reason` dit pourquoi c'est vide.
+     */
+    get: function (path) {
+      var self = this;
+      var url = /^https?:\/\//.test(path) ? path : API_ROOT + path;
+      var token = Api.authToken;
+      this.at = Date.now();
+      this.path = path;
+      this.via = "";
+      this.status = 0;
+      this.reason = "";
+      if (!token) {
+        this.reason = "jeton absent";
+        this.trace("", 0, "jeton absent");
+        return Promise.resolve(null);
+      }
+      var bridge = null;
+      if (this.hasAsync()) bridge = this.throughBridgeAsync(url, token);
+      else if (this.hasBridge()) bridge = Promise.resolve(this.throughBridge(url, token));
+      if (!bridge) return this.throughFetch(url, token).then(function (r) { return self.accept(r); });
+      return bridge.then(function (r) {
+        if (r && r.data) return self.accept(r);
+        /* Le pont est **muet** : la voie du navigateur ne le remplacera pas —
+           elle est refusée par le contrôle d'accès — donc on ne fait pas
+           attendre quelqu'un pour rien. */
+        if (r && r.dead) {
+          self.via = "";
+          self.status = 0;
+          self.reason = r.why;
+          self.trace("pont", 0, r.why);
+          return null;
+        }
+        return self.throughFetch(url, token).then(function (f) {
+          if (f && f.data) return self.accept(f);
+          self.holdReason(f, r);
+          return null;
+        });
+      });
+    },
+
+    /**
+     * L'enveloppe de la requête : **celle de la page**, plus le jeton.
+     *
+     * Le pont natif recopie ces en-têtes tels quels (il écarte seulement ceux
+     * qu'il régénère lui-même) : lui donner les mêmes que le lecteur, c'est
+     * parler à Spotify comme le lecteur lui parle.
+     */
+    requestHeaders: function (browser) {
+      var headers = Api.apiHeaders(browser);
+      if (!headers.authorization && Api.authToken) headers.authorization = Api.authToken;
+      return headers;
+    },
+
+    /** La première réponse utile : on retient par où elle est venue. */
+    accept: function (r) {
+      this.via = r && r.bridge ? "pont" : "navigateur";
+      this.status = (r && r.status) || 0;
+      this.reason = "";
+      this.trace(this.via, this.status, "");
+      return r ? r.data : null;
+    },
+
+    /** Un essai retenu, pour pouvoir le montrer. */
+    trace: function (via, status, why) {
+      if (!this.path) return;
+      this.history.push({ path: this.path, via: via, status: status, why: why || "" });
+      if (this.history.length > 8) this.history = this.history.slice(-8);
+    },
+
+    /** « /me → pont 401 (jeton refusé (401)) » — la dernière tentative par appel. */
+    logLines: function () {
+      var seen = {};
+      var lines = [];
+      for (var i = this.history.length - 1; i >= 0; i--) {
+        var h = this.history[i];
+        if (seen[h.path]) continue;
+        seen[h.path] = 1;
+        var where = h.via === "pont" ? "pont" : h.via === "navigateur" ? "navigateur" : "aucune voie";
+        lines.push(h.path + " → " + where + (h.status ? " " + h.status : "") + (h.why ? " · " + h.why : ""));
+      }
+      return lines.reverse();
+    },
+
+    /** La raison, sans se répéter : celle du pont puis celle du navigateur. */
+    holdReason: function (browser, bridge) {
+      var parts = [];
+      [bridge, browser].forEach(function (r) {
+        if (!r || !r.why || parts.indexOf(r.why) >= 0) return;
+        parts.push(r.why);
+      });
+      this.reason = parts.join(" · ");
+      this.status = (browser && browser.status) || (bridge && bridge.status) || 0;
+      this.trace(browser ? "navigateur" : "pont", this.status, this.reason);
+    },
+
+    /** La voie native : hors navigateur, donc sans contrôle d'accès. */
+    throughBridge: function (url, token) {
+      void token;
+      var raw = Bridge.call(
+        "nFetch",
+        url,
+        JSON.stringify({ method: "GET", headers: this.requestHeaders(false) })
+      );
+      if (typeof raw !== "string" || !raw) return null;
+      var answer = null;
+      try {
+        answer = JSON.parse(raw);
+      } catch (e) {
+        return { status: 0, data: null, why: "réponse du pont illisible" };
+      }
+      if (!answer || typeof answer !== "object") {
+        return { status: 0, data: null, why: "réponse du pont vide" };
+      }
+      var status = Number(answer.status) || 0;
+      if (status !== 200) {
+        return { status: status, data: null, why: Net.statusWhy(status) };
+      }
+      var data = null;
+      try {
+        data = JSON.parse(answer.body || "null");
+      } catch (e) {
+        data = null;
+      }
+      if (!data || typeof data !== "object") {
+        return { status: status, data: null, why: "réponse illisible (JSON)" };
+      }
+      return { status: status, data: data, why: "", bridge: true };
+    },
+
+    /** La voie du navigateur : celle du banc, et le repli sans pont. */
+    throughFetch: function (url, token) {
+      if (!window.fetch) return Promise.resolve({ status: 0, data: null, why: "navigateur sans fetch" });
+      return window.fetch(url, { headers: this.requestHeaders(true) }).then(
+        function (r) {
+          if (!r) return { status: 0, data: null, why: "aucune réponse" };
+          if (!r.ok) return { status: r.status, data: null, why: Net.statusWhy(r.status) };
+          return r.json().then(
+            function (data) {
+              return { status: r.status, data: data, why: "" };
+            },
+            function () {
+              return { status: r.status, data: null, why: "réponse illisible (JSON)" };
+            }
+          );
+        },
+        function (e) {
+          var msg = String((e && e.message) || e || "");
+          var blocked = /failed to fetch|networkerror|load failed|network request failed/i.test(msg);
+          return {
+            status: 0,
+            data: null,
+            why: blocked ? "requête bloquée par le navigateur (contrôle d'accès)" : "échec réseau",
+          };
+        }
+      );
+    },
+
+    statusWhy: function (status) {
+      if (status === 419) return "jeton expiré (419)";
+      if (status === 401) return "jeton refusé (401)";
+      if (status === 403) return "accès refusé (403)";
+      if (status === 429) return "trop de requêtes (429)";
+      if (status >= 500) return "Spotify a répondu " + status;
+      if (status > 0) return "Spotify a répondu " + status;
+      return "pas de réponse (réseau)";
+    },
+
+    /** En une ligne : par où on est passé, et ce qui a manqué. */
+    describe: function () {
+      if (this.reason) return "aucune réponse : " + this.reason;
+      if (!this.via) return "aucun appel encore";
+      return "réponse par " + this.via + (this.status ? " (" + this.status + ")" : "");
+    },
+  };
+
+  var LIBRARY_API = API_ROOT;
+  /** Combien de temps une lecture de la bibliothèque reste bonne. */
+  var LIBRARY_TTL = 10 * 60 * 1000;
+  var LIBRARY_PAGE = 50;
+  /* Ouverture d'une page (voir le module `Open`) : on vérifie que la page a
+     suivi, trois fois, à 700 ms — puis on navigue pour de vrai. */
+  var OPEN_STEP = 700;
+  var OPEN_TRIES = 3;
+  var OPEN_LIMIT = 8000;
+  /* Les dernières lignes lues, gardées sur l'appareil : c'est ce qui affiche la
+     bibliothèque **tout de suite** à la deuxième ouverture (et après un
+     rechargement de page), sans attendre le réseau. */
+  var LIBRARY_CACHE_KEY = "sd.library.cache";
+  var LIBRARY_CACHE_TTL = 7 * 24 * 60 * 60 * 1000;
+  /* **Version du cache.** La 2.11.11 y a écrit les playlists ramassées dans
+     toute la page (recommandations comprises) : « il y a des playlists qui ne
+     sont pas les miennes ». Un cache d'avant cette version est donc ignoré —
+     sinon il réafficherait exactement ce qu'on vient de retirer. */
+  var LIBRARY_CACHE_VERSION = 2;
+
+  var Library = {
+    el: null,
+    built: false,
+    items: [],
+    counts: { playlist: 0, album: 0, artist: 0, show: 0, liked: 0 },
+    /* idle | loading | ready | empty | no-token | guest | error */
+    state: "idle",
+    /* La bibliothèque vient-elle de la liste de Spotify (repli) ? */
+    fromSidebar: false,
+    /* Où la liste de Spotify a été trouvée, et si on a dû la déplier. */
+    scan: [],
+    woke: "",
+    woken: false,
+    /* Le rafraîchissement par l'API tourne-t-il ? Ce qu'on montre avant qu'il
+       réponde, et ce qu'on a lu du cache. */
+    refreshing: false,
+    keep: [],
+    cached: false,
+    cache: [],
+    cacheRead: false,
+    /* Le compte est-il bien celui du jeton ? (`/me`) */
+    account: "",
+    accountId: "",
+    /* Playlists et albums de la page écartés parce qu'ils ne sont pas au
+       compte (recommandations de l'accueil). */
+    ignored: 0,
+    loading: false,
+    loadedAt: 0,
+    filter: "all",
+    timer: 0,
+    tries: 0,
+    /* Où en est la lecture : « (2/5) » — un chargement qui n'avance plus doit se
+       voir, pas rester une phrase immobile. */
+    step: 0,
+    steps: 5,
+    /* Aucune lecture ne reste en l'air plus longtemps que ça. */
+    deadlineMs: 25000,
+    deadline: 0,
+
+    /** Une requête de l'API du lecteur — par le pont natif quand il existe
+        (hors navigateur, donc sans contrôle d'accès), `fetch` sinon. */
+    get: function (path) {
+      return Net.get(path);
+    },
+
+    /** Une pochette : la plus grande disponible, jamais l'icône 64 px. */
+    cover: function (obj) {
+      var list = (obj && obj.images) || [];
+      if (!list.length) return "";
+      var best = list[0];
+      for (var i = 1; i < list.length; i++) {
+        if ((list[i].width || 0) > (best.width || 0)) best = list[i];
+      }
+      return best.url || "";
+    },
+
+    /** Les lignes de la bibliothèque, à partir des cinq réponses de l'API. */
+    parse: function (res) {
+      var rows = [];
+      var liked = res[4];
+      var me = this.accountId;
+      if (liked && liked.total) {
+        rows.push({
+          type: "liked",
+          name: Settings.labels.libraryLiked,
+          sub: Settings.labels.libraryTracks.replace("%s", liked.total),
+          href: "/collection/tracks",
+          img: "",
+        });
+      }
+      ((res[0] && res[0].items) || []).forEach(function (pl) {
+        if (!pl || !pl.id) return;
+        /* **À qui est cette playlist ?** `/me/playlists` rend celles du compte
+           (les vôtres) **et** celles que vous suivez. On le dit sur la ligne au
+           lieu de laisser croire que tout est à soi — c'est la demande du
+           25/09 : « qu'il n'y ait que mes playlists ». */
+        var owner = (pl.owner && pl.owner.id) || "";
+        var mine = !!(me && owner && owner === me);
+        rows.push({
+          type: "playlist",
+          name: pl.name || "",
+          sub: mine
+            ? Settings.labels.libraryMine
+            : (pl.owner && pl.owner.display_name
+                ? Settings.labels.libraryFollowed.replace("%s", pl.owner.display_name)
+                : Settings.labels.libraryPlaylists),
+          href: "/playlist/" + pl.id,
+          img: Library.cover(pl),
+          mine: mine,
+        });
+      });
+      ((res[1] && res[1].items) || []).forEach(function (entry) {
+        var al = entry && entry.album;
+        if (!al || !al.id) return;
+        rows.push({
+          type: "album",
+          name: al.name || "",
+          sub: ((al.artists || [])[0] || {}).name || "",
+          href: "/album/" + al.id,
+          img: Library.cover(al),
+        });
+      });
+      ((res[2] && res[2].items) || []).forEach(function (ar) {
+        if (!ar || !ar.id) return;
+        rows.push({
+          type: "artist",
+          name: ar.name || "",
+          sub: (ar.genres || [])[0] || Settings.labels.libraryArtists,
+          href: "/artist/" + ar.id,
+          img: Library.cover(ar),
+        });
+      });
+      ((res[3] && res[3].items) || []).forEach(function (entry) {
+        var sh = entry && entry.show;
+        if (!sh || !sh.id) return;
+        rows.push({
+          type: "show",
+          name: sh.name || "",
+          sub: sh.publisher || "",
+          href: "/show/" + sh.id,
+          img: Library.cover(sh),
+        });
+      });
+      return rows;
+    },
+
+    /**
+     * **La liste de Spotify, lue dans la page.**
+     *
+     * Repli quand l'API du lecteur ne répond pas : la barre latérale est déjà
+     * remplie par Spotify, avec le compte de l'utilisateur, et sans jeton ni
+     * requête réseau de notre part. On en tire les mêmes lignes (titre, type,
+     * adresse, pochette) — moins complètes que l'API, mais **vraies**, et elles
+     * mènent au bon endroit.
+     */
+    /**
+     * **La bibliothèque de l'utilisateur, pas la page.**
+     *
+     * Signalé : « les playlists sont beaucoup trop nombreuses, il y a des
+     * playlists qui ne sont pas les miennes ». La lecture avait été élargie à
+     * toute la page (rangées de l'accueil, recommandations, « Écoutés
+     * récemment ») : elle ramassait donc les playlists **de Spotify** en même
+     * temps que celles du compte. On ne lit plus que les zones qui portent la
+     * bibliothèque : la barre latérale du lecteur et le panneau latéral, tous
+     * deux intitulés « Votre bibliothèque ». Le reste de la page est ignoré —
+     * et on le compte, pour pouvoir le dire.
+     */
+    fromSpotifyList: function () {
+      /* Trois endroits peuvent porter vos playlists : les surfaces de la
+         bibliothèque (barre latérale, panneau) — tout y est au compte —, les
+         **rangées « Vos playlists »** de l'accueil, et, ailleurs dans la page,
+         les cartes qui **disent** qu'elles sont à vous ou qui mènent à vos
+         titres likés. Tout le reste est écarté : une playlist recommandée par
+         Spotify n'est pas une playlist de votre compte, et « il y en a qui ne
+         sont pas les miennes » ne doit plus arriver. */
+      var self = this;
+      var page = pick(SEL.mainView);
+      this.ignored = 0;
+      /* **La bibliothèque se reconnaît à ce qu'elle dit**, pas seulement à ses
+         identifiants : le 25/09, la lecture ne sortait plus des zones connues
+         (`#Desktop_LeftSidebar_Id`, panneau) — et sur un téléphone dont la
+         disposition a changé, cela pouvait vouloir dire « aucune playlist » sur
+         une page qui les affichait toutes. Un conteneur qui porte le mot
+         (« Votre bibliothèque », `data-testid` qui le dit, `aria-label` qui le
+         dit) et qui contient des playlists **est** la bibliothèque. */
+      var scopes = this.libraryScopes();
+      var trusted = scopes.slice();
+      var shelves = this.mineShelves();
+      this.shelves = shelves.length;
+      shelves.forEach(function (node) {
+        if (scopes.indexOf(node) < 0) scopes.push(node);
+      });
+      /* La page entière est parcourue, mais **seuls** y sont prises les lignes
+         qui prouvent qu'elles sont à vous ; les autres sont comptées. */
+      if (page) scopes.push(page);
+      var rows = [];
+      var seen = {};
+      this.scan = [];
+      scopes.forEach(function (scope) {
+        if (rows.length >= 100) return;
+        var before = rows.length;
+        /* `scopeIsMine` : la zone est une rangée « Vos playlists » repérée par
+           son titre — tout ce qu'elle contient est à vous. */
+        var scopeIsMine = !!(scope.getAttribute && scope.getAttribute("data-sd-mine") === "1");
+        var fromLibrary = trusted.indexOf(scope) >= 0 || scopeIsMine;
+        var fromPage = scope === page;
+        var links = scope.querySelectorAll(
+          'a[href^="/playlist/"], a[href^="/album/"], a[href^="/artist/"], a[href^="/show/"], a[href^="/collection"]'
+        );
+        for (var i = 0; i < links.length && rows.length < 100; i++) {
+          var a = links[i];
+          /* Jamais les nôtres : notre page mène aussi aux playlists. */
+          if (a.closest && a.closest(".sd-layer")) continue;
+          if (fromPage && a.closest && a.closest("#Desktop_LeftSidebar_Id, #Desktop_PanelContainer_Id")) continue;
+          var href = (a.getAttribute("href") || "").split("?")[0];
+          if (!href || seen[href]) continue;
+          var type = "";
+          if (/^\/playlist\//.test(href)) type = "playlist";
+          else if (/^\/album\//.test(href)) type = "album";
+          else if (/^\/artist\//.test(href)) type = "artist";
+          else if (/^\/show\//.test(href)) type = "show";
+          else if (/collection/.test(href)) type = "liked";
+          if (!type) continue;
+          /* Hors des surfaces de la bibliothèque, il faut une preuve : la rangée
+             est à vous, la carte porte le nom du compte, ou ce sont vos titres
+             likés. Sans preuve → écartée (et comptée si elle vient de la page). */
+          if (!fromLibrary && type !== "liked" && !self.isMineCard(a)) {
+            if (fromPage) self.ignored++;
+            continue;
+          }
+          var name = self.linkName(a, type);
+          if (!name) continue;
+          seen[href] = 1;
+          var img = a.querySelector("img");
+          rows.push({
+            type: type,
+            name: name.split("\n")[0].slice(0, 80),
+            /* Lues dans **votre** bibliothèque : c'est ce que dit le sous-titre
+               quand la page ne donne pas mieux (l'API, elle, nomme l'auteur). */
+            sub: (name.split("\n")[1] || "").trim().slice(0, 80) || Settings.labels.libraryInYours,
+            href: href,
+            img: img ? img.currentSrc || img.src || "" : "",
+          });
+        }
+        /* Le journal doit dire **d'où** vient chaque ligne : une source mal
+           nommée (« corps ») ferait croire à une lecture large qui n'existe
+           plus. */
+        var label =
+          scope === pick(SEL.sidebar)
+            ? "barre latérale"
+            : scope === pick(SEL.panel)
+            ? "panneau"
+            : fromPage
+            ? "page (à vous)"
+            : scopeIsMine
+            ? "rangée à vous"
+            : "bibliothèque";
+        if (rows.length > before) self.scan.push(label + " " + (rows.length - before));
+      });
+      return rows;
+    },
+
+    /**
+     * **Où est la bibliothèque ?** Les repères historiques d'abord, puis tout
+     * conteneur qui se présente comme la bibliothèque : un titre, un
+     * `data-testid`, un `aria-label` qui porte le mot, et des playlists dedans.
+     * La disposition du web player change (et n'est pas la même sur un
+     * téléphone) : une liste d'identifiants en dur, c'est zéro ligne lue le jour
+     * où Spotify renomme son conteneur.
+     */
+    libraryScopes: function () {
+      var found = [];
+      var self = this;
+      var add = function (node, known) {
+        if (!node || found.indexOf(node) >= 0) return;
+        if (!node.querySelector) return;
+        if (!node.querySelector("a[href^='/playlist/'], a[href^='/album/'], a[href^='/collection/']")) return;
+        if (!known) {
+          var head = node.querySelector("h1, h2, h3, [role='heading']");
+          var hay = (
+            (node.getAttribute("aria-label") || "") +
+            " " +
+            (node.getAttribute("data-testid") || "") +
+            " " +
+            (head ? head.textContent || "" : "")
+          ).toLowerCase();
+          /* « bibliothèque » / « your library » : le mot qui décide. */
+          if (!/biblioth|library/.test(hay)) return;
+        }
+        found.push(node);
+      };
+      add(pick(SEL.sidebar), true);
+      add(pick(SEL.panel), true);
+      var candidates = document.querySelectorAll(
+        '[data-testid*="librar" i], [data-testid*="collect" i], [aria-label*="iblioth" i], [aria-label*="ibrary" i], nav, aside, [role="navigation"]'
+      );
+      var max = Math.min(candidates.length, 60);
+      var i;
+      for (i = 0; i < max && found.length < 10; i++) add(candidates[i], false);
+      /* **Et par le titre.** Une bibliothèque peut n'avoir aucun repère
+         technique : c'est son titre qui la nomme (« Votre bibliothèque »), et
+         le conteneur qui la porte est le plus proche ancêtre qui contient des
+         playlists. C'est ainsi que la barre latérale se présente elle-même. */
+      var heads = document.querySelectorAll("h1, h2, h3, [role='heading']");
+      var cap = Math.min(heads.length, 400);
+      for (i = 0; i < cap && found.length < 10; i++) {
+        var text = (heads[i].textContent || "").trim();
+        if (!text || text.length > 40) continue;
+        if (!/biblioth|library/i.test(text)) continue;
+        var node = heads[i];
+        var walk = 0;
+        while (node && node !== document.body && walk < 6) {
+          if (node.querySelector && node.querySelector("a[href^='/playlist/'], a[href^='/album/'], a[href^='/collection/']")) break;
+          node = node.parentElement;
+          walk++;
+        }
+        if (node && node !== document.body) add(node, true);
+      }
+      this.scopes = found.length;
+      return found;
+    },
+
+    /**
+     * **Les rangées de *vos* playlists.** Spotify met en avant vos propres
+     * playlists dans une rangée de l'accueil (« Vos playlists », « Your
+     * playlists ») — celle-là est à vous, contrairement aux rangées de
+     * recommandations qui l'entourent. On la repère par son titre et on la
+     * marque (`data-sd-mine`) ; le reste de l'accueil reste dehors.
+     */
+    mineShelves: function () {
+      var root = pick(SEL.mainView);
+      if (!root) return [];
+      var found = [];
+      var heads = root.querySelectorAll("h2, h3, [role='heading'], span, div");
+      var max = 0;
+      for (var i = 0; i < heads.length && max < 400; i++, max++) {
+        var text = (heads[i].textContent || "").trim();
+        if (!text || text.length > 40) continue;
+        if (!/^(vos|tes|mes|your|my)\s+(playlists?|titres lik[eé]s|liked songs)/i.test(text)) continue;
+        /* La rangée, c'est le plus proche ancêtre qui la contient en entier. */
+        var node = heads[i];
+        var walk = 0;
+        while (node && node !== root && walk < 6) {
+          if (node.querySelector && node.querySelector("a[href^='/playlist/'], a[href^='/collection/tracks']")) break;
+          node = node.parentElement;
+          walk++;
+        }
+        if (node && node !== root && found.indexOf(node) < 0) {
+          node.setAttribute("data-sd-mine", "1");
+          found.push(node);
+        }
+      }
+      return found;
+    },
+
+    /** Cette carte dit-elle qu'elle est à vous ? Le nom du compte y figure. */
+    isMineCard: function (a) {
+      var href = (a.getAttribute("href") || "").split("?")[0];
+      if (/^\/collection\/tracks/.test(href)) return true;
+      var who = this.account || this.accountId || "";
+      if (!who) return false;
+      /* Le nom du compte, tel que la page l'écrit (la carte se termine souvent
+         par « Playlist · Votre nom », la rangée par « Vos playlists »). */
+      var hay = ((a.getAttribute("aria-label") || "") + " " + (a.textContent || "")).toLowerCase();
+      return hay.indexOf(String(who).toLowerCase()) >= 0;
+    },
+
+    /**
+     * Le nom d'une ligne de Spotify. Le libellé complet est préférable (`aria-label`),
+     * mais la barre latérale n'en pose pas toujours : on prend alors le texte,
+     * et à défaut une infobulle. Pas de nom → pas de ligne : une liste de lignes
+     * vides ne serait pas « reconnaître ses playlists ».
+     */
+    linkName: function (a, type) {
+      var name = (a.getAttribute("aria-label") || "").trim();
+      if (!name) {
+        var title = a.getAttribute("title") || "";
+        var inner = a.querySelector('[data-testid="card-title"], .wrapped-ellipsis, p, span, div');
+        name = (title || (inner ? inner.textContent : "") || a.textContent || "").replace(/\s+/g, " ").trim();
+      }
+      if (!name && type === "liked") name = Settings.labels.libraryLiked;
+      /* Spotify écrit le nom accessible en entier — « Mes tubes · Playlist ·
+         Moi », « Album Un · Album · Artiste » — alors que le titre est la
+         première partie : sans ce nettoyage, la bibliothèque afficherait la
+         phrase complète à la place du nom. */
+      name = name.replace(/\s*[·•|]\s*(playlist|album|artiste|artist|podcast|émission|show|single|compilation|titre|song)\b.*$/i, "").trim();
+      return name || (a.getAttribute("aria-label") || "").trim();
+    },
+
+    /**
+     * **Demander à Spotify de remplir sa liste.**
+     *
+     * Sur un téléphone, la barre latérale est étroite : Spotify la garde
+     * repliée et ne rend alors pas les lignes de la bibliothèque (elles
+     * n'existent pas dans le document). Déplier la barre — l'appui que
+     * l'utilisateur ferait lui-même — fait rendre la liste, et notre page peut
+     * alors la lire. On le fait une fois, sans bruit, et on relit après.
+     */
+    wake: function () {
+      if (this.woken || !Settings.libraryBoard) return false;
+      this.woken = true;
+      var candidates = [];
+      try {
+        candidates = document.querySelectorAll(
+          '#Desktop_LeftSidebar_Id button, #Desktop_LeftSidebar_Id [role="button"], button[aria-label]'
+        );
+      } catch (e) {
+        candidates = [];
+      }
+      for (var i = 0; i < candidates.length; i++) {
+        var b = candidates[i];
+        if (b.closest && b.closest(".sd-layer")) continue;
+        var label = (b.getAttribute("aria-label") || b.getAttribute("title") || "").trim();
+        if (!label) continue;
+        if (!/(bibliothèque|library|développer|developper|agrandir|expand|voir plus|show more)/i.test(label)) continue;
+        if (b.getAttribute("aria-expanded") === "true") continue;
+        try {
+          b.click();
+        } catch (e) {
+          continue;
+        }
+        this.woke = label.slice(0, 40);
+        return true;
+      }
+      return false;
+    },
+
+    /**
+     * **« Le truc avec mes titres likés » — toujours en tête.**
+     *
+     * L'entrée des titres likés vient du total annoncé par l'API ; quand elle
+     * manque (API muette, ou liste lue dans la page), la ligne existait quand
+     * même chez Spotify et l'utilisateur l'attend : on la pose, en tête, sans
+     * chiffre plutôt que de la faire disparaître.
+     */
+    ensureLiked: function (rows) {
+      var list = rows || [];
+      if (!list.length) return list;
+      /* **Une seule entrée « Titres likés », et la même pour tout le monde.**
+         Signalé le 25/09 : deux lignes « Titres likés » se suivaient dans la
+         liste (la nôtre, puis celle que Spotify affiche lui-même et que le
+         repli relit dans la page). La liste est donc remise d'aplomb ici, à
+         l'endroit par lequel passent toutes les sources : les doublons de
+         titre et d'adresse tombent, l'entrée des titres likés reste **en
+         tête**, et elle garde son chiffre quand l'API l'a donné. */
+      var liked = null;
+      var propres = [];
+      var vues = {};
+      for (var i = 0; i < list.length; i++) {
+        var row = list[i];
+        if (!row) continue;
+        if (row.type === "liked") {
+          if (!liked) liked = row;
+          continue;
+        }
+        var cle = row.type + "|" + (row.href || row.name || "");
+        if (vues[cle]) continue;
+        vues[cle] = 1;
+        propres.push(row);
+      }
+      /* Pas de « vos titres likés » pour un lecteur dont on **sait** qu'il n'est
+         pas connecté. Mais quand la page montre déjà votre bibliothèque, cette
+         entrée en fait partie : on ne la laisse pas manquer sous prétexte que
+         l'API n'a pas répondu (c'est exactement le cas où l'on vient de lire
+         vos playlists dans la page). */
+      if (!liked && !this.account && this.accountState() === "out") return propres;
+      if (!liked) {
+        liked = {
+          type: "liked",
+          name: Settings.labels.libraryLiked,
+          sub: Settings.labels.libraryLikedHint,
+          href: "/collection/tracks",
+          img: "",
+        };
+      }
+      propres.unshift(liked);
+      return propres;
+    },
+
+    /** Relit la liste de Spotify après un rendu, sans bloquer la page. */
+    retrySidebar: function (delay) {
+      var self = this;
+      setTimeout(function () {
+        /* Ne remplace jamais des lignes déjà affichées : quand elles viennent du
+           cache, la relecture sert seulement à les rafraîchir si la liste de
+           Spotify en montre plus. */
+        if (self.items.length && !self.cached) return;
+        var rows = self.fromSpotifyList();
+        if (!rows.length) return;
+        self.items = self.ensureLiked(rows);
+        self.counts = self.tallyRows(self.items);
+        self.fromSidebar = true;
+        self.state = "ready";
+        self.loadedAt = Date.now();
+        self.apply();
+        Toast.show(Settings.labels.libraryFromSpotify.replace("%s", String(rows.length)), 2200);
+      }, delay || 1200);
+    },
+
+    /** Les compteurs, quand les lignes viennent de la liste de Spotify. */
+    tallyRows: function (rows) {
+      var n = { playlist: 0, album: 0, artist: 0, show: 0, liked: 0 };
+      for (var i = 0; i < rows.length; i++) {
+        if (n[rows[i].type] !== undefined) n[rows[i].type]++;
+      }
+      return n;
+    },
+
+    /** Les totaux annoncés par l'API (pas seulement la première page). */
+    tally: function (res) {
+      var n = { playlist: 0, album: 0, artist: 0, show: 0, liked: 0 };
+      var keys = ["playlist", "album", "artist", "show", "liked"];
+      for (var i = 0; i < 5; i++) {
+        var body = res[i];
+        if (body && typeof body.total === "number") n[keys[i]] = body.total;
+      }
+      return n;
+    },
+
+    /**
+     * Lit la bibliothèque. Silencieux quand il n'y a pas de jeton — c'est le cas
+     * d'une session fermée, et il n'y a alors rien à dire : la page de connexion
+     * ou l'écran d'accueil maison sont déjà là.
+     */
+    /**
+     * **Afficher d'abord, interroger ensuite.**
+     *
+     * Signalé : « ça prend du temps à charger pour afficher ». La page attendait
+     * la fin de six appels réseau avant de montrer quoi que ce soit — alors que
+     * les lignes de Spotify sont **déjà dans la page** et qu'un cache local peut
+     * les rendre tout de suite. On montre donc immédiatement ce qu'on a
+     * (cache, puis liste de Spotify), et l'API ne sert plus qu'à *enrichir*
+     * en arrière-plan. La page n'attend jamais le réseau.
+     */
+    load: function (force) {
+      if (!Settings.libraryBoard) {
+        this.items = [];
+        this.state = "idle";
+        return false;
+      }
+      if (!force && this.loadedAt && Date.now() - this.loadedAt < LIBRARY_TTL) return false;
+      /* 1. Ce qu'on peut montrer **maintenant**, sans réseau. */
+      var shown = this.showNow();
+      /* 2. Le rafraîchissement par l'API, en arrière-plan. */
+      this.refresh(shown);
+      return false;
+    },
+
+    /** Ce qu'on a sous la main : ce qui est déjà lu, le cache, puis Spotify. */
+    showNow: function () {
+      if (this.items.length) return true;
+      var cached = this.readCache();
+      if (cached.length) {
+        this.items = cached;
+        this.counts = this.tallyRows(cached);
+        this.fromSidebar = true;
+        this.cached = true;
+        this.state = "ready";
+        this.scan = ["cache " + cached.length];
+        this.apply();
+        return true;
+      }
+      var rows = this.fromSpotifyList();
+      if (rows.length) {
+        this.items = this.ensureLiked(rows);
+        this.counts = this.tallyRows(this.items);
+        this.fromSidebar = true;
+        this.state = "ready";
+        this.apply();
+        return true;
+      }
+      /* Rien de visible : la liste de Spotify est peut-être repliée (téléphone).
+         On la déplie une fois — c'est un appui que l'utilisateur ferait — et on
+         relit dans la foulée. */
+      if (this.wake()) this.retrySidebar(1200);
+      /* La barre latérale se remplit **après** notre lecture sur un téléphone :
+         sans cela on montrerait « aucune playlist » alors que les vôtres
+         arrivent une seconde plus tard (mesuré en CI : 14 liens dans la barre,
+         0 ligne chez nous). */
+      this.watchList();
+      return false;
+    },
+
+    /**
+     * **Les vôtres arrivent parfois après nous.** La liste de Spotify se remplit
+     * avec son propre chargement ; on observe donc les zones de la bibliothèque
+     * le temps de les voir se remplir, et on relit à ce moment-là — jamais en
+     * boucle (douze relectures au plus, puis on rend la main, et l'observation
+     * s'arrête dès qu'il y a des lignes à l'écran).
+     */
+    watchList: function () {
+      if (!window.MutationObserver || this.obsList) return false;
+      var self = this;
+      var nodes = [pick(SEL.sidebar), pick(SEL.panel), pick(SEL.mainView)].filter(Boolean);
+      if (!nodes.length) return false;
+      this.rearms = 0;
+      this.obsList = new MutationObserver(
+        debounce(function () {
+          if (State.tab !== "library" || self.items.length) {
+            /* C'est rempli : plus rien à observer pour cette visite. */
+            if (self.items.length && self.obsList) {
+              self.obsList.disconnect();
+              self.obsList = 0;
+            }
+            return;
+          }
+          if (self.rearms++ >= 12) {
+            self.obsList.disconnect();
+            self.obsList = 0;
+            return;
+          }
+          self.load(true);
+        }, 1200)
+      );
+      nodes.forEach(function (node) {
+        self.obsList.observe(node, { childList: true, subtree: true });
+      });
+      return true;
+    },
+
+    /** Les dernières lignes connues, gardées d'une visite à l'autre. */
+    readCache: function () {
+      if (this.cacheRead) return this.cache || [];
+      this.cacheRead = true;
+      try {
+        var raw = window.localStorage.getItem(LIBRARY_CACHE_KEY);
+        var data = raw ? JSON.parse(raw) : null;
+        if (
+          data &&
+          data.v === LIBRARY_CACHE_VERSION &&
+          data.items &&
+          data.items.length &&
+          Date.now() - (data.at || 0) < LIBRARY_CACHE_TTL
+        ) {
+          this.cache = data.items.slice(0, 120);
+        } else if (data) {
+          /* Cache d'une autre version : on le jette au lieu de réafficher des
+             playlists qui ne sont pas au compte. */
+          this.cache = [];
+          try {
+            window.localStorage.removeItem(LIBRARY_CACHE_KEY);
+          } catch (e) {}
+        }
+      } catch (e) {
+        this.cache = [];
+      }
+      return this.cache || [];
+    },
+
+    writeCache: function () {
+      if (!this.items.length || this.fromSidebar) return false;
+      try {
+        window.localStorage.setItem(
+          LIBRARY_CACHE_KEY,
+          JSON.stringify({ v: LIBRARY_CACHE_VERSION, at: Date.now(), items: this.items.slice(0, 120) })
+        );
+        return true;
+      } catch (e) {
+        return false;
+      }
+    },
+
+    /**
+     * Le rafraîchissement par l'API : jamais bloquant. S'il aboutit, ses lignes
+     * (plus complètes : totaux, pochettes, sous-titres) remplacent celles qu'on
+     * montrait ; s'il échoue, ce qu'on montrait reste à l'écran, avec la raison.
+     */
+    refresh: function (haveRows) {
+      var self = this;
+      if (this.refreshing) return false;
+      if (!Api.authToken) {
+        if (!haveRows) {
+          /* Rien à montrer et pas de jeton : le dire, puis aller le chercher. */
+          this.state = "no-token";
+          this.apply();
+        }
+        if (!Api.refreshState) {
+          Api.refreshToken().then(function (ok) {
+            if (ok) self.refresh(haveRows);
+          });
+        }
+        return false;
+      }
+      this.refreshing = true;
+      this.keep = this.items.slice();
+      this.state = haveRows ? "ready" : "loading";
+      if (!haveRows) this.apply();
+      /* **Une requête à la fois.** Le pont natif répond de façon bloquante (le
+         fil JavaScript attend le réseau) : cinq requêtes lancées d'un coup
+         gèleraient l'écran le temps de toutes les attendre. On les enchaîne en
+         laissant la page respirer entre deux, et on s'arrête à la première panne
+         franche — inutile de faire attendre quelqu'un dont le réseau ne répond
+         pas, la page peut tout de suite le dire. */
+      var paths = [
+        /* **Qui répond ?** `/me` est le seul appel qui distingue le jeton du
+           compte d'un jeton **anonyme** du lecteur déconnecté. Sans lui, un
+           jeton anonyme fait répondre « Votre compte est vide » — un mensonge
+           sur les données de l'utilisateur. */
+        "/me",
+        "/me/playlists?limit=" + LIBRARY_PAGE,
+        "/me/albums?limit=" + LIBRARY_PAGE,
+        "/me/artists?limit=" + LIBRARY_PAGE,
+        "/me/shows?limit=" + LIBRARY_PAGE,
+        "/me/tracks?limit=1",
+      ];
+      var res = [null, null, null, null, null, null];
+      this.step = 0;
+      this.steps = paths.length;
+      /* **Rien ne reste en chargement indéfiniment.** Le pont natif peut se
+         taire (réseau absent, requête qui n'aboutit pas) : au bout du délai, la
+         lecture se termine avec ce qu'elle a, et la page le dit. */
+      clearTimeout(this.deadline);
+      this.deadline = setTimeout(function () {
+        if (!self.loading) return;
+        Net.reason = Settings.labels.libraryTimeout;
+        Net.status = 0;
+        finish();
+      }, this.deadlineMs);
+      var done = false;
+      var triedRefresh = false;
+      var finish = function () {
+        if (done) return;
+        done = true;
+        clearTimeout(self.deadline);
+        self.deadline = 0;
+        self.loading = false;
+        self.refreshing = false;
+        self.loadedAt = Date.now();
+        var profile = res[0];
+        /* Le nom, pas l'identifiant : c'est ce que l'utilisateur reconnaît
+           (« il arrive pas à reconnaître mes playlists »). */
+        self.account = profile ? profile.display_name || profile.id || "" : "";
+        self.accountId = profile && profile.id ? profile.id : "";
+        var sources = res.slice(1);
+        var fresh = self.parse(sources);
+        var answered = sources.some(function (r) {
+          return !!r;
+        });
+        if (fresh.length) {
+          /* L'API a répondu : ses lignes sont plus complètes que le repli, on
+             les prend — et on les garde pour la prochaine ouverture. */
+          self.items = self.ensureLiked(fresh);
+          /* Les totaux de l'API (toute la bibliothèque, pas seulement la page
+             lue) : « Titres likés 128 » compte des **titres**, pas des lignes —
+             le compte de l'en-tête, lui, compte les lignes affichées. */
+          self.counts = self.tally(sources);
+          self.fromSidebar = false;
+          self.cached = false;
+          self.writeCache();
+          self.state = "ready";
+          self.apply();
+          return;
+        }
+        /* **L'API n'a rien donné : ce qu'on montrait reste.** C'est tout l'objet
+           du repli — une page qui se vide alors qu'elle affichait les playlists
+           de Spotify une seconde plus tôt serait le pire des comportements. */
+        if (self.keep.length) {
+          self.items = self.ensureLiked(self.keep);
+          self.state = "ready";
+          self.apply();
+          return;
+        }
+        self.items = [];
+        self.counts = self.tally(sources);
+        self.fromSidebar = false;
+        if (self.items.length) {
+          self.state = "ready";
+        } else {
+          /* **Repli : la liste de Spotify elle-même.** Elle est déjà sur
+             l'écran (c'est elle qui interroge le compte), elle ne dépend ni du
+             jeton ni du réseau de l'application. Si l'API ne répond pas, on
+             montre ce qu'elle affiche au lieu d'un écran qui dit « rien ». */
+          var rows = self.fromSpotifyList();
+          if (!rows.length && self.wake()) {
+            /* La liste de Spotify va peut-être apparaître : on la relit deux
+               fois plutôt que de conclure trop vite (son rendu suit l'appui). */
+            self.retrySidebar(1200);
+          }
+          if (rows.length) {
+            /* Par la même remise d'aplomb que les autres sources : c'est par
+               ici qu'arrivaient les deux « Titres likés » (celui de Spotify et
+               le nôtre), et c'est ici qu'ils tombent. */
+            self.items = self.ensureLiked(rows);
+            self.counts = self.tallyRows(self.items);
+            self.fromSidebar = true;
+            self.state = "ready";
+          } else if (!self.account) {
+            /* Pas de compte derrière le jeton : on ne dit pas « bibliothèque
+               vide », on dit que le compte n'est pas accessible. */
+            self.state = answered ? "guest" : "error";
+          } else if (answered) {
+            self.state = "empty";
+          } else {
+            self.state = "error";
+          }
+        }
+        self.apply();
+      };
+      var step = function (index) {
+        if (index >= paths.length) {
+          finish();
+          return;
+        }
+        self.get(paths[index]).then(function (data) {
+          res[index] = data;
+          self.step = index + 1;
+          if (self.loading) self.apply();
+          var refused =
+            Net.status === 401 || Net.status === 403 || Net.status === 419 || Net.status === 400;
+          if (refused && !triedRefresh) {
+            /* Le jeton est refusé : on en redemande un à la page, **une fois**,
+               puis on relit. Sans ça, la seule issue était de se reconnecter. */
+            triedRefresh = true;
+            self.loading = false;
+            clearTimeout(self.deadline);
+            self.deadline = 0;
+            Api.forgetToken();
+            Api.refreshToken().then(function (ok) {
+              if (ok) {
+                self.load(true);
+                return;
+              }
+              self.loading = true;
+              finish();
+            });
+            return;
+          }
+          if (
+            !data &&
+            index === 0 &&
+            (Net.status === 0 || Net.status === 401 || Net.status === 403 || Net.status === 419)
+          ) {
+            /* Rien n'a répondu — ou le jeton est refusé. Les cinq autres appels
+               posent la même question avec le même jeton : ils n'auront pas une
+               autre réponse. On va directement au repli (la liste de Spotify) au
+               lieu de faire attendre quelqu'un huit secondes pour rien. */
+            finish();
+            return;
+          }
+          setTimeout(function () {
+            step(index + 1);
+          }, 0);
+        });
+      };
+      step(0);
+      return true;
+    },
+
+    build: function () {
+      if (this.built) return true;
+      var el = document.createElement("div");
+      el.className = "sd-lib";
+      el.setAttribute("role", "region");
+      el.setAttribute("aria-label", Settings.labels.library);
+      el.innerHTML =
+        '<div class="sd-lib-head">' +
+        '<div class="sd-lib-id"><h1 class="sd-lib-title"></h1><span class="sd-lib-sum"></span></div>' +
+        '<span class="sd-lib-count" hidden></span>' +
+        "</div>" +
+        '<div class="sd-lib-chips" role="tablist">' +
+        '<button class="sd-chip sd-lib-chip" type="button" role="tab" data-filter="all"></button>' +
+        '<button class="sd-chip sd-lib-chip" type="button" role="tab" data-filter="playlist"></button>' +
+        '<button class="sd-chip sd-lib-chip" type="button" role="tab" data-filter="album"></button>' +
+        '<button class="sd-chip sd-lib-chip" type="button" role="tab" data-filter="artist"></button>' +
+        '<button class="sd-chip sd-lib-chip" type="button" role="tab" data-filter="show"></button>' +
+        "</div>" +
+        '<div class="sd-lib-list"></div>' +
+        /* **La phrase d'état, et son icône.** Elle dit pourquoi la liste est ce
+           qu'elle est (repli, rien à montrer, panne) : c'est la première chose
+           qu'on lit quand la bibliothèque n'est pas celle qu'on attendait. */
+        '<p class="sd-lib-note" hidden>' +
+        svg(ICONS.infoLine, "sd-lib-note-glyph") +
+        '<span class="sd-lib-note-text"></span>' +
+        "</p>" +
+        /* Le journal des essais : sans lui, « la bibliothèque ne reconnaît pas
+           mes playlists » oblige à deviner entre le jeton, le réseau et l'API.
+           **Replié par défaut** : c'est un diagnostic, pas la bibliothèque —
+           déployé sur huit lignes, il occupait plus d'écran que les playlists. */
+        '<details class="sd-lib-log" hidden><summary class="sd-lib-log-title"></summary>' +
+        '<ul class="sd-lib-log-list"></ul></details>' +
+        '<div class="sd-lib-actions">' +
+        '<button class="sd-btn sd-lib-retry" type="button"></button>' +
+        /* Sans session, « Réessayer » ne peut rien donner : la porte de sortie
+           est la connexion, au même endroit que le bouton de l'accueil. */
+        '<a class="sd-btn sd-lib-login" href="' +
+        CLASSIC_LOGIN +
+        '"></a>' +
+        "</div>";
+      this.el = el;
+      UI.layer.appendChild(el);
+      var self = this;
+      /* **La hauteur de l'en-tête, mesurée.** Les filtres se collent juste en
+         dessous (`top: var(--sd-lib-head-h)`), et cette hauteur dépend de la
+         police de l'appareil : la deviner en dur décalerait les puces d'un
+         téléphone à l'autre. On la relève, et on la relève encore quand la page
+         change de taille (rotation, clavier, densité). */
+      var head = $(".sd-lib-head", el);
+      var mesure = function () {
+        if (!head) return;
+        var h = head.getBoundingClientRect().height;
+        if (h > 0) el.style.setProperty("--sd-lib-head-h", Math.round(h) + "px");
+      };
+      this.measureHead = mesure;
+      mesure();
+      if (window.ResizeObserver && head) {
+        try {
+          new ResizeObserver(mesure).observe(head);
+        } catch (e) {
+          /* pas de mesure continue : la valeur posée au montage suffit */
+        }
+      }
+      $$(".sd-lib-chip", el).forEach(function (chip) {
+        chip.addEventListener("click", function () {
+          self.filter = chip.getAttribute("data-filter") || "all";
+          self.render();
+        });
+      });
+      var retry = $(".sd-lib-retry", el);
+      if (retry) {
+        retry.addEventListener("click", function () {
+          /* **Un nouvel essai, vraiment.** `Api.refreshState` garde la trace du
+             dernier essai de jeton ; la laisser en place faisait de
+             « Réessayer » un bouton muet — aucun appel, aucun changement, juste
+             l'air de rien (mesuré au banc, sans session). On efface donc la
+             trace, pour que l'essai ait lieu pour de bon. */
+          Api.refreshState = "";
+          Net.reason = "";
+          self.state = "loading";
+          self.loadedAt = 0;
+          self.apply();
+          self.load(true);
+        });
+      }
+      this.built = true;
+      return true;
+    },
+
+    /** Le résumé en une ligne : ce que contient le compte, en clair. */
+    summary: function () {
+      var c = this.counts || {};
+      var parts = [];
+      if (c.playlist) parts.push(Settings.labels.libraryPlaylists + " " + c.playlist);
+      if (c.album) parts.push(Settings.labels.libraryAlbums + " " + c.album);
+      if (c.artist) parts.push(Settings.labels.libraryArtists + " " + c.artist);
+      if (c.show) parts.push(Settings.labels.libraryShows + " " + c.show);
+      if (c.liked) parts.push(Settings.labels.libraryLiked + " " + c.liked);
+      /* **Le compte en tête** quand on a lu quelque chose : la preuve que
+         c'est bien sa bibliothèque, pas celle d'un autre. */
+      if (this.account && parts.length) {
+        parts.unshift(Settings.labels.libraryAccount.replace("%s", this.account.slice(0, 24)));
+      }
+      return parts.join(" · ") || Settings.labels.librarySummary;
+    },
+
+    /**
+     * Le lecteur est-il ouvert sur un compte ? Trois signaux, du plus sûr au
+     * moins sûr : le lecteur lui-même (sa page est là), puis la session que
+     * connaît l'application. « Je ne sais pas » reste une réponse honnête.
+     */
+    accountState: function () {
+      var state = LoginState.state();
+      if (state === "in") return "in";
+      if (state === "out" || state === "login") return "out";
+      if (Bridge.has("session")) return Bridge.call("session") ? "in" : "out";
+      return "?";
+    },
+
+    /** Ce qu'il y a à dire quand la liste est vide (jamais un écran muet). */
+    note: function () {
+      if (this.state === "loading") {
+        /* Où en est la lecture, en clair : « (2/6) ». Cet état ne dure que si
+           la page n'avait **rien** à montrer : dès qu'il y a des lignes (cache
+           ou liste de Spotify), elles sont affichées et la note est celle du
+           repli. */
+        return this.step
+          ? Settings.labels.libraryLoadingProgress.replace("%s", String(this.step)).replace("%s", String(this.steps))
+          : Settings.labels.libraryLoading;
+      }
+      if (this.state === "no-token") return Settings.labels.libraryNoToken;
+      if (this.state === "guest") {
+        /* Ce que l'on **sait** d'abord : la session. « Pas connecté » est une
+           réponse ; « je n'ai pas pu vérifier » en est une autre, et les deux
+           valent mieux que « ton compte est vide ». */
+        var head =
+          this.accountState() === "out" ? Settings.labels.libraryGuest : Settings.labels.libraryUnknown;
+        return Net.reason ? head + " " + Settings.labels.libraryWhy.replace("%s", Net.reason) : head;
+      }
+      /* Jamais un « ça n'a pas marché » muet : la raison exacte est dans le
+         message, pour qu'une seule capture suffise à savoir ce qui manque. */
+      if (this.state === "error") {
+        if (Net.reason === Settings.labels.libraryTimeout) {
+          return Settings.labels.libraryTimeout + " " + Settings.labels.libraryWhy.replace("%s", Net.reason);
+        }
+        return Net.reason
+          ? Settings.labels.libraryError + " " + Settings.labels.libraryWhy.replace("%s", Net.reason)
+          : Settings.labels.libraryError;
+      }
+      if (this.state === "empty") return Settings.labels.libraryEmpty;
+      if (this.items.length && !this.filtered().length) return Settings.labels.homeEmptyCategory;
+      if (this.fromSidebar) {
+        var base = Settings.labels.librarySidebar.replace("%s", String(this.items.length));
+        /* Et si l'API travaille encore en arrière-plan, on le dit — sans que
+           cela retarde quoi que ce soit à l'écran. */
+        if (this.refreshing) base += " " + Settings.labels.libraryRefreshing;
+        return base;
+      }
+      return "";
+    },
+
+    /** Les lignes visibles avec le filtre courant. */
+    filtered: function () {
+      var want = this.filter;
+      return this.items.filter(function (row) {
+        return want === "all" || row.type === want;
+      });
+    },
+
+    render: function () {
+      if (!this.el) return 0;
+      $(".sd-lib-sum", this.el).textContent = this.summary();
+      var heading = $(".sd-lib-title", this.el);
+      if (heading) heading.textContent = Settings.labels.library;
+      var names = {
+        all: Settings.labels.libraryAll,
+        playlist: Settings.labels.libraryPlaylists,
+        album: Settings.labels.libraryAlbums,
+        artist: Settings.labels.libraryArtists,
+        show: Settings.labels.libraryShows,
+      };
+      var total = this.items.length;
+      var parType = {};
+      this.items.forEach(function (row) {
+        parType[row.type] = (parType[row.type] || 0) + 1;
+      });
+      $$(".sd-lib-chip", this.el).forEach(function (chip) {
+        var key = chip.getAttribute("data-filter");
+        var label = names[key] || key;
+        var n = key === "all" ? total : parType[key] || 0;
+        /* **Le compteur, dans la puce** : il dit ce qu'on va trouver avant
+           d'appuyer, et il évite de croire à une bibliothèque vide quand un
+           filtre ne montre rien. */
+        chip.textContent = "";
+        chip.appendChild(document.createTextNode(label + " "));
+        var compte = document.createElement("span");
+        compte.className = "sd-lib-chip-n";
+        compte.textContent = n ? String(n) : "0";
+        chip.appendChild(compte);
+        var active = key === Library.filter;
+        chip.classList.toggle("is-active", active);
+        /* Une catégorie vide est **grisée**, pas retirée : la puce dit qu'elle
+           existe et qu'il n'y a rien dedans — la faire disparaître ferait
+           bouger les autres sous le doigt. */
+        chip.classList.toggle("is-empty", !n && !active);
+        chip.setAttribute("aria-selected", active ? "true" : "false");
+      });
+      var list = $(".sd-lib-list", this.el);
+      /* **Un filtre qui ne montre rien n'est pas un écran vide** : la liste se
+         range et la phrase dit pourquoi (la classe existait dans la feuille,
+         personne ne la posait). */
+      this.el.classList.toggle("sd-lib-nofilter", !!this.items.length && !this.filtered().length);
+      /* **Ne pas reconstruire 82 lignes à chaque repeint.** `render` est appelé
+         à chaque changement de vue et à chaque relevé de la bibliothèque :
+         recréer toutes les lignes (et redemander toutes les pochettes) à chaque
+         fois, c'est ce qui rendait la page saccadée — « c'est encore bugué ».
+         On ne rebâtit la liste que si elle doit vraiment changer. */
+      var shown = this.filtered();
+      var signature =
+        this.filter +
+        "|" +
+        shown.length +
+        "|" +
+        (shown[0] ? shown[0].href : "") +
+        "|" +
+        (shown[shown.length - 1] ? shown[shown.length - 1].href : "");
+      var sameList = signature === this.renderedSignature;
+      /* Le journal : montré seulement quand la page n'a rien à lister. */
+      var logBox = $(".sd-lib-log", this.el);
+      if (logBox) {
+        /* Le journal s'affiche dès que l'**API** a failli : quand la page ne
+           liste rien, et aussi quand elle liste les lignes de Spotify — dans ce
+           cas, savoir que le jeton a été refusé est justement ce qu'il faut pour
+           réparer. */
+        var apiTrouble = !this.items.length || this.fromSidebar;
+        var lines = apiTrouble ? Net.logLines() : [];
+        if (apiTrouble) {
+          /* **Ce que la page a gardé de son propre trafic.** Un appel refusé
+             s'explique presque toujours ici : sans `client-token`, Spotify
+             refuse la requête alors que le jeton est bon. */
+          lines.push(Settings.labels.libraryHeaders.replace("%s", Api.headerNames() || "aucun"));
+          if (Api.refreshState) {
+            lines.push(Settings.labels.libraryTokenRefresh.replace("%s", Api.refreshState));
+          }
+          if (this.scan && this.scan.length) {
+            lines.push(Settings.labels.libraryScan.replace("%s", this.scan.join(" · ")));
+          }
+          if (this.woke) lines.push(Settings.labels.libraryScan.replace("%s", "barre latérale ouverte : " + this.woke));
+          if (this.ignored) {
+            lines.push(
+              (this.ignored === 1 ? Settings.labels.libraryIgnoredOne : Settings.labels.libraryIgnored).replace(
+                "%s",
+                String(this.ignored)
+              )
+            );
+          }
+        }
+        var withToken = !apiTrouble
+          ? []
+          : [
+              /* Le jeton et le compte, avant les essais : si le jeton vient du
+                 lecteur **déconnecté**, tout le reste s'explique d'un coup. */
+              Settings.labels.libraryTokenAge
+                .replace("%s", Api.tokenAt ? Stats.sinceText(Api.tokenAt) : "jamais")
+                .replace("%s", this.account ? "compte " + this.account : "pas de compte"),
+            ];
+        logBox.hidden = !lines.length && !withToken.length;
+        var logTitle = $(".sd-lib-log-title", logBox);
+        if (logTitle) {
+          logTitle.textContent = "";
+          logTitle.appendChild(document.createTextNode(Settings.labels.libraryLogHint));
+          var count = document.createElement("span");
+          count.className = "sd-lib-log-n";
+          count.textContent = String(withToken.length + lines.length);
+          logTitle.appendChild(count);
+          var chev = document.createElement("span");
+          chev.className = "sd-lib-log-chev";
+          chev.innerHTML = svg(ICONS.chevronDown);
+          logTitle.appendChild(chev);
+        }
+        var logList = $(".sd-lib-log-list", logBox);
+        if (logList) {
+          logList.textContent = "";
+          withToken.concat(lines).forEach(function (text) {
+            var li = document.createElement("li");
+            li.textContent = text;
+            logList.appendChild(li);
+          });
+        }
+      }
+      var note = $(".sd-lib-note", this.el);
+      var actions = $(".sd-lib-actions", this.el);
+      var retry = $(".sd-lib-retry", this.el);
+      var message = this.note();
+      /* Le texte dans son propre élément : l'icône de la phrase n'est pas
+         effacée à chaque repeint (et `textContent` reste exactement le
+         message — c'est ce que lisent le banc et la sonde). */
+      var noteText = $(".sd-lib-note-text", note);
+      if (noteText) noteText.textContent = message;
+      else note.textContent = message;
+      note.hidden = !message;
+      /* Le ton : une **panne** (rouge discret) ne se lit pas comme une simple
+         information (« ces lignes viennent de Spotify »). */
+      var panne =
+        this.state === "no-token" || this.state === "error" || this.state === "guest";
+      note.classList.toggle("is-warn", !!message && panne);
+      note.classList.toggle("is-info", !!message && !panne);
+      /* Quand il n'y a rien à montrer, on dit quoi faire : réessayer, et où
+         retrouver la bibliothèque de Spotify si on la préfère. */
+      if (retry) retry.textContent = Settings.labels.libraryRetry;
+      if (actions) {
+        var nothing =
+          !!message &&
+          (this.state === "no-token" ||
+            this.state === "error" ||
+            this.state === "empty" ||
+            this.state === "guest");
+        var login = $(".sd-lib-login", this.el);
+        if (login) {
+          login.textContent = Settings.labels.librarySignIn;
+          /* **La porte de connexion suit le message, pas l'opinion de la
+             page.** Elle apparaît exactement quand la bibliothèque explique
+             qu'il manque quelque chose (« Connectez-vous… ») — sinon elle est
+             rangée. Chercher à deviner l'état de session la cachait justement
+             quand on ne savait rien : l'instruction « connectez-vous » était
+             affichée sans bouton pour le faire. */
+          login.hidden = !nothing;
+        }
+        actions.hidden = !nothing && (!login || login.hidden);
+        if (nothing && retry) retry.setAttribute("aria-label", Settings.labels.libraryRetry + " — " + Settings.labels.libraryHint);
+      }
+      /* L'en-tête vient peut-être de changer de hauteur (résumé plus long,
+         libellés, police de l'appareil) : les filtres se recollent en dessous. */
+      if (this.measureHead) this.measureHead();
+      /* **Combien de lignes, pour de vrai.** Le compte suit le filtre : « 3 / 12 »
+         dit d'un coup d'œil qu'on regarde une partie de la bibliothèque. */
+      var badge = $(".sd-lib-count", this.el);
+      if (badge) {
+        var taille = this.items.length;
+        var quoi = shown.length + (this.filter === "all" ? "" : " / " + taille);
+        badge.textContent = Settings.labels[taille === 1 ? "libraryCountOne" : "libraryCountMany"].replace("%s", quoi);
+        badge.hidden = !taille;
+      }
+      if (!sameList) list.textContent = "";
+      if (sameList) return shown.length;
+      shown.forEach(function (row) {
+        var link = document.createElement("a");
+        link.className = "sd-lib-row sd-lib-row-" + row.type;
+        link.href = row.href;
+        var art = document.createElement("span");
+        art.className = "sd-lib-art";
+        if (row.img) {
+          var img = document.createElement("img");
+          img.src = row.img;
+          img.alt = "";
+          img.setAttribute("loading", "lazy");
+          art.appendChild(img);
+        } else {
+          /* **Sans pochette, le type se voit quand même.** Un cœur pour tout le
+             monde faisait ressembler un album à une playlist ; chaque type a son
+             glyphe, et la vignette se lit comme un repère, pas comme une image
+             manquante. */
+          var glyphes = {
+            liked: ICONS.heartSolid,
+            playlist: ICONS.musicNote,
+            album: ICONS.discLine,
+            artist: ICONS.personLine,
+            show: ICONS.micLine,
+          };
+          art.classList.add("is-empty");
+          art.innerHTML = svg(glyphes[row.type] || ICONS.musicNote, "sd-lib-glyph");
+        }
+        var text = document.createElement("span");
+        text.className = "sd-lib-text";
+        var name = document.createElement("span");
+        name.className = "sd-lib-name";
+        name.textContent = row.name;
+        var sub = document.createElement("span");
+        sub.className = "sd-lib-sub";
+        sub.textContent = row.sub;
+        text.appendChild(name);
+        text.appendChild(sub);
+        link.appendChild(art);
+        link.appendChild(text);
+        list.appendChild(link);
+      });
+      this.renderedSignature = signature;
+      return shown.length;
+    },
+
+    /**
+     * Le chemin sur lequel **notre** bibliothèque a sa place.
+     *
+     * L'onglet Bibliothèque ne navigue pas : l'URL reste celle d'où l'on vient.
+     * Notre page est plein écran, elle doit donc se retirer dès qu'une sous-page
+     * s'ouvre (une playlist, un album…) — sinon elle recouvrirait la playlist
+     * qu'on vient d'ouvrir depuis elle.
+     */
+    isLibraryPath: function () {
+      if (Home.isHomePath()) return true;
+      return /^\/search(\/|$)/.test((location.pathname || "").replace(/\/+$/, ""));
+    },
+
+    shouldShow: function () {
+      if (!Settings.libraryBoard) return false;
+      if (!this.built) return false;
+      if (State.tab !== "library") return false;
+      if (!this.isLibraryPath()) return false;
+      /* **Toujours**, y compris sans données : sur ce téléphone, la barre
+         latérale de Spotify ne montre aucune playlist (« je ne vois aucune de
+         mes playlists ») — la garder comme repli, c'est laisser un écran noir.
+         Notre page, elle, dit toujours où elle en est (chargement, pas de jeton,
+         API muette, ou sa liste). */
+      return true;
+    },
+
+    apply: function () {
+      if (!this.build()) return false;
+      this.render();
+      var show = this.shouldShow();
+      this.el.hidden = !show;
+      /* **Notre** page remplace la barre latérale de Spotify : on ne la masque
+         que lorsqu'on a de quoi la remplacer. Sinon elle reste telle quelle —
+         c'est le seul moyen de ne pas perdre l'accès à sa musique. */
+      document.documentElement.classList.toggle("sd-lib-on", show);
+      return show;
+    },
+
+    /** À chaque changement de vue : on entre dans la bibliothèque, ou on en sort. */
+    enter: function () {
+      /* La page est construite même hors de son onglet (et reste cachée) : c'est
+         ce qui permet à la sonde et au diagnostic de la **mesurer** partout —
+         « bibliothèque absente » ne doit pas être confondu avec « masquée
+         exprès », c'est exactement l'erreur qui a coûté deux versions à
+         l'accueil. */
+      this.build();
+      if (State.tab !== "library" || !this.isLibraryPath()) {
+        this.leave();
+        return false;
+      }
+      /* `load` montre immédiatement ce qu'il a (cache ou liste de Spotify) et
+         lance le rafraîchissement en arrière-plan ; `watch` ne sert que s'il n'y
+         a **rien** à montrer (première visite, page encore vide). */
+      this.load();
+      if (!this.items.length) this.watch();
+      return this.apply();
+    },
+
+    leave: function () {
+      if (this.el) this.el.hidden = true;
+      if (this.timer) {
+        window.clearTimeout(this.timer);
+        this.timer = 0;
+      }
+      document.documentElement.classList.remove("sd-lib-on");
+      return true;
+    },
+
+    /**
+     * Le jeton de la page n'arrive pas toujours avant la première lecture (il
+     * est capté sur les requêtes du lecteur), et la bibliothèque peut être
+     * ouverte avant. On retente donc quelques fois, espacées, puis on s'arrête :
+     * pas de boucle qui tourne dans le vide.
+     */
+    watch: function () {
+      var self = this;
+      /* `setTimeout` en chaîne, jamais `setInterval` : un intervalle qui survit à
+         un changement de vue est exactement ce que l'ancienne couche faisait (et
+         que le banc interdit). Cinq essais au plus, puis on s'arrête. */
+      if (this.timer) return false;
+      this.tries = 0;
+      var again = function () {
+        if (self.tries++ >= 5 || self.items.length || State.tab !== "library") {
+          self.timer = 0;
+          return;
+        }
+        self.load(true);
+        self.timer = window.setTimeout(again, 4000);
+      };
+      this.timer = window.setTimeout(again, 4000);
+      return true;
+    },
+
+    /** Ce que le diagnostic dit de la bibliothèque, en trois mots. */
+    describe: function () {
+      if (!Settings.libraryBoard) return "désactivée (réglage)";
+      if (this.state === "loading") return "chargement";
+      if (this.state === "no-token") return "pas de jeton (session fermée ?)";
+      if (this.state === "error") return "indisponible (" + Net.describe() + ")";
+      if (this.state === "guest") return "compte non accessible (" + Net.describe() + ")";
+      if (this.fromSidebar) return "lue dans la liste de Spotify (" + this.items.length + " éléments)";
+      if (this.state === "empty") return "vide (0 élément)";
+      if (this.state === "idle") return "pas encore lue";
+      return this.items.length + " éléments";
+    },
+  };
+
+  /* ------------------------------------------------------------------ *
+   * 11e-quater. Stats — vos statistiques d'écoute
+   *
+   * Demande de l'utilisateur (24/09) : « mets les différentes statistiques
+   * d'écoutes etc sur l'utilisateur, ajoute plein de données intéressantes ».
+   *
+   * Principe : l'application **note ce qu'elle voit jouer**. Chaque titre
+   * détecté (changement de morceau pendant la lecture) ajoute une ligne
+   * horodatée : ça ne dépend d'aucune permission et fonctionne dès la première
+   * écoute. En complément, quand la session de la page expose un jeton
+   * utilisable, l'historique récent de Spotify (50 derniers titres, avec leur
+   * date réelle) est importé — les statistiques ne commencent donc pas à zéro.
+   *
+   * Tout est **local** (localStorage, 1 500 écoutes maximum) ; rien ne sort du
+   * téléphone. Le réglage « Statistiques d'écoute » arrête l'enregistrement.
+   *
+   * Ce qui est calculé, et vérifié par le banc :
+   *   temps d'écoute total / des sept derniers jours / du jour · titres et
+   *   artistes différents · classement des artistes et des titres (avec parts) ·
+   *   sept derniers jours · moments de la journée (nuit, matin, après-midi,
+   *   soir) · jour préféré · série de jours d'affilée · artistes découverts
+   *   cette semaine · écoutes du jour
+   * ------------------------------------------------------------------ */
+
+  var STATS_KEY = "sd.stats.v1";
+  var STATS_MAX = 1500;
+  /* En dessous, ce n'est pas une écoute mais un survol : dix secondes. */
+  var STATS_MIN_SEC = 10;
+
+  var Stats = {
+    entries: [],
+    loaded: false,
+    lastSync: 0,
+    /* L'écoute en cours de mesure : `{k,t,a,ts,sec,pos,at}`. */
+    session: null,
+
+    enabled: function () {
+      return !!Settings.stats;
+    },
+
+    /**
+     * Charge les écoutes enregistrées — et **répare** celles qui portent une
+     * durée impossible (voir `plausible`). Sans cette passe, un seul titre
+     * écouté avant ce correctif continuerait d'afficher « 56095 h 50 », et
+     * l'utilisateur devrait effacer ses statistiques pour s'en débarrasser.
+     */
+    load: function () {
+      if (this.loaded) return this.entries;
+      this.loaded = true;
+      try {
+        var raw = window.localStorage.getItem(STATS_KEY);
+        if (!raw) return this.entries;
+        var parsed = JSON.parse(raw);
+        var list = (parsed && parsed.e) || [];
+        var self = this;
+        var repaired = 0;
+        this.entries = list
+          .filter(function (e) {
+            return e && typeof e.t === "string" && e.t && typeof e.ts === "number";
+          })
+          .map(function (e) {
+            var d = self.plausible(e.d);
+            if (d !== (e.d || 0)) {
+              repaired++;
+              return { k: e.k, t: e.t, a: e.a, ts: e.ts, d: d };
+            }
+            return e;
+          });
+        /* Une seule écriture, et seulement si quelque chose a changé : la passe
+           de réparation ne doit pas peser à chaque lecture. */
+        if (repaired) this.save();
+      } catch (e) {
+        this.entries = [];
+      }
+      return this.entries;
+    },
+
+    save: function () {
+      try {
+        window.localStorage.setItem(STATS_KEY, JSON.stringify({ v: 1, e: this.entries }));
+      } catch (e) {
+        /* stockage refusé ou plein : les statistiques restent en mémoire */
+      }
+    },
+
+    hasData: function () {
+      return this.load().length > 0;
+    },
+
+    /* ------------------------------------------------------------------ *
+     * Mesurer l'écoute, au lieu de la déduire
+     *
+     * Avant : dès qu'un titre **apparaissait**, on notait la durée du titre
+     * annoncée par la page. Trois défauts visibles sur le téléphone — un titre
+     * survolé dix secondes comptait quatre minutes, le même titre écouté deux
+     * fois d'affilée n'était compté qu'une fois, et le total ne correspondait à
+     * aucune écoute réelle (« les statistiques sont pas bonne »).
+     *
+     * Maintenant : on suit **l'avancement du lecteur**. Chaque seconde dont la
+     * position progresse est une seconde écoutée, attribuée au titre en cours ;
+     * on s'arrête quand la position recule (retour/seek), quand on change de
+     * titre, ou quand plus rien ne joue. Une écoute de moins de dix secondes
+     * n'est pas comptée. Le temps annoncé est alors le temps réellement passé.
+     * ------------------------------------------------------------------ */
+
+    /** La clé d'un titre : le même couple titre + artiste. */
+    keyOf: function (title, artist) {
+      return ((title || "") + "\u0000" + (artist || "")).toLowerCase();
+    },
+
+    /** Nourrit la mesure : appelé à chaque rafraîchissement de la position. */
+    tick: function (state, nowMs) {
+      if (!this.enabled()) return false;
+      var s = state || State;
+      var now = nowMs || Date.now();
+      var title = (s && s.title ? String(s.title) : "").trim();
+      if (!s || !s.hasTrack || title.length < 2) {
+        this.flush(now);
+        return false;
+      }
+      /* Le stockage n'est lu qu'au premier titre : `tick` tourne dix fois par
+         seconde, `load()` n'a rien à y faire. */
+      if (!this.loaded) this.load();
+      var key = this.keyOf(title, s.artist);
+      var pos = Math.max(0, (Number(s.position) || 0) / 1000);
+      var wall = this.session ? Math.max(0, (now - this.session.at) / 1000) : 0;
+      if (!this.session || this.session.k !== key) {
+        /* Nouveau titre : le précédent part avec le temps qu'il a pris. */
+        this.flush(now);
+        this.session = {
+          k: key,
+          t: title.slice(0, 80),
+          a: (s.artist || "").slice(0, 80),
+          ts: now,
+          sec: 0,
+          pos: pos,
+          at: now,
+        };
+        return true;
+      }
+      var delta = pos - this.session.pos;
+      if (delta < 0) {
+        /* Retour en arrière, ou le même titre relancé depuis le début : la
+           nouvelle écoute est une écoute, pas une continuation. */
+        this.flush(now);
+        this.session = {
+          k: key,
+          t: title.slice(0, 80),
+          a: (s.artist || "").slice(0, 80),
+          ts: now,
+          sec: 0,
+          pos: pos,
+          at: now,
+        };
+        return true;
+      }
+      /* Bornes : jamais plus que le temps écoulé depuis le dernier relevé
+         (+2 s de tolérance), donc un saut de position ne fabrique pas
+         d'écoute. Une page figée pendant une longue lecture d'arrière-plan
+         sous-compte : c'est la seule erreur qui reste, et elle va dans le bon
+         sens (on n'invente pas d'écoute). */
+      var add = Math.min(delta, wall + 2);
+      if (add > 0) this.session.sec += add;
+      this.session.pos = pos;
+      this.session.at = now;
+      return true;
+    },
+
+    /** Ferme l'écoute en cours : elle rejoint les statistiques. */
+    flush: function (nowMs) {
+      var s = this.session;
+      if (!s) return false;
+      this.session = null;
+      if (!(s.sec >= STATS_MIN_SEC)) return false;
+      this.load();
+      this.entries.push({
+        k: s.k,
+        t: s.t,
+        a: s.a,
+        ts: s.ts,
+        d: Math.round(s.sec),
+        /* `m` : durée **mesurée** pendant l'écoute (voir `summary`). */
+        m: 1,
+      });
+      this.entries.sort(function (a, b) {
+        return a.ts - b.ts;
+      });
+      if (this.entries.length > STATS_MAX) this.entries = this.entries.slice(-STATS_MAX);
+      this.save();
+      if (Home.built) Home.refresh("stats-mesure");
+      return true;
+    },
+
+    /** Note une écoute. `at` (ms) permet d'importer un historique daté. */
+    /**
+     * Une durée d'écoute **plausible**, en secondes.
+     *
+     * Une seule écoute ne dure pas plus de douze heures : au-delà, la page a
+     * annoncé une durée dans une autre unité (millisecondes, microsecondes) et
+     * le chiffre ne dit plus rien. On redescend par paliers de mille jusqu'à une
+     * valeur qui a un sens — c'est ce qui répare les statistiques déjà
+     * enregistrées, celles qui affichaient « 56095 h 50 ».
+     */
+    MAX_SECONDS: 12 * 3600,
+    plausible: function (value) {
+      var v = Number(value);
+      if (!isFinite(v) || v <= 0) return 0;
+      /* Trois paliers suffisent à couvrir les unités qu'une page peut annoncer
+         (millisecondes, microsecondes, nanosecondes) : 202 s vaut 202 000 ms,
+         202 000 000 µs, 202 000 000 000 ns. Au-delà, la valeur n'est pas une
+         durée — on préfère ne rien compter qu'inventer seize minutes. */
+      var guard = 0;
+      while (v > this.MAX_SECONDS && guard++ < 3) v = v / 1000;
+      if (v > this.MAX_SECONDS) return 0;
+      return Math.round(v);
+    },
+
+    record: function (title, artist, durationSec, at, measured) {
+      if (!this.enabled()) return false;
+      title = (title || "").trim();
+      if (title.length < 2) return false;
+      this.load();
+      var key = this.keyOf(title, artist);
+      var when = typeof at === "number" && at > 0 ? at : Date.now();
+      /* Le même titre deux fois en trois minutes est une reprise, pas une
+         nouvelle écoute (le web player annonce parfois le même morceau deux
+         fois au chargement). */
+      var last = this.entries.length ? this.entries[this.entries.length - 1] : null;
+      if (last && last.k === key && Math.abs(when - last.ts) < 3 * 60 * 1000) return false;
+      var entry = {
+        k: key,
+        t: title.slice(0, 80),
+        a: (artist || "").slice(0, 80),
+        ts: when,
+        d: this.plausible(durationSec),
+      };
+      /* `m` seulement quand la durée vient d'une écoute mesurée. Un historique
+         importé annonce la durée **du titre**, pas le temps passé : on ne fait
+         pas passer l'un pour l'autre dans les totaux. */
+      if (measured) entry.m = 1;
+      this.entries.push(entry);
+      /* Chronologique : l'import d'un historique insère des écoutes passées. */
+      this.entries.sort(function (a, b) {
+        return a.ts - b.ts;
+      });
+      if (this.entries.length > STATS_MAX) this.entries = this.entries.slice(-STATS_MAX);
+      this.save();
+      return true;
+    },
+
+    /** Importe l'historique récent de Spotify (`/me/player/recently-played`). */
+    importRecent: function (items) {
+      if (!this.enabled() || !items || !items.length) return 0;
+      this.load();
+      var added = 0;
+      for (var i = items.length - 1; i >= 0; i--) {
+        var item = items[i];
+        var track = (item && item.track) || {};
+        var name = track.name || "";
+        if (!name) continue;
+        var artist = "";
+        if (track.artists && track.artists.length) artist = track.artists[0].name || "";
+        var at = Date.parse(item.played_at || "") || 0;
+        if (this.record(name, artist, Math.round((track.duration_ms || 0) / 1000), at)) added++;
+      }
+      return added;
+    },
+
+    /** Récupère l'historique par l'API, avec le jeton que la page utilise déjà.
+        Silencieux en cas d'échec : les statistiques locales continuent seules. */
+    syncFromApi: function (force) {
+      if (!this.enabled() || !Api.authToken) return false;
+      var now = Date.now();
+      if (!force && now - this.lastSync < 30 * 60 * 1000) return false;
+      this.lastSync = now;
+      Net.get("/me/player/recently-played?limit=50").then(function (data) {
+        if (!data || !data.items) return;
+        if (Stats.importRecent(data.items) && Home.built) Home.refresh("stats-api");
+      });
+      return true;
+    },
+
+    clear: function () {
+      this.entries = [];
+      this.save();
+      if (Home.built) Home.refresh("stats-clear");
+      return true;
+    },
+
+    /* ---------------- calculs ---------------- */
+
+    summary: function (nowMs) {
+      this.load();
+      var now = nowMs || Date.now();
+      var day = 24 * 60 * 60 * 1000;
+      var startToday = new Date(now);
+      startToday.setHours(0, 0, 0, 0);
+      var t0 = startToday.getTime();
+      var sum = {
+        total: this.entries.length,
+        plays: 0,
+        seconds: 0,
+        /* Dont mesuré pendant l'écoute, et dont estimé (historique importé ou
+           écoutes d'avant la mesure) : les deux sont dits séparément. */
+        measured: 0,
+        measuredPlays: 0,
+        estimated: 0,
+        estimatedPlays: 0,
+        secondsWeek: 0,
+        secondsToday: 0,
+        playsToday: 0,
+        playsWeek: 0,
+        first: 0,
+        tracks: {},
+        artists: {},
+        byDay: [],
+        bands: { night: 0, morning: 0, afternoon: 0, evening: 0 },
+        bandPlays: { night: 0, morning: 0, afternoon: 0, evening: 0 },
+        weekdays: [0, 0, 0, 0, 0, 0, 0],
+        streak: 0,
+        discovery: [],
+      };
+      var i, e, sec, when, hour, band;
+      for (i = 0; i < this.entries.length; i++) {
+        e = this.entries[i];
+        /* Aucune durée inventée : une écoute sans durée compte comme une
+           écoute, et zéro seconde. C'est ce qui rend « 56095 h » impossible. */
+        sec = e.d > 0 ? e.d : 0;
+        sum.plays++;
+        if (!sum.first || e.ts < sum.first) sum.first = e.ts;
+        if (e.m) {
+          sum.measured += sec;
+          sum.measuredPlays++;
+        } else {
+          sum.estimated += sec;
+          sum.estimatedPlays++;
+        }
+        sum.seconds += sec;
+        when = new Date(e.ts);
+        if (e.ts >= now - 7 * day) {
+          sum.secondsWeek += sec;
+          sum.playsWeek++;
+        }
+        if (e.ts >= t0) {
+          sum.secondsToday += sec;
+          sum.playsToday++;
+        }
+        sum.tracks[e.k] = sum.tracks[e.k] || { title: e.t, artist: e.a, n: 0, sec: 0 };
+        sum.tracks[e.k].n++;
+        sum.tracks[e.k].sec += sec;
+        if (e.a) {
+          sum.artists[e.a] = sum.artists[e.a] || { name: e.a, n: 0, sec: 0, first: e.ts };
+          sum.artists[e.a].n++;
+          sum.artists[e.a].sec += sec;
+          if (e.ts < sum.artists[e.a].first) sum.artists[e.a].first = e.ts;
+        }
+        hour = when.getHours();
+        if (hour >= 5 && hour < 12) band = "morning";
+        else if (hour >= 12 && hour < 18) band = "afternoon";
+        else if (hour >= 18 && hour < 24) band = "evening";
+        else band = "night";
+        /* Les moments de la journée se comptent en **temps écouté** : c'est la
+           même unité que le reste de la page, donc comparable. */
+        sum.bands[band] += sec;
+        sum.bandPlays[band]++;
+        sum.weekdays[when.getDay()]++;
+      }
+      /* Les sept derniers jours, du plus ancien à aujourd'hui — en temps
+         écouté, et avec le nombre d'écoutes pour la légende. */
+      for (i = 6; i >= 0; i--) {
+        var from = t0 - i * day;
+        var to = from + day;
+        var count = 0;
+        var secs = 0;
+        for (var j = 0; j < this.entries.length; j++) {
+          var entry = this.entries[j];
+          if (entry.ts >= from && entry.ts < to) {
+            count++;
+            secs += entry.d > 0 ? entry.d : 0;
+          }
+        }
+        sum.byDay.push({ day: new Date(from).getDay(), date: from, n: count, sec: secs });
+      }
+      /* Série de jours d'affilée (aujourd'hui, sinon hier si rien aujourd'hui). */
+      var cursor = t0;
+      var guard = 0;
+      var firstDay = true;
+      while (guard++ < 400) {
+        var hit = 0;
+        for (i = 0; i < this.entries.length && !hit; i++) {
+          if (this.entries[i].ts >= cursor && this.entries[i].ts < cursor + day) hit = 1;
+        }
+        if (hit) {
+          sum.streak++;
+          cursor -= day;
+          firstDay = false;
+        } else if (firstDay) {
+          cursor -= day; /* la série peut encore courir depuis hier */
+          firstDay = false;
+        } else break;
+      }
+      sum.topArtists = this.rank(sum.artists, 6);
+      sum.topTracks = this.rank(sum.tracks, 5);
+      sum.artistCount = Object.keys(sum.artists).length;
+      sum.trackCount = Object.keys(sum.tracks).length;
+      for (var name in sum.artists) {
+        if (sum.artists[name].first >= now - 7 * day && sum.artists[name].n >= 2) {
+          sum.discovery.push(sum.artists[name]);
+        }
+      }
+      sum.discovery.sort(function (a, b) {
+        return b.n - a.n;
+      });
+      sum.discovery = sum.discovery.slice(0, 8);
+      /* Le moment préféré : au temps écouté ; à défaut (aucune durée
+         mesurée), au nombre d'écoutes. */
+      var favKey = "";
+      var best = -1;
+      var usePlays = sum.seconds <= 0;
+      for (var key in sum.bands) {
+        var score = usePlays ? sum.bandPlays[key] : sum.bands[key];
+        if (score > best) {
+          best = score;
+          favKey = key;
+        }
+      }
+      sum.favBand = best > 0 ? Stats.bandLabel(favKey) : "";
+      sum.favBandShare = sum.seconds > 0 && favKey ? Math.round((sum.bands[favKey] / sum.seconds) * 100) : 0;
+      var favDay = -1;
+      for (i = 0; i < 7; i++) {
+        if (favDay === -1 || sum.weekdays[i] > sum.weekdays[favDay]) favDay = i;
+      }
+      sum.favDay = sum.total ? Stats.weekdayLabel(favDay, true) : "";
+      return sum;
+    },
+
+    rank: function (map, limit) {
+      var list = [];
+      for (var k in map) list.push(map[k]);
+      list.sort(function (a, b) {
+        return b.n - a.n || b.sec - a.sec;
+      });
+      var total = 0;
+      for (var i = 0; i < list.length; i++) total += list[i].n;
+      for (var j = 0; j < list.length; j++) {
+        list[j].share = total ? Math.round((list[j].n / total) * 100) : 0;
+      }
+      return list.slice(0, limit);
+    },
+
+    /** « 3 h 20 », « 45 min » — la forme que lit un humain. */
+    human: function (seconds) {
+      var sec = Math.max(0, Math.round(seconds || 0));
+      var h = Math.floor(sec / 3600);
+      var min = Math.round((sec % 3600) / 60);
+      if (h && min) return h + " h " + min;
+      if (h) return h + " h";
+      return min + " min";
+    },
+
+    /** « il y a 2 min », « il y a 1 h » — l'âge d'un jeton, en clair. */
+    sinceText: function (ts) {
+      var sec = Math.max(0, Math.round((Date.now() - (ts || 0)) / 1000));
+      if (sec < 90) return "il y a " + sec + " s";
+      if (sec < 5400) return "il y a " + Math.round(sec / 60) + " min";
+      return "il y a " + Math.round(sec / 3600) + " h";
+    },
+
+    /** « 25/09 » — et l'année seulement si ce n'est pas celle en cours. */
+    dayLabel: function (ts) {
+      var d = new Date(ts);
+      if (!isFinite(d.getTime())) return "";
+      var two = function (n) {
+        return (n < 10 ? "0" : "") + n;
+      };
+      var short = two(d.getDate()) + "/" + two(d.getMonth() + 1);
+      return d.getFullYear() === new Date().getFullYear() ? short : short + "/" + d.getFullYear();
+    },
+
+    bandLabel: function (band) {
+      return (
+        {
+          night: Settings.labels.bandNight,
+          morning: Settings.labels.bandMorning,
+          afternoon: Settings.labels.bandAfternoon,
+          evening: Settings.labels.bandEvening,
+        }[band] || ""
+      );
+    },
+
+    weekdayLabel: function (index, long) {
+      var list = long ? Settings.labels.weekdays : Settings.labels.weekdaysShort;
+      return (list || [])[index] || "";
+    },
+  };
+
+  /* ------------------------------------------------------------------ *
+   * 11f. Offline — banner + toast so silence never looks like a bug
+   * ------------------------------------------------------------------ */
+  var Offline = {
+    check: function () {
+      var off = navigator.onLine === false;
+      document.documentElement.classList.toggle("sd-offline", off);
+      if (off) Toast.show(Settings.labels.offline, 2600);
+    },
+  };
+
+  /* ------------------------------------------------------------------ *
+   * 11g. Api — observe (never rewrite) Spotify's own traffic.
+   *      Gives us this device's id + tokens for the transfer hand-off, and
+   *      turns a dead connect session into ONE reload instead of the loop
+   *      the old layer created by reloading on every 404.
+   * ------------------------------------------------------------------ */
+  var Api = {
+    devId: "",
+    uri: "",
+    clientToken: "",
+    authToken: "",
+    /* **Les en-têtes de la page**, tels quels.
+     *
+     * Le lecteur ne demande pas `api.spotify.com` avec le seul jeton : il
+     * envoie aussi `client-token` (et sa version d'application). Ces en-têtes
+     * étaient captés… puis jamais renvoyés : nos appels partaient donc
+     * « nus », et Spotify les refusait (401/403/429) alors que ceux de la page
+     * passaient. C'est exactement « il n'arrive pas à reconnaître mes
+     * playlists » : la requête était la bonne, l'enveloppe ne l'était pas.
+     * Tout ce qui suit renvoie la même enveloppe que la page. */
+    headers: {},
+    /* Ce qui vaut la peine d'être renvoyé : le strict nécessaire, pas les
+       en-têtes de navigateur (longueur, encodage, cache) que la requête native
+       repose elle-même. */
+    KEEP: /^(authorization|client-token|spotify-app-version|app-platform|accept-language|x-spotify-[a-z-]+)$/,
+
+    keepHeader: function (name, value) {
+      var key = String(name || "").toLowerCase();
+      if (!value || !this.KEEP.test(key)) return;
+      this.headers[key] = String(value);
+      if (key === "client-token") this.clientToken = String(value);
+    },
+
+    /** Les en-têtes à envoyer, jeton compris. `browser` écarte ce que le
+     *  navigateur interdit de poser (`origin`, `referer`). */
+    apiHeaders: function (browser) {
+      var out = {};
+      for (var k in this.headers) {
+        if (browser && (k === "origin" || k === "referer")) continue;
+        out[k] = this.headers[k];
+      }
+      if (this.authToken) out.authorization = this.authToken;
+      if (browser && out["accept-language"]) delete out["accept-language"];
+      return out;
+    },
+
+    /** Ce qu'on a réussi à garder, en clair : « authorization, client-token ». */
+    headerNames: function () {
+      var kept = [];
+      for (var k in this.headers) kept.push(k);
+      if (this.authToken && kept.indexOf("authorization") < 0) kept.unshift("authorization");
+      return kept.sort().join(", ");
+    },
+    patchedXhr: false,
+    reloads: 0,
+    lastReload: 0,
+    patched: false,
+    RE_DEVICES: /\/track-playback\/v1\/devices/,
+    RE_CONNECT: /\/connect-state\/v1\/player\/(?:command|transfer)\/from\/([^/]+)\/to\/([^/?]+)/,
+
+    watch: function () {
+      /* Le jeton peut aussi partir en **XHR** (`setRequestHeader`) selon les
+         appels du lecteur : sans cette seconde prise, la bibliothèque maison
+         resterait vide sur un téléphone dont la page n'utilise pas `fetch` pour
+         ses requêtes d'API — et « je ne vois aucune de mes playlists » se
+         reproduirait à l'identique. */
+      if (!this.patchedXhr && window.XMLHttpRequest && XMLHttpRequest.prototype) {
+        this.patchedXhr = true;
+        var sendHeader = XMLHttpRequest.prototype.setRequestHeader;
+        if (typeof sendHeader === "function") {
+          XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
+            try {
+              var key = String(name).toLowerCase();
+              if (key === "authorization" && value && value !== Api.authToken) {
+                Api.authToken = value;
+                Api.tokenAt = Date.now();
+                Api.tokenHost = "";
+              }
+              Api.keepHeader(key, value);
+            } catch (e) {
+              /* une requête ne doit jamais échouer parce qu'on l'observe */
+            }
+            return sendHeader.apply(this, arguments);
+          };
+        }
+      }
+      if (this.patched || !window.fetch) return;
+      this.patched = true;
+      var orig = window.fetch;
+      window.fetch = function (input, init) {
+        var url = typeof input === "string" ? input : (input && input.url) || "";
+        try {
+          Api.capture(url, init);
+        } catch (e) {}
+        var p = orig.apply(this, arguments);
+        try {
+          if (Api.RE_DEVICES.test(url) || Api.RE_CONNECT.test(url)) {
+            p.then(
+              function (res) {
+                if (res && res.status === 404) Api.onGone();
+                if (!res || !res.clone) return;
+                res.clone().json().then(
+                  function (data) {
+                    Api.consume(url, data);
+                  },
+                  function () {}
+                );
+              },
+              function () {}
+            );
+          }
+        } catch (e) {}
+        return p;
+      };
+    },
+    /* Quand le jeton a été capté, et sur quel hôte : un jeton **anonyme** du
+       lecteur déconnecté n'ouvre pas la bibliothèque du compte, et il faut
+       pouvoir le dire au lieu de prétendre que le compte est vide. */
+    tokenAt: 0,
+    tokenHost: "",
+    /* Pourquoi un renouvellement a échoué, s'il a échoué : « refusé »,
+       « anonyme », « illisible ». Dit dans le journal de la bibliothèque. */
+    refreshState: "",
+    refreshing: null,
+
+    /** Le jeton n'est plus bon : on l'oublie avant d'en redemander un. */
+    forgetToken: function () {
+      this.authToken = "";
+      this.tokenAt = 0;
+      this.tokenHost = "";
+    },
+
+    /**
+     * **Le jeton, redemandé à la page du lecteur.**
+     *
+     * La capture n'attrape que les requêtes que la page a déjà faites : sur un
+     * téléphone dont la bibliothèque échoue, le jeton manquait ou était refusé —
+     * et il n'y avait alors aucun moyen de s'en sortir sans se reconnecter.
+     * La page du lecteur sait donner son propre jeton (`/get_access_token`,
+     * même origine, donc pas de contrôle d'accès). S'il est **anonyme**, c'est
+     * le lecteur qui n'est pas connecté : on le dit au lieu de faire semblant.
+     */
+    refreshToken: function () {
+      var self = this;
+      if (this.refreshing) return this.refreshing;
+      /* Pas de `fetch` (page nue, vieux moteur) : on ne peut rien demander, et
+         on le dit — plutôt que de lever une exception au milieu du rendu. */
+      if (typeof fetch !== "function") {
+        this.refreshState = "indisponible";
+        return Promise.resolve(false);
+      }
+      this.refreshing = fetch("/get_access_token?reason=transport&productType=web_player", {
+        credentials: "same-origin",
+      }).then(
+        function (r) {
+          return r && r.ok ? r.json() : null;
+        },
+        function () {
+          return null;
+        }
+      ).then(function (data) {
+        self.refreshing = null;
+        if (!data || !data.accessToken) {
+          self.refreshState = "refusé";
+          return false;
+        }
+        if (data.isAnonymous) {
+          self.refreshState = "anonyme";
+          return false;
+        }
+        self.refreshState = "ok";
+        self.authToken = /^Bearer /.test(data.accessToken)
+          ? data.accessToken
+          : "Bearer " + data.accessToken;
+        self.tokenAt = Date.now();
+        self.tokenHost = location.host;
+        return true;
+      });
+      return this.refreshing;
+    },
+
+    header: function (h, name) {
+      if (!h) return "";
+      try {
+        if (typeof h.get === "function") return h.get(name) || "";
+        if (Object.prototype.toString.call(h) === "[object Array]") {
+          for (var i = 0; i < h.length; i++) {
+            if (String(h[i][0]).toLowerCase() === name.toLowerCase()) return h[i][1] || "";
+          }
+          return "";
+        }
+        for (var k in h) {
+          if (k.toLowerCase() === name.toLowerCase()) return h[k] || "";
+        }
+      } catch (e) {}
+      return "";
+    },
+    capture: function (url, init) {
+      var h = init && init.headers;
+      this.keepAll(h);
+      var ct = this.header(h, "Client-Token");
+      if (ct && ct !== this.clientToken) this.clientToken = ct;
+      var at = this.header(h, "Authorization");
+      if (at && at !== this.authToken) {
+        this.authToken = at;
+        this.tokenAt = Date.now();
+        this.tokenHost = (/([a-z0-9.-]+\.spotify\.com)/i.exec(String(url)) || [])[1] || "";
+      }
+      var m = this.RE_CONNECT.exec(url);
+      if (m && m[2]) {
+        this.devId = m[2];
+        this.uri = m[1];
+      }
+    },
+    /** Garde ce qui compte, quelle que soit la forme des en-têtes reçus. */
+    keepAll: function (h) {
+      if (!h) return;
+      var self = this;
+      try {
+        if (typeof h.forEach === "function") {
+          h.forEach(function (value, name) {
+            self.keepHeader(name, value);
+          });
+          return;
+        }
+        if (h.length && typeof h.length === "number" && typeof h[0] !== "string") {
+          for (var j = 0; j < h.length; j++) if (h[j]) self.keepHeader(h[j][0], h[j][1]);
+          return;
+        }
+        for (var k in h) self.keepHeader(k, h[k]);
+      } catch (e) {}
+    },
+
+    consume: function (url, data) {
+      if (!data || typeof data !== "object") return;
+      if (this.RE_DEVICES.test(url)) {
+        var id = data.device_id || data.deviceId || "";
+        if (id) this.devId = id;
+      }
+      if (data.player_state && data.player_state.device && data.player_state.device.id) {
+        this.devId = data.player_state.device.id;
+      }
+    },
+    onGone: function () {
+      if (!Auto.wantPlay) return;
+      var now = Date.now();
+      if (this.reloads >= 3 || now - this.lastReload < 300000) {
+        Toast.show(Settings.labels.sessionLost, 3000);
+        return;
+      }
+      this.reloads++;
+      this.lastReload = now;
+      Toast.show(Settings.labels.reloadPlayer);
+      setTimeout(function () {
+        Api.repair(false);
+      }, 1400);
+    },
+    repair: function (manual) {
+      var now = Date.now();
+      if (manual && now - this.lastReload < 60000) return;
+      this.lastReload = now;
+      this.reloads++;
+      try {
+        location.reload();
+      } catch (e) {}
+    },
+  };
+
+  /* ------------------------------------------------------------------ *
+   * 12. Player sheet
+   * ------------------------------------------------------------------ */
+  var Player = {
+    open: false,
+    openSheet: function () {
+      if (this.open) return;
+      this.open = true;
+      document.documentElement.classList.add("sd-player-open");
+      UI.el.player.setAttribute("aria-hidden", "false");
+      UI.paintChrome(State);
+      Back.sync();
+      buzz(8);
+      var img = UI.el.artImg;
+      if (img) {
+        img.style.transition = "none";
+        img.style.transform = "scale(0.92)";
+        requestAnimationFrame(function () {
+          img.style.transition = "transform 320ms cubic-bezier(.32,.72,0,1)";
+          img.style.transform = "";
+        });
+      }
+    },
+    closeSheet: function () {
+      if (!this.open) return;
+      this.open = false;
+      document.documentElement.classList.remove("sd-player-open");
+      UI.el.player.setAttribute("aria-hidden", "true");
+      UI.el.player.style.removeProperty("--sd-drag");
+      UI.el.player.classList.remove("is-settling");
+      Sheets.close(false); // the options sheet never outlives the player
+      UI.paintChrome(State);
+      Back.release();
+      buzz(4);
+    },
+  };
+
+  /* ------------------------------------------------------------------ *
+   * 13. Queue sheet (Spotify's own "file d'attente" panel, shown on top of
+   *     the mini player — no re-implementation, so it can never desync)
+   * ------------------------------------------------------------------ */
+  var Queue = {
+    open: false,
+    toggle: function () {
+      this.open ? this.close() : this.openSheet();
+    },
+    openSheet: function () {
+      var panel = pick(SEL.panel);
+      if (!panel) {
+        var q = Spotify.queueButton();
+        if (q) q.click();
+        return;
+      }
+      this.open = true;
+      UI.paintChrome(State);
+      Back.sync();
+      buzz(6);
+    },
+    close: function () {
+      if (!this.open) return;
+      this.open = false;
+      UI.paintChrome(State);
+      Back.release();
+    },
+  };
+
+  /* ------------------------------------------------------------------ *
+   * 14. Router — tab bar ↔ web player pages
+   * ------------------------------------------------------------------ */
+  var Router = {
+    tab: function (name) {
+      if (name === State.tab && name !== "library") {
+        if (name === "search") Spotify.focusSearch();
+        return;
+      }
+      emit({ tab: name }, "route");
+      var before = location.pathname + "|" + Spotify.route();
+      if (name === "home") {
+        Spotify.goHome();
+        UI.el.tabbar.classList.remove("is-library");
+      } else if (name === "search") {
+        Spotify.goSearch();
+        setTimeout(function () {
+          Spotify.focusSearch();
+        }, 350);
+      }
+      /* Le clic sur un bouton de Spotify ne suffit pas toujours (bouton absent,
+         désactivé ou remplacé d'une version à l'autre) : un appui qui ne produit
+         **rien** est exactement ce que l'utilisateur appelle « rien n'est relié ».
+         On vérifie donc, et à défaut l'application navigue elle-même — c'est ce
+         que fait déjà le mode mobile (`native-mode.js`). */
+      if (name === "home" || name === "search") {
+        setTimeout(function () {
+          if (location.pathname + "|" + Spotify.route() === before) {
+            try {
+              location.assign(name === "search" ? "/search" : "/");
+            } catch (e) {
+              /* navigation refusée : on ne fait pas pire */
+            }
+          }
+        }, 900);
+      }
+      // 'library' needs no navigation: it is Spotify's own sidebar, shown
+      // full-screen by CSS (§3 of the stylesheet).
+      Queue.close();
+      buzz(8);
+    },
+    /** Called when the web player navigates on its own (link taps…). */
+    sync: function () {
+      var route = Spotify.route();
+      /* Le DOM ne dit pas toujours qu'on est sur une sous-page (le contenu d'une
+         playlist arrive après la barre de titre) : l'adresse, elle, le dit tout
+         de suite. `route` commande la place de nos barres **et** le bouton
+         retour — le deviner au DOM, c'est l'écran noir signalé. */
+      if (route === "other" && Spotify.isSubPagePath()) route = "page";
+      /* La page ouverte est arrivée : le voile d'ouverture (module `Open`) a
+         fait son travail. */
+      if (Open.busy && route === "page") Open.done();
+      var patch = { route: route };
+      if (route === "home" && State.tab !== "library" && State.tab !== "search") patch.tab = "home";
+      /* **Le choix de l'utilisateur prime sur la route.** « Bibliothèque » n'est
+         pas une page de Spotify : c'est notre vue posée sur l'accueil **ou** sur
+         la recherche. La réécrire dès que l'adresse est celle de la recherche,
+         c'est un onglet qui ne répond pas (mesuré au banc : appui
+         « Bibliothèque » depuis la recherche → l'onglet revenait à « Recherche »
+         au relevé suivant, et la page ne s'affichait jamais). */
+      if (route === "search" && State.tab !== "library") patch.tab = "search";
+      emit(patch, "route-sync");
+    },
+  };
+
+  /** Count internal navigations so `goBack()` never leaves the app. */
+  var History = {
+    depth: 0,
+    install: function () {
+      if (this.installed) return;
+      this.installed = true;
+      ["pushState", "replaceState"].forEach(function (m) {
+        var orig = history[m];
+        history[m] = function (state) {
+          /* **Les seules entrées qui ne comptent pas** sont celles des
+             panneaux (`{sd:'panel'}`, posées par `Back`) : sans cela,
+             `goBack()` rouvrirait la feuille qu'il doit fermer. Celles de
+             l'ouverture d'une page (`{sd:'open'}`, module `Open`) sont de
+             vraies navigations : le retour doit les défaire. */
+          if (m === "pushState" && !(state && state.sd === "panel")) History.depth++;
+          return orig.apply(this, arguments);
+        };
+      });
+      window.addEventListener("popstate", function () {
+        /* L'événement que nous émettons pour ouvrir une page ne doit pas
+           décrémenter l'historique : ce n'est pas un retour. */
+        if (Open.synthetic) return;
+        if (History.depth > 0) History.depth--;
+      });
+    },
+  };
+
+  /* ------------------------------------------------------------------ *
+   * 15. Gestures — swipe on the mini player, drag the sheet, scrub
+   * ------------------------------------------------------------------ */
+  var Gestures = {
+    bind: function () {
+      /* **Plus de gestes sur le lecteur.** Le mini-lecteur ne se déplace plus et
+         la feuille ne se ferme plus au glissement : c'était la même famille de
+         gestes que le défilement, et « le lecteur disparaît quand je scroll vers
+         le bas » venait de là (un doigt posé sur la pochette pour faire défiler
+         était pris pour un tirage de fermeture). Le lecteur est **statique** :
+         il ne bouge et ne se ferme que sur une commande explicite (le bouton
+         « Fermer », ou le retour d'Android). Le curseur de lecture, lui, reste
+         glissant : c'est un curseur, pas le lecteur. */
+      this.seekDrag();
+      this.miniSeekDrag();
+    },
+    /* Barre de progression du mini-lecteur : on peut y poser le doigt pour se
+       déplacer dans le morceau sans ouvrir le lecteur plein écran. */
+    miniSeekDrag: function () {
+      var rail = UI.el.miniSeek;
+      var fill = UI.el.miniProgress;
+      var cur = UI.el.miniCur;
+      if (!rail) return;
+      var dragging = false;
+      function ratioFrom(ev) {
+        var r = rail.getBoundingClientRect();
+        return clamp((ev.clientX - r.left) / Math.max(1, r.width), 0, 1);
+      }
+      function preview(ratio) {
+        var ms = ratio * (State.duration || 0);
+        State.seekPreview = ms;
+        fill.style.width = (ratio * 100).toFixed(2) + "%";
+        if (cur) cur.textContent = fmtTime(ms);
+      }
+      rail.addEventListener("pointerdown", function (ev) {
+        if (!State.duration) return;
+        ev.stopPropagation(); // ne pas ouvrir le lecteur plein écran
+        dragging = true;
+        emit({ seeking: true }, "mini-seek-start");
+        rail.classList.add("is-dragging");
+        try {
+          rail.setPointerCapture(ev.pointerId);
+        } catch (e) {
+          /* WebViews plus anciennes */
+        }
+        preview(ratioFrom(ev));
+      });
+      rail.addEventListener("pointermove", function (ev) {
+        if (!dragging) return;
+        ev.stopPropagation();
+        preview(ratioFrom(ev));
+      });
+      var end = function (ev) {
+        if (!dragging) return;
+        dragging = false;
+        rail.classList.remove("is-dragging");
+        Actions.seek(ratioFrom(ev) * (State.duration || 0));
+        buzz(8);
+      };
+      rail.addEventListener("pointerup", end);
+      rail.addEventListener("pointercancel", end);
+      /* Un simple appui sur la barre ne doit pas ouvrir la feuille. */
+      ["click", "pointerdown", "pointerup"].forEach(function (type) {
+        rail.addEventListener(type, function (ev) {
+          ev.stopPropagation();
+        });
+      });
+    },
+
+    /* mini player: tap → open, swipe ← → next, swipe → → previous, swipe ↑ → open */
+    /* full player: drag the header/artwork down to dismiss */
+    /* seek bar: real touch scrubbing (the old layer had none — it only sent
+       a synthetic `change` on the desktop <input type=range> from Android) */
+    seekDrag: function () {
+      var rail = UI.el.seekRail;
+      var seek = UI.el.seek;
+      var dragging = false;
+      function ratioFrom(ev) {
+        var r = rail.getBoundingClientRect();
+        return clamp((ev.clientX - r.left) / Math.max(1, r.width), 0, 1);
+      }
+      function preview(ratio) {
+        var ms = ratio * (State.duration || 0);
+        State.seekPreview = ms;
+        UI.el.seekFill.style.width = (ratio * 100).toFixed(2) + "%";
+        UI.el.seekThumb.style.left = (ratio * 100).toFixed(2) + "%";
+        UI.el.tCur.textContent = fmtTime(ms);
+      }
+      rail.addEventListener("pointerdown", function (ev) {
+        if (!State.duration) return;
+        dragging = true;
+        emit({ seeking: true }, "seek-start");
+        seek.classList.add("is-dragging");
+        try {
+          rail.setPointerCapture(ev.pointerId);
+        } catch (e) {
+          /* older WebViews */
+        }
+        preview(ratioFrom(ev));
+      });
+      rail.addEventListener("pointermove", function (ev) {
+        if (!dragging) return;
+        preview(ratioFrom(ev));
+      });
+      var end = function (ev) {
+        if (!dragging) return;
+        dragging = false;
+        seek.classList.remove("is-dragging");
+        var ratio = ratioFrom(ev);
+        Actions.seek(ratio * (State.duration || 0));
+        buzz(8);
+      };
+      rail.addEventListener("pointerup", end);
+      rail.addEventListener("pointercancel", end);
+      /* keyboard support (the layer is also usable with a remote/TV remote) */
+      seek.addEventListener("keydown", function (ev) {
+        var step = ev.shiftKey ? 30000 : 5000;
+        if (ev.key === "ArrowRight") {
+          ev.preventDefault();
+          Actions.seek(livePosition() + step);
+        } else if (ev.key === "ArrowLeft") {
+          ev.preventDefault();
+          Actions.seek(Math.max(0, livePosition() - step));
+        }
+      });
+    },
+  };
+
+  /* ------------------------------------------------------------------ *
+   * 15b. Interface hardening (every rule of src/inject/40-audit.css needs
+   *      one of these three states/classes to be meaningful).
+   * ------------------------------------------------------------------ */
+  var Polish = {
+    started: false,
+    overlayOpen: false,
+
+    /** Native overlays our chrome has to step back for. */
+    OVERLAYS: [
+      '[role="dialog"]',
+      '[aria-modal="true"]',
+      '[data-testid="modal"]',
+      '[data-testid="modal-container"]',
+      '[data-testid="context-menu"]',
+      "#context-menu",
+    ],
+
+    start: function () {
+      if (this.started) return;
+      this.started = true;
+      this.watchOverlays();
+      this.watchKeyboard();
+      this.purgePopups();
+      this.labelPass();
+      /* The SPA swaps whole views: re-scan once the dust settles. */
+      onState(
+        debounce(function () {
+          Polish.purgePopups();
+          Polish.labelPass();
+        }, 500)
+      );
+    },
+
+    /**
+     * Bannières de consentement (OneTrust, ce que Spotify utilise sur le web) :
+     * elles s'affichent par-dessus notre mini-player et posent
+     * `overflow:hidden` sur `<body>`, ce qui bloque le défilement de la page
+     * tant qu'on n'a pas cliqué « Accepter ». Et comme le web player est en
+     * mode « bureau », la bannière est énorme. On la retire du DOM plutôt que
+     * de cliquer à la place de l'utilisateur.
+     */
+    PURGE: [
+      "#onetrust-consent-sdk",
+      "#onetrust-banner-sdk",
+      "#onetrust-pc-sdk",
+      "[id^=\"onetrust\"]",
+      "[class*=\"onetrust\"]",
+      ".optanon-alert-box-wrapper",
+      '[data-testid="cookie-banner"]',
+      '[data-testid="consent-banner"]',
+    ],
+
+    purgePopups: function () {
+      var removed = 0;
+      for (var i = 0; i < this.PURGE.length; i++) {
+        var nodes = document.querySelectorAll(this.PURGE[i]);
+        for (var j = 0; j < nodes.length; j++) {
+          var node = nodes[j];
+          if (node.parentNode) {
+            node.parentNode.removeChild(node);
+            removed++;
+          }
+        }
+      }
+      /* Un vrai dialogue est *visible* : ne pas toucher au verrou de défilement.
+         (`querySelector` seul tombait sur les dialogues présents dans le DOM
+         mais fermés, et le verrou restait alors en place.) */
+      var dialogs = document.querySelectorAll('[role="dialog"],[aria-modal="true"]');
+      for (var k = 0; k < dialogs.length; k++) {
+        if (dialogs[k].getClientRects && dialogs[k].getClientRects().length) return removed;
+      }
+      var body = document.body;
+      if (body && body.style && body.style.overflow === "hidden") body.style.overflow = "";
+      var html = document.documentElement;
+      if (html && html.style && html.style.overflow === "hidden") html.style.overflow = "";
+      return removed;
+    },
+
+    /** 1) Native dialog/menu open → `html.sd-native-modal` (our bars fade and
+     *  stop taking taps so nothing hides behind the mini player). */
+    watchOverlays: function () {
+      var self = this;
+      if (!window.MutationObserver || !document.body) return;
+      var check = debounce(function () {
+        self.purgePopups();
+        self.syncOverlay();
+      }, 120);
+      new MutationObserver(check).observe(document.body, { childList: true, subtree: true });
+      ["pointerup", "keyup"].forEach(function (ev) {
+        document.addEventListener(ev, check, { passive: true });
+      });
+    },
+
+    /**
+     * **Un dialogue compte quand il est *visible*.**
+     *
+     * `querySelector` seul tombait sur les dialogues que Spotify garde montés
+     * dans son arbre une fois fermés : la coque croyait alors qu'un dialogue
+     * était ouvert **pour toujours** — nos barres s'éteignaient (dont le
+     * mini-lecteur, en `opacity: 0`) et notre calque passait derrière la page.
+     * C'est exactement ce que l'utilisateur appelle « le lecteur disparaît » et
+     * « tous les affichages sont bugués ». Un dialogue ouvert, lui, a une taille.
+     */
+    dialogVisible: function (node) {
+      if (!node) return false;
+      if (node.hidden === true) return false;
+      if (node.getAttribute("aria-hidden") === "true") return false;
+      var rects = node.getClientRects ? node.getClientRects() : null;
+      if (!rects || !rects.length) return false;
+      var cs = window.getComputedStyle ? window.getComputedStyle(node) : null;
+      if (cs && (cs.display === "none" || cs.visibility === "hidden" || Number(cs.opacity || 1) < 0.05)) return false;
+      return true;
+    },
+
+    syncOverlay: function () {
+      var open = false;
+      for (var i = 0; i < this.OVERLAYS.length && !open; i++) {
+        var found = document.querySelectorAll(this.OVERLAYS[i]);
+        for (var j = 0; j < found.length; j++) {
+          /* Our own player and sheets are dialogs too — never treat them as a
+             native overlay, or the shell would hide itself on open. */
+          if (found[j].closest(".sd-layer")) continue;
+          if (!this.dialogVisible(found[j])) continue;
+          open = true;
+          break;
+        }
+      }
+      if (open === this.overlayOpen) return false;
+      this.overlayOpen = open;
+      document.documentElement.classList.toggle("sd-native-modal", open);
+      return true;
+    },
+
+    /** 2) Software keyboard → `html.sd-keyboard` hides the tab bar + mini so
+     *  the search field and its results stay reachable. Deliberately based on
+     *  `clientHeight`: the Android wrapper may fake `window.innerHeight`. */
+    watchKeyboard: function () {
+      var vv = window.visualViewport;
+      /* Ce qui faisait « disparaître les boutons du bas de temps en temps » :
+         la classe `sd-keyboard` se posait dès que la zone visible rétrécissait
+         de plus de 120 px, sans vérifier qu'un clavier était ouvert. Or un
+         redimensionnement, une rotation, l'apparition de la barre de
+         navigation système ou le passage d'un onglet à l'autre peuvent faire
+         exactement ça — la barre d'onglets et le mini-lecteur s'effaçaient
+         alors que rien ne gênait. On ne masque donc plus que si un champ de
+         saisie est réellement focalisé. */
+      var typing = function () {
+        var el = document.activeElement;
+        if (!el) return false;
+        var tag = el.tagName;
+        return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable === true;
+      };
+      var apply = function () {
+        var gap = vv ? (document.documentElement.clientHeight || 0) - vv.height : 0;
+        document.documentElement.classList.toggle("sd-keyboard", typing() && gap > 120);
+      };
+      if (vv) {
+        vv.addEventListener("resize", apply);
+        vv.addEventListener("scroll", apply);
+      }
+      /* Le clavier suit le focus : c'est le signal le plus fiable, et il
+         fonctionne même sans `visualViewport`. */
+      document.addEventListener("focusin", apply, true);
+      document.addEventListener(
+        "focusout",
+        function () {
+          setTimeout(apply, 120);
+        },
+        true
+      );
+      window.addEventListener("orientationchange", function () {
+      Device.apply();
+      apply();
+    });
+      window.addEventListener("resize", apply);
+      apply();
+    },
+
+    /** 3) Name + size pass over Spotify's own controls: icon buttons get a
+     *  `title` tooltip when they only have an `aria-label`, and any control
+     *  smaller than a fingertip is flagged `data-sd-hit` for the CSS to grow.
+     *  Read-mostly, capped, and skipped inside our own layer. */
+    labelPass: function () {
+      var nodes;
+      try {
+        nodes = document.querySelectorAll('button, [role="button"]');
+      } catch (e) {
+        return;
+      }
+      var budget = 300;
+      for (var i = 0; i < nodes.length && budget > 0; i++, budget--) {
+        var el = nodes[i];
+        if (el.closest && el.closest(".sd-layer")) continue;
+        var label = el.getAttribute("aria-label");
+        if (label && !el.hasAttribute("title")) el.setAttribute("title", label);
+        if (el.hasAttribute("data-sd-hit")) continue;
+        var r = el.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0 && (r.width < 40 || r.height < 40)) {
+          el.setAttribute("data-sd-hit", "1");
+        }
+      }
+    },
+  };
+
+  /* ------------------------------------------------------------------ *
+   * 16. Theme detection (follow Spotify's own palette)
+   * ------------------------------------------------------------------ */
+  var Theme = {
+    apply: function () {
+      var light = false;
+      if (Settings.theme === "light") light = true;
+      else if (Settings.theme === "auto") {
+        light = !!(
+          document.querySelector(".encore-light-theme") ||
+          (getComputedStyle(document.body).backgroundColor || "").match(/rgba?\(2[0-9]{2}/)
+        );
+      }
+      document.documentElement.classList.toggle("sd-theme-light", light);
+    },
+  };
+
+  /* ------------------------------------------------------------------ *
+   * 17. Boot
+   * ------------------------------------------------------------------ */
+  function injectStyles() {
+    if (document.getElementById(STYLE_ID)) return;
+    var css = typeof SD_CSS_SOURCES !== "undefined" ? SD_CSS_SOURCES : "";
+    if (!css) return;
+    var style = document.createElement("style");
+    style.id = STYLE_ID;
+    style.textContent = css;
+    (document.head || document.documentElement).appendChild(style);
+  }
+
+  function markBody() {
+    var html = document.documentElement;
+    html.classList.add(BODY_CLASS);
+    html.classList.add("sd-tab-home");
+    html.classList.toggle("sd-reduce-motion", !!Settings.reduceMotion);
+    /* `sd-root` marks Spotify's own markup (everything in <body> that is not
+       our layer): the hardening stylesheet scopes its native-DOM rules on it,
+       so they can never leak into the injected UI. */
+    document.body.classList.add("sd-root");
+    Theme.apply();
+  }
+
+  var bootTries = 0;
+  function boot() {
+    if (!document.body) {
+      document.addEventListener("DOMContentLoaded", boot, { once: true });
+      return;
+    }
+    /* Le meta viewport AVANT les styles et la coque : toutes les tailles de la
+       feuille sont calculées à partir de la largeur de mise en page. */
+    Viewport.ensure();
+    injectStyles();
+    Device.apply();
+    markBody();
+
+    /* La coque d'abord, toujours : barre d'onglets, mini-lecteur, feuilles,
+       écran d'accueil. C'est ce qui fait qu'un premier lancement ressemble à
+       une application Android et non à la page web desktop de Spotify — la
+       version précédente attendait le lecteur pour construire quoi que ce
+       soit, donc l'écran de connexion restait une page web. */
+    startShell();
+
+    /* Notre feuille ne doit pas effacer la page : on vérifie tout de suite,
+       puis à trois reprises — le contenu de Spotify arrive après la coque, et
+       il est reconstruit à chaque navigation. */
+    Content.apply();
+    [600, 2000, 5000].forEach(function (ms) {
+      window.setTimeout(function () {
+        Content.apply();
+        Home.refresh("contenu");
+        Library.enter();
+      }, ms);
+    });
+    /* L'écoute en cours est fermée quand l'application passe en arrière-plan ou
+       se termine : sans ça, le temps mesuré depuis le dernier passage resterait
+       dans la session et ne rejoindrait jamais les statistiques. */
+    ["pagehide", "beforeunload"].forEach(function (name) {
+      window.addEventListener(name, function () {
+        Stats.flush();
+      });
+    });
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "hidden") Stats.flush();
+    });
+
+    /* L'accueil lit la page : il se rafraîchit quand le contenu arrive, quand on
+       change d'onglet, et sur redimensionnement — jamais en boucle serrée. */
+    Home.refresh("boot");
+    /* La bibliothèque se construit ** même sans lecteur** : `paintChrome` n'est
+       appelé qu'une fois la barre de lecture prête, et une page sans session
+       (ou dont le lecteur n'a pas démarré) n'aurait alors jamais de page de
+       bibliothèque — mesuré en CI : « bibliothèque maison absente » sur toutes
+       les pages. La construire ici la rend visible par la sonde et le
+       diagnostic, et prête dès le premier appui sur l'onglet. */
+    Library.enter();
+    /* L'historique récent de Spotify, quand le jeton de la page le permet : les
+       statistiques ne commencent pas à zéro. Silencieux sinon. */
+    window.setTimeout(function () {
+      Stats.syncFromApi();
+    }, 4000);
+    /* …et à neuf secondes, si l'écran est toujours vide, on le dit (le contenu
+       d'une page Spotify met quelques secondes à apparaître sur un téléphone,
+       mais pas neuf). */
+    window.setTimeout(function () {
+      Content.alertIfBlank();
+    }, 9000);
+
+    if (Spotify.ready()) {
+      startPlayer();
+      return;
+    }
+    // Le web player démarre encore (splash, connexion…). On réessaie avec un
+    // délai progressif, plafonné, au lieu d'une boucle toutes les 500 ms.
+    if (bootTries++ < 60) {
+      setTimeout(boot, Math.min(1500, 250 + bootTries * 150));
+    }
+  }
+
+  /* Coque : tout ce qui ne dépend pas de la lecture. */
+  var shellReady = false;
+  function startShell() {
+    if (shellReady) return;
+    shellReady = true;
+
+    UI.build();
+    History.install();
+    /* Nos liens ouvrent les pages **dans** le lecteur (module `Open`). */
+    Open.bind();
+    Api.watch();
+    /* Les réponses du pont réseau arrivent ici (`window.__sdNet`). */
+    Net.install();
+    Polish.start();
+    Login.apply();
+    Offline.check();
+    Sheets.paint();
+    Router.sync();
+    UI.paintChrome(State);
+
+    /* Spotify is a single-page app: watch the main view for page changes and
+       re-sync the route + chrome. One observer, no polling. */
+    var main = pick(SEL.mainView);
+    if (main && window.MutationObserver) {
+      var pageObs = new MutationObserver(debounce(function () {
+        Router.sync();
+        syncFromDom("page");
+        UI.paintChrome(State);
+        Login.apply(); // the login page is rendered by the same container
+        /* Une vue qui change, c'est le moment où une de nos règles peut se
+           retrouver posée sur la mauvaise page : on range, et si la page
+           n'affiche rien, on le dit (avec de quoi recharger). */
+        UI.reassertSurfaces();
+        Content.alertSoon(1500);
+      }, 250));
+      pageObs.observe(main, { childList: true, subtree: false });
+    }
+
+    /* L'écran marketing / la page de connexion n'ont pas de #main-view : on
+       surveille la **page entière** pour l'écran d'accueil maison. Le body seul
+       ne suffisait pas : quand Spotify (ou le banc de démonstration) remplit un
+       conteneur déjà en place, aucune mutation n'atteint <body>, l'écran
+       d'accueil n'était donc **jamais retiré** et restait posé par-dessus le
+       lecteur — « c'est le bordel ». `apply()` ne fait que quelques
+       `querySelector`, le débounce suffit à le rendre inoffensif. */
+    if (window.MutationObserver) {
+      var welcomeObs = new MutationObserver(
+        debounce(function () {
+          Welcome.apply();
+        }, 300)
+      );
+      welcomeObs.observe(document.documentElement, { childList: true, subtree: true });
+    }
+    /* Filet de sécurité, **borné** : si aucune mutation n'est observée (page
+       servie d'un bloc), on réévalue dix fois sur les vingt premières secondes,
+       en chaîne de `setTimeout` — jamais un intervalle qui tourne sans fin (le
+       banc refuse les boucles de sondage, et il a raison : elles vidaient la
+       batterie dans les versions précédentes). */
+    var welcomeTries = 0;
+    (function welcomeWatch() {
+      var shown = Welcome.apply();
+      if (++welcomeTries >= 10 || (Spotify.ready() && !shown)) return;
+      window.setTimeout(welcomeWatch, 2000);
+    })();
+
+    /* Re-apply the theme + repaint after a rotation or a keyboard resize.
+       (Everything else adapts through CSS: the shell is sized in `vh`/`%` so
+       no JS measurement is needed.) */
+    window.addEventListener(
+      "resize",
+      debounce(function () {
+        Device.apply();
+        Theme.apply();
+        UI.paintProgress();
+        Welcome.apply();
+        Content.apply();
+        Home.refresh("resize");
+        Library.apply();
+      }, 200)
+    );
+
+    Bridge.uiReady();
+    Actions.syncLocks();
+  }
+
+  /* Lecteur : ce qui n'a de sens qu'une fois la barre de lecture présente. */
+  var playerReady = false;
+  function startPlayer() {
+    if (playerReady) return;
+    playerReady = true;
+
+    Mirror.start();
+    Ticker.start();
+    Home.refresh("lecteur");
+    Auto.start();
+    syncFromDom("boot");
+    UI.paintChrome(State);
+
+    Bridge.playLoaded();
+    Bridge.mediaStatus(State);
+  }
+
+  function debounce(fn, ms) {
+    var t = 0;
+    return function () {
+      var args = arguments;
+      clearTimeout(t);
+      t = setTimeout(function () {
+        fn.apply(null, args);
+      }, ms);
+    };
+  }
+
+  /* ------------------------------------------------------------------ *
+   * 18. Public API (namespace handle the app / debug console can use)
+   * ------------------------------------------------------------------ */
+  var lastPlaying = null;
+  onState(function (s, reason) {
+    /* Playback can also change from outside the UI (notification, widget,
+     * Android Auto): keep the native wake/sleep state in sync with it. */
+    if (s.playing !== lastPlaying) {
+      var wasPlaying = lastPlaying;
+      lastPlaying = s.playing;
+      Actions.syncLocks();
+      /* Optional (settings → "Relancer la lecture automatiquement"): the old
+         layer's "permanent autoplay". Only for pauses we did not ask for. */
+      if (!s.playing && wasPlaying && reason !== "optimistic") Auto.maybeResume();
+    }
+    UI.paint(s, reason);
+    if (reason === "route" || reason === "route-sync") Login.apply();
+  });
+
+  window.SpotiDuckUI = {
+    /* La voie des appels d'API, exposée pour le diagnostic (« pont » ou
+       « navigateur », et la raison du dernier échec). */
+    net: Net,
+    version: VERSION,
+    state: State,
+    settings: Settings,
+    /** Le garde-fou de contenu : ce que la feuille a dû rétablir pour que la
+     *  page ne reste pas noire sous notre coque (voir `Content.apply`). */
+    content: Content,
+    /** L'accueil maison : ses données (`home.data`), ses filtres, son état. */
+    home: Home,
+    /** Votre bibliothèque : `load()`, ses éléments, son état. */
+    library: Library,
+    /** Vos statistiques d'écoute : `summary()`, `record()`, `clear()`. */
+    stats: Stats,
+    /** Les appels à l'API du lecteur : par où ils passent, et ce qui manque. */
+    net: Net,
+    /** Change one setting (`theme`, `haptics`, `accentFromArt`, `tabbar`,
+     *  `takeControl`, `resume`, `reduceMotion`) and persist it. */
+    set: function (key, value) {
+      return applySetting(key, value);
+    },
+    openPlayer: function () {
+      Player.openSheet();
+    },
+    /* ---- playback API for the native side (notification, widget, Android
+       Auto, assistant). All of them are idempotent: calling `play()` while
+       already playing does nothing instead of toggling (a toggle racing with
+       the notification is how you get "the pause button plays music"). */
+    play: function () {
+      if (!State.playing) Actions.playPause();
+    },
+    pause: function () {
+      if (State.playing) Actions.playPause();
+    },
+    playPause: function () {
+      Actions.playPause();
+    },
+    next: function () {
+      Actions.next();
+    },
+    previous: function () {
+      Actions.prev();
+    },
+    like: function () {
+      Actions.like();
+    },
+    seek: function (ms) {
+      Actions.seek(Math.max(0, Number(ms) || 0));
+    },
+    closePlayer: function () {
+      Player.closeSheet();
+    },
+    openQueue: function () {
+      Queue.openSheet();
+    },
+    openMenu: function () {
+      Sheets.open("menu");
+    },
+    /** Barre de navigation supérieure : notifications, amis, profil. */
+    spotifyButton: function (which) {
+      return Actions.spotifyButton(which);
+    },
+    openSettings: function () {
+      Sheets.open("settings");
+    },
+    close: function () {
+      Sheets.close();
+    },
+    /**
+     * Hardware back button. Call this from `onBackPressed` (via
+     * `evaluateJavascript`) — returns `true` when the UI consumed the press
+     * (a panel was closed), `false` when the app should handle it itself.
+     */
+    back: function () {
+      /* **Une ouverture en cours se défait.** Sans cela, un retour pendant
+         qu'une playlist s'ouvre atterrissait sur l'onglet Accueil : la route
+         n'avait pas encore changé, donc le retour croyait être sur l'accueil.
+         On annule ce qu'on a poussé, et on reste où on était. */
+      if (Open.busy) {
+        Open.cancel();
+        return true;
+      }
+      if (Back.top()) {
+        Back.handle();
+        return true;
+      }
+      if (State.route === "page") {
+        Spotify.goBack();
+        return true;
+      }
+      if (State.tab !== "home") {
+        Router.tab("home");
+        return true;
+      }
+      return false;
+    },
+    /** "Impossible de lancer la lecture ?" escape hatch (settings → reload). */
+    reload: function () {
+      Api.repair(true);
+    },
+    sync: function () {
+      syncFromDom("manual");
+    },
+    /* exposed for tests / the demo harness */
+    _internals: {
+      Spotify: Spotify,
+      Bridge: Bridge,
+      Actions: Actions,
+      UI: UI,
+      Router: Router,
+      Sheets: Sheets,
+      Player: Player,
+      Queue: Queue,
+      Auto: Auto,
+      Api: Api,
+      Login: Login,
+      LoginState: LoginState,
+      Offline: Offline,
+      Polish: Polish,
+      Back: Back,
+      Viewport: Viewport,
+      Device: Device,
+      Volume: Volume,
+      Content: Content,
+      Home: Home,
+      Stats: Stats,
+      Icons: ICONS,
+    },
+  };
+
+  loadSettings();
+  applyDensity(Settings.density);
+  if (document.body) boot();
+  else document.addEventListener("DOMContentLoaded", boot, { once: true });
+})();

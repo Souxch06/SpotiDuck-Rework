@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SpotiDuck</string>
+    <string name="widget_description">Lecture en cours, avec les commandes</string>
+    <string name="widget_idle">Aucune lecture — toucher pour ouvrir</string>
+    <string name="channel_playback">Lecture</string>
+    <string name="channel_playback_desc">Titre en cours et commandes de lecture</string>
+    <string name="action_play">Lecture</string>
+    <string name="action_pause">Pause</string>
+    <string name="action_next">Suivant</string>
+    <string name="action_previous">Précédent</string>
+    <string name="logged_in">Connecté à Spotify</string>
+    <string name="msg_unlock">Lecture débloquée</string>
+    <string name="msg_reload">Session expirée — rechargement…</string>
+    <string name="ui_mode_title">Interface de l\'application</string>
+    <!-- Ce que le choix change pour un compte *gratuit* : c'est là que se
+         décide « quelles fonctions Premium j'ai », parce que Spotify n'accorde
+         pas les mêmes libertés à la page bureau et à la page mobile. -->
+    <string name="ui_mode_note">La coque SpotiDuck est notre interface, celle du projet : barre du haut (accueil · bibliothèque · recherche, logo au centre, notifications · amis · profil), mini-lecteur complet et raccourcis en deux colonnes. Elle est livrée par défaut et garde la lecture, parce qu\'elle s\'appuie sur le moteur d\'origine : empreinte navigateur « bureau » et page bureau. L\'interface d\'origine est le repli : la même page, sans notre coque. La page web mobile, elle, répond « Lecture désactivée » sur un compte gratuit. Aucune interface ne débloque la qualité 320 kbps, le téléchargement ni les sauts illimités : ces décisions-là appartiennent au compte, pas à l\'application.</string>
+    <!-- Trois interfaces :
+         · « inject » = la coque SpotiDuck (notre interface), par-dessus le
+           moteur d'origine — **livrée par défaut** ;
+         · « original » = le code de l'application d'origine, repris tel quel
+           (la même page, sans notre coque) ;
+         · « native » = la page web mobile de Spotify (ne lit rien sur un
+           compte gratuit). -->
+    <!-- Connexion : la porte de secours, la fenêtre ouverte par la page, et le
+         cas — mesuré — où Google refuse l'autorisation à un navigateur
+         embarqué. Ce n'est pas un défaut de l'application : c'est une politique
+         de Google, et aucun réglage ne la désactive. Le dire clairement vaut
+         mieux que laisser l'utilisateur devant « Accès bloqué ». -->
+    <string name="login_window_title">Connexion</string>
+    <string name="close">Fermer</string>
+    <string name="login_blocked_title">Google refuse la connexion depuis une application</string>
+    <string name="login_blocked_text">Google n\'autorise pas sa page de connexion dans un navigateur embarqué (c\'est une règle de Google, pas un défaut de SpotiDuck), et Apple fait de même.\n\nPassez par l\'e-mail et le mot de passe : l\'application affiche le formulaire directement, et la session est gardée sur le téléphone — les prochaines mises à jour ne vous redemanderont rien.</string>
+    <string name="login_blocked_action">Utiliser mon e-mail et mon mot de passe</string>
+    <string name="session_restore">Rétablir la session</string>
+    <string name="session_restored">Session rétablie</string>
+    <string name="session_none">Aucune session de secours</string>
+    <string name="diagnostic">Diagnostic</string>
+    <string name="diagnostic_title">Ce que la page affiche</string>
+    <string name="diagnostic_copy">Copier</string>
+    <string name="diagnostic_copied">Diagnostic copié</string>
+    <string name="play_protect">Play Protect</string>
+    <string name="play_protect_path">Dans le Play Store : profil → Play Protect → ⚙️ → décocher « Analyser les applis avec Play Protect ».</string>
+    <string name="ui_mode_original">Interface d\'origine de SpotiDuck (sans la coque)</string>
+    <string name="ui_mode_original_short">Interface d\'origine</string>
+    <string name="ui_mode_original_toast">Interface d\'origine — rechargement…</string>
+    <string name="ui_mode_inject">Coque SpotiDuck (défaut)</string>
+    <string name="ui_mode_inject_short">Coque SpotiDuck</string>
+    <string name="ui_mode_native">Page web mobile (pas de lecture sans Premium)</string>
+    <string name="ui_mode_native_short">Page web mobile</string>
+    <string name="ui_mode_hint">Pour changer d\'interface : appui long de 3 s n\'importe où sur la page, ouverte aussi par l\'engrenage de la barre de titre (onglet Bibliothèque).</string>
+    <string name="ui_blank_fallback">Cette interface n\'a rien affiché : retour à la coque SpotiDuck</string>
+    <string name="ui_blank_hint">La page n\'a rien affiché — rechargez ; appui long de 3 s pour changer d\'interface</string>
+    <string name="ui_mode_native_toast">Page web mobile — lecture bloquée sur un compte gratuit</string>
+    <string name="ui_mode_inject_toast">Coque SpotiDuck — rechargement…</string>
+</resources>

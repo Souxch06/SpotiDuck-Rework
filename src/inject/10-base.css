@@ -1,0 +1,833 @@
+/* ==========================================================================
+   SpotiDuck — Mobile UI layer · part 1/2: tokens, base, web-player takeover
+   --------------------------------------------------------------------------
+   Goal: transform the *desktop* Spotify web player (the only layout the
+   WebView gets, because the app spoofs a desktop UA) into the layout of the
+   native Spotify mobile app:
+
+     ┌──────────────────────────┐
+     │  page content            │   <- #main-view (Spotify's own DOM)
+     │                          │
+     ├──────────────────────────┤
+     │  mini player             │   <- ours (.sd-mini)
+     ├──────────────────────────┤
+     │  Accueil · Recherche · … │   <- ours (.sd-tabbar)
+     └──────────────────────────┘
+
+   The whole file is scoped to `html.sd-mobile`, added by the runtime, so it is
+   a no-op anywhere else (and easy to disable from the app settings).
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1. Design tokens
+   -------------------------------------------------------------------------- */
+html.sd-mobile {
+  /* Chrome metrics */
+  --sd-tabbar-h: 56px;
+  --sd-mini-h: 60px;
+  /* L'espace réservé au mini-lecteur suit son **affichage** : réservé quand il
+     est là, nul quand il est caché (voir plus bas). Le 25/09, le téléphone
+     montrait sa page coupée avec une bande noire en dessous : la place du
+     mini-lecteur était réservée alors qu'il n'était pas affiché (lecteur pas
+     encore prêt), et rien ne venait l'occuper. */
+  --sd-mini-h-current: 0px;
+  --sd-player-header-h: 48px;
+  --sd-radius: 8px;
+  --sd-radius-lg: 12px;
+  --sd-tap: 44px; /* minimum touch target */
+
+  /* Safe areas (Android): notch, punch-hole and gesture bar.
+     env() is 0px on devices without insets, so nothing to guard against.
+     The `-override` variables only exist so the browser demo can fake a notch
+     (they are never set in the app). */
+  --sd-safe-t: max(env(safe-area-inset-top, 0px), var(--sd-safe-t-override, 0px));
+  --sd-safe-b: max(env(safe-area-inset-bottom, 0px), var(--sd-safe-b-override, 0px));
+  --sd-safe-l: max(env(safe-area-inset-left, 0px), var(--sd-safe-l-override, 0px));
+  --sd-safe-r: max(env(safe-area-inset-right, 0px), var(--sd-safe-r-override, 0px));
+
+  /* Space reserved at the bottom of the app area, occupied by our chrome.
+     Kept as ONE variable so every layout decision stays in sync — the old
+     implementation used three different hard-coded magic numbers
+     (92%, 88%, 48px) which is what made bars overlap on some devices. */
+  --sd-bottom: calc(var(--sd-mini-h-current) + var(--sd-tabbar-h) + var(--sd-safe-b));
+
+  /* Colours — inherit Spotify's own theme, with safe fallbacks so the layer
+     still renders if Spotify renames/removes its variables. */
+  --sd-text: var(--text-base, #ffffff);
+  --sd-sub: var(--text-subdued, #b3b3b3);
+  --sd-bg: var(--background-base, #000000);
+  --sd-bg-elev: var(--background-elevated-base, #121212);
+  --sd-bg-hi: var(--background-highlight, #1a1a1a);
+  --sd-bg-tint: var(--background-tinted-base, rgba(255, 255, 255, 0.07));
+  --sd-border: rgba(255, 255, 255, 0.1);
+  --sd-accent: var(--sd-green, #1ed760);
+  --sd-green: #1ed760;
+  --sd-bar: rgba(0, 0, 0, 0.82);
+  --sd-shadow: 0 -8px 24px rgba(0, 0, 0, 0.5);
+  --sd-scrim: rgba(0, 0, 0, 0.6);
+
+  /* Fluid type scale — replaces the hard-coded font-size:22px!important hacks */
+  --sd-fs-page-title: clamp(22px, 7.2vw, 32px);
+  --sd-fs-section: clamp(17px, 4.6vw, 22px);
+  --sd-fs-title: clamp(20px, 6vw, 26px);
+  --sd-fs-body: 14px;
+  --sd-fs-meta: 12px;
+  --sd-fs-tiny: 11px;
+
+  --sd-ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --sd-dur: 320ms;
+
+  color-scheme: dark;
+  height: 100%;
+}
+
+/* Le mini-lecteur est visible : sa place est réservée. `sd-mini-on` est la
+   classe qui l'affiche réellement (`display: flex` dans 20-shell.css) — les
+   deux vont donc ensemble, et l'espace réservé ne peut plus contredire l'écran. */
+html.sd-mobile.sd-mini-on,
+html.sd-mobile.sd-has-track {
+  --sd-mini-h-current: var(--sd-mini-h);
+}
+
+/* Tab bar disabled (e.g. a build that ships its own native bottom bar):
+   the mini player docks to the bottom edge and the reserved space shrinks. */
+html.sd-mobile.sd-no-tabbar {
+  --sd-tabbar-h: 0px;
+}
+html.sd-mobile.sd-no-tabbar .sd-tabbar {
+  display: none !important;
+}
+
+/* Light theme: Spotify serves two palettes; the old CSS forced every
+   `--background-*` token to #000 which broke album-derived backgrounds and
+   made the light theme unreadable. We only re-map *our* tokens. */
+html.sd-mobile.sd-theme-light {
+  --sd-bar: rgba(255, 255, 255, 0.86);
+  --sd-border: rgba(0, 0, 0, 0.1);
+  --sd-shadow: 0 -8px 24px rgba(0, 0, 0, 0.12);
+  --sd-scrim: rgba(255, 255, 255, 0.55);
+  --sd-text: #000;
+  --sd-sub: #5e5e5e;
+  --sd-bg: #fff;
+  --sd-bg-elev: #f6f6f6;
+  --sd-bg-hi: #eeeeee;
+  --sd-bg-tint: rgba(0, 0, 0, 0.06);
+  color-scheme: light;
+}
+
+/* --------------------------------------------------------------------------
+   2. Mobile base + viewport surgery
+   -------------------------------------------------------------------------- */
+html.sd-mobile,
+html.sd-mobile body {
+  height: 100%;
+  max-height: 100%;
+  margin: 0;
+  overscroll-behavior: none; /* kills the WebView "stretch" glow */
+}
+
+html.sd-mobile body {
+  box-sizing: border-box;
+  /* KEY IDEA: instead of pushing padding into every scroll container of the
+     web player (fragile, breaks on every Spotify redesign), we *shrink the
+     app viewport* by the height of our bars. Spotify's own `height:100%`
+     grid then reflows on its own, and nothing can ever sit under the bars. */
+  padding-top: var(--sd-safe-t);
+  padding-bottom: var(--sd-bottom);
+  padding-left: var(--sd-safe-l);
+  padding-right: var(--sd-safe-r);
+  background: var(--sd-bg);
+  overflow: hidden;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html.sd-mobile body.sd-player-open,
+html.sd-mobile body.sd-panel-open {
+  /* The full-screen player / queue sheet cover everything: no reserved space
+     needed underneath, and the page behind must not scroll. */
+  padding-bottom: 0;
+}
+
+html.sd-mobile * {
+  /* Was `*{transition:none!important}` in the old layer, which killed every
+     animation of the web player AND ours. Only desktop-only hover effects are
+     neutralised now (see below). */
+  -webkit-tap-highlight-color: transparent;
+}
+
+html.sd-mobile button,
+html.sd-mobile [role="button"],
+html.sd-mobile a,
+html.sd-mobile input,
+html.sd-mobile label {
+  touch-action: manipulation; /* no 300 ms delay, no double-tap zoom */
+}
+
+html.sd-mobile ::selection {
+  background: var(--sd-accent);
+  color: #000;
+}
+
+/* Custom, thin, mobile-looking scrollbars (desktop ones are 12px wide and
+   eat half the screen on a phone). */
+html.sd-mobile ::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+html.sd-mobile ::-webkit-scrollbar-track {
+  background: transparent;
+}
+html.sd-mobile ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.28);
+  border-radius: 4px;
+}
+html.sd-mobile.sd-theme-light ::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.28);
+}
+html.sd-mobile .os-scrollbar,
+html.sd-mobile .os-scrollbar-track,
+html.sd-mobile .os-scrollbar-handle {
+  --os-size: 4px !important;
+}
+html.sd-mobile .os-scrollbar-track:hover,
+html.sd-mobile .os-scrollbar-track:active {
+  background: transparent !important;
+}
+
+/* Desktop-only affordances that make no sense on a touch screen. */
+html.sd-mobile .main-view-container__mh-footer-container, /* "Preview of Spotify" footer */
+html.sd-mobile div[data-encore-id="banner"],
+html.sd-mobile a[href="/download"],
+html.sd-mobile button[data-testid="fullscreen-mode-button"],
+html.sd-mobile button[data-testid="web-player-link"],
+html.sd-mobile #Desktop_PanelContainer_Id > div > div:first-child, /* panel header dup */
+html.sd-mobile [data-testid="hover-or-focus-tooltip"],
+html.sd-mobile .encore-internal-announcements,
+/* Consentement aux cookies : le web player affiche la bannière OneTrust
+   par-dessus notre mini-player. Masquée ici, retirée du DOM par le script. */
+html.sd-mobile #onetrust-consent-sdk,
+html.sd-mobile #onetrust-banner-sdk,
+html.sd-mobile #onetrust-pc-sdk,
+html.sd-mobile [id^="onetrust"],
+html.sd-mobile [class*="onetrust"],
+html.sd-mobile .optanon-alert-box-wrapper,
+html.sd-mobile [data-testid="cookie-banner"],
+html.sd-mobile [data-testid="consent-banner"],
+html.sd-mobile [data-testid="promo-banner"],
+html.sd-mobile [data-testid="upgrade-banner"],
+html.sd-mobile [data-testid="upsell-banner"],
+html.sd-mobile kbd,
+html.sd-mobile [data-context-menu-internal], /* right-click menus */
+html.sd-mobile [role="tooltip"] {
+  display: none !important;
+}
+
+/* Tooltips: the old rule used `overflow:hidden` + `transform:none` on
+   [data-tippy-root], which left *stuck, half-clipped* bubbles on screen.
+   On touch there is no hover, so hiding them is the correct fix. */
+html.sd-mobile [data-tippy-root] {
+  display: none !important;
+}
+
+/* --------------------------------------------------------------------------
+   3. Desktop shell → mobile shell
+   -------------------------------------------------------------------------- */
+
+/* The root grid becomes a plain full-height box. */
+html.sd-mobile div[data-testid="root"] {
+  --panel-gap: 8px !important;
+  display: block !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  grid-template-rows: none !important;
+  grid-template-columns: none !important;
+  background: transparent !important;
+}
+
+/* The desktop top bar (back/forward, home, search field, logo, bell, avatar)
+   is replaced by our tab bar. We keep it in the DOM only for the search field
+   (see §6) — every tab except Search hides it completely. */
+html.sd-mobile.sd-tab-home #global-nav-bar,
+html.sd-mobile.sd-tab-library #global-nav-bar,
+html.sd-mobile.sd-subpage #global-nav-bar {
+  display: none !important;
+}
+
+/* The desktop left sidebar becomes the full-screen "Bibliothèque" page.
+   We only toggle a class — the old implementation rewrote `style.cssText`,
+   which destroyed Spotify's own inline styles and left the panel stuck at
+   92% height with a random #666 header. */
+html.sd-mobile #Desktop_LeftSidebar_Id {
+  display: none !important;
+}
+/* Une sous-page ouverte depuis la bibliothèque (une playlist, un album) doit
+   prendre tout l'écran : la barre latérale ne peut pas rester posée dessus. */
+html.sd-mobile.sd-tab-library.sd-subpage #Desktop_LeftSidebar_Id {
+  display: none !important;
+}
+html.sd-mobile.sd-tab-library #Desktop_LeftSidebar_Id {
+  display: flex !important;
+  flex-direction: column !important;
+  position: fixed !important;
+  inset: calc(var(--sd-safe-t) + var(--sd-player-header-h)) 0 var(--sd-bottom) 0 !important;
+  z-index: 5 !important;
+  width: auto !important;
+  max-width: none !important;
+  min-width: 0 !important;
+  height: auto !important;
+  border-radius: 0 !important;
+  background: var(--sd-bg-elev) !important;
+  overflow: hidden !important;
+}
+
+/* **Une page ouverte n'est jamais recouverte par un de nos écrans.**
+   Signalé le 25/09 : « quand on clique sur les playlists, y'a un écran noir ».
+   Nos écrans pleine page (accueil maison, bibliothèque, écran d'accueil
+   marketing) n'ont rien à faire sur une sous-page — playlist, album, artiste,
+   titres likés — et cette règle ne dépend d'aucun état de script : même si une
+   classe restait en place, la page ouverte reste visible. */
+html.sd-mobile.sd-subpage .sd-layer .sd-home,
+html.sd-mobile.sd-subpage .sd-layer .sd-lib,
+html.sd-mobile.sd-subpage .sd-layer .sd-welcome {
+  display: none !important;
+}
+
+/* Desktop "Now playing view" side panel: reused as a bottom sheet (§12). */
+html.sd-mobile #Desktop_PanelContainer_Id {
+  display: none !important;
+}
+html.sd-mobile.sd-queue-open #Desktop_PanelContainer_Id {
+  display: block !important;
+  position: fixed !important;
+  inset: auto 0 var(--sd-bottom) 0 !important;
+  z-index: 30 !important;
+  height: min(64vh, 560px) !important;
+  width: auto !important;
+  border-radius: var(--sd-radius-lg) var(--sd-radius-lg) 0 0 !important;
+  background: var(--sd-bg-elev) !important;
+  box-shadow: var(--sd-shadow) !important;
+  overflow: hidden !important;
+}
+
+/* The desktop playback bar must STAY ALIVE (it owns the <audio>, the
+   progress <input type=range> and every control we drive) but must not be
+   visible. `display:none` would break Spotify's own layout maths, so we park
+   it off-screen with a real (but empty) box. */
+html.sd-mobile aside[data-testid="now-playing-bar"] {
+  position: fixed !important;
+  left: 0 !important;
+  bottom: 0 !important;
+  width: 100% !important;
+  height: 1px !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  overflow: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  z-index: -1 !important;
+  background: none !important;
+  box-shadow: none !important;
+  border: none !important;
+}
+/* …and when the user explicitly opens the full player we do need the bar's
+   controls to be reachable by keyboard/pointer emulation: nothing to do, the
+   controls are driven through .click() and value setters in the runtime. */
+
+/* Main view: the only scrollable surface of the shell. */
+html.sd-mobile #main-view,
+html.sd-mobile .main-view-container,
+html.sd-mobile .main-view-container__scroll-node {
+  background: transparent !important;
+  overflow: hidden !important;
+}
+html.sd-mobile .main-view-container__scroll-node,
+html.sd-mobile .main-view-container__scroll-node-child {
+  height: 100% !important;
+  min-height: 0 !important;
+}
+
+/* Round the "cards" of the shell like the native app, and give the main view
+   the flat, edge-to-edge look of mobile Spotify (the desktop layout has
+   8px gaps + rounded panels and a #121212 background which reads as
+   "desktop" on a phone). */
+html.sd-mobile #main-view {
+  border-radius: 0 !important;
+  background: var(--sd-bg) !important;
+}
+
+/* --------------------------------------------------------------------------
+   4. Generic page chrome (headers, action bars, spacing)
+   -------------------------------------------------------------------------- */
+
+/* Desktop content spacing uses 24–32px paddings built for a 1280px+ viewport. */
+html.sd-mobile .contentSpacing {
+  padding-inline: 16px !important;
+  padding-block: 0 !important;
+  max-width: none !important;
+}
+
+html.sd-mobile main > div:first-child > div:last-of-type {
+  padding: 0 !important;
+}
+
+/* Page header of playlist/album/artist pages.
+   On a sub-page our own sticky top bar (§10 of the shell stylesheet) already
+   shows the back chevron and the title, so the desktop one is redundant — two
+   stacked headers was one of the "double chrome" bugs of the old layer. */
+html.sd-mobile.sd-subpage div[data-testid="topbar-content"] {
+  display: none !important;
+}
+html.sd-mobile div[data-testid="topbar-content"] {
+  padding: 0 16px !important;
+  min-height: 48px !important;
+  align-items: center !important;
+}
+
+/* Page hero (cover + titles): desktop puts the cover on the left and a 64px
+   headline on the right — impossible to read on a 360px screen. Mobile stacks
+   everything, centred, the way the native app does it. */
+html.sd-mobile section[data-testid$="-page"]:not([data-testid="home-page"]):not([data-testid="search-page"]) > div:first-child {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  text-align: center !important;
+  height: auto !important;
+  min-height: 0 !important;
+  gap: 10px !important;
+  padding: 12px 16px 4px !important;
+}
+html.sd-mobile section[data-testid$="-page"]:not([data-testid="home-page"]):not([data-testid="search-page"]) > div:first-child h1 {
+  font-size: var(--sd-fs-page-title) !important;
+  line-height: 1.15 !important;
+  margin: 4px 0 !important;
+}
+html.sd-mobile section[data-testid$="-page"] > div:first-child img {
+  width: min(52vw, 220px) !important;
+  height: auto !important;
+  aspect-ratio: 1 / 1;
+  border-radius: 6px !important;
+  object-fit: cover !important;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.5) !important;
+}
+
+html.sd-mobile div[data-testid="action-bar-row"] {
+  padding: 8px 16px !important;
+  gap: 8px !important;
+  flex-wrap: nowrap !important;
+  overflow: hidden !important;
+}
+html.sd-mobile div[data-testid="action-bar-row"] > * {
+  flex: 0 0 auto !important;
+}
+
+/* The big play button of the action bar is the closest thing to the native
+   "shuffle" FAB: make it round, green, and thumb-sized. */
+html.sd-mobile div[data-testid="action-bar-row"] button[data-testid="play-button"] {
+  order: -1 !important;
+  width: var(--sd-tap) !important;
+  height: var(--sd-tap) !important;
+  min-width: var(--sd-tap) !important;
+  border-radius: 50% !important;
+  background: var(--sd-green) !important;
+  color: #000 !important;
+  display: grid !important;
+  place-items: center !important;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45) !important;
+}
+html.sd-mobile div[data-testid="action-bar-row"] button[data-testid="play-button"] svg {
+  width: 22px !important;
+  height: 22px !important;
+}
+
+/* Page hero (cover + titles). Desktop = cover on the left, text on the right;
+   mobile = everything stacked and centred. */
+html.sd-mobile main > section > div:first-child:not([data-testid="home-page"]) {
+  height: auto !important;
+  min-height: 0 !important;
+}
+
+html.sd-mobile main > section:not([data-testid="artist-page"]) > div:first-child {
+  padding: 8px 16px 0 !important;
+}
+
+html.sd-mobile section[data-testid="track-page"] h1,
+html.sd-mobile section[data-testid="playlist-page"] h1,
+html.sd-mobile section[data-testid="album-page"] h1 {
+  font-size: var(--sd-fs-page-title) !important;
+  line-height: 1.15 !important;
+  font-weight: 800 !important;
+  letter-spacing: -0.02em !important;
+}
+html.sd-mobile main > section h1.encore-text-headline-large {
+  font-size: var(--sd-fs-page-title) !important;
+  line-height: 1.15 !important;
+}
+
+/* Artist pages have a full-bleed hero image: keep 16:9-ish on mobile instead
+   of the 25vh desktop slab the old layer hard-coded. */
+html.sd-mobile section[data-testid="artist-page"] > div > div:first-child:not([data-encore-id]) {
+  height: auto !important;
+  aspect-ratio: 16 / 10;
+  max-height: 42vh;
+}
+html.sd-mobile section[data-testid="artist-page"] span.encore-text-headline-large {
+  font-size: clamp(26px, 9vw, 40px) !important;
+}
+html.sd-mobile section[data-testid="artist-page"] > div > div:first-child > div.contentSpacing {
+  padding: 12px 16px !important;
+}
+
+/* --------------------------------------------------------------------------
+   5. Home page
+   -------------------------------------------------------------------------- */
+html.sd-mobile section[data-testid="home-page"] {
+  padding: 4px 0 16px !important;
+}
+html.sd-mobile section[data-testid="home-page"] .contentSpacing {
+  padding-inline: 16px !important;
+}
+
+/* Filter chips ("Tout / Musique / Podcasts"): horizontally scrollable pills,
+   like the native app — instead of the desktop row that wrapped and ate the
+   whole screen. */
+html.sd-mobile section[data-testid="home-page"] [data-testid="home-filter-chips"],
+html.sd-mobile section[data-testid="home-page"] div[role="tablist"] {
+  display: flex !important;
+  flex-wrap: nowrap !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  gap: 8px !important;
+  padding: 4px 16px !important;
+  margin: 0 !important;
+  scrollbar-width: none;
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
+}
+html.sd-mobile section[data-testid="home-page"] [data-testid="home-filter-chips"]::-webkit-scrollbar {
+  display: none;
+}
+html.sd-mobile section[data-testid="home-page"] div[role="tablist"] > * {
+  flex: 0 0 auto;
+  scroll-snap-align: start;
+}
+html.sd-mobile section[data-testid="home-page"] div[role="tablist"] button,
+html.sd-mobile section[data-testid="home-page"] [data-testid="home-filter-chips"] button {
+  height: 32px !important;
+  min-height: 32px !important;
+  padding: 0 14px !important;
+  border-radius: 999px !important;
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  transition: background-color 160ms ease, color 160ms ease !important;
+}
+
+/* Shelves become swipeable carousels (mobile Spotify) rather than 4-6 columns
+   squeezed into 360px. */
+html.sd-mobile section[data-testid="home-page"] section[data-testid="component-shelf"] {
+  padding: 0 !important;
+  margin: 0 0 12px !important;
+}
+html.sd-mobile section[data-testid="home-page"] section[data-testid="component-shelf"] > div:first-child {
+  padding: 0 16px !important;
+}
+html.sd-mobile section[data-testid="home-page"] div[data-testid="grid-container"] {
+  margin: 0 !important;
+  column-gap: 12px !important;
+  row-gap: 12px !important;
+  overflow: visible !important;
+}
+
+/* Every grid becomes a 2-column grid by default — that is the native home
+   layout. Shelf carousels below override this with a more specific selector,
+   so the order of the next two blocks matters. */
+html.sd-mobile section[data-testid="home-page"] div[data-testid="grid-container"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  padding: 0 16px !important;
+}
+
+/* Card shelves: horizontal scroller, 42vw cards. */
+html.sd-mobile section[data-testid="home-page"] section[data-testid="component-shelf"] div[data-testid="grid-container"] {
+  display: grid !important;
+  grid-auto-flow: column !important;
+  grid-auto-columns: minmax(0, 42vw) !important;
+  grid-template-columns: none !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  padding: 0 16px 8px !important;
+  margin: 0 -16px !important;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+html.sd-mobile section[data-testid="home-page"] section[data-testid="component-shelf"] div[data-testid="grid-container"]::-webkit-scrollbar {
+  display: none;
+}
+html.sd-mobile section[data-testid="home-page"] section[data-testid="component-shelf"] div[data-testid="grid-container"] > * {
+  scroll-snap-align: start;
+  min-width: 0 !important;
+}
+
+/* Card typography: 2 lines max, no clipped descenders, no 3-line titles that
+   broke the grid rhythm. */
+html.sd-mobile div[data-testid="card"] {
+  min-width: 0 !important;
+  border-radius: var(--sd-radius) !important;
+}
+html.sd-mobile div[data-testid="card"] div[data-testid="card-title"],
+html.sd-mobile div[data-testid="card"] .encore-text-body-medium {
+  font-size: var(--sd-fs-body) !important;
+  line-height: 1.3 !important;
+}
+html.sd-mobile div[data-testid="card"] div[data-testid="card-subtitle"] {
+  font-size: var(--sd-fs-meta) !important;
+  line-height: 1.35 !important;
+}
+
+/* Section headings */
+html.sd-mobile section[data-testid="home-page"] h2,
+html.sd-mobile section[data-testid="component-shelf"] h2 {
+  font-size: var(--sd-fs-section) !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.01em !important;
+}
+
+/* Desktop arrow buttons of the carousels: useless with swipe scrolling. */
+html.sd-mobile section[data-testid="component-shelf"] button[aria-label*="Suivant"],
+html.sd-mobile section[data-testid="component-shelf"] button[aria-label*="Next"],
+html.sd-mobile section[data-testid="component-shelf"] button[aria-label*="Précédent"],
+html.sd-mobile section[data-testid="component-shelf"] button[aria-label*="Previous"] {
+  display: none !important;
+}
+
+/* --------------------------------------------------------------------------
+   6. Search page
+   -------------------------------------------------------------------------- */
+
+/* The desktop top bar is kept *only* on the Search tab, reduced to its search
+   field. The old layer positioned that field with `margin-left:48px;
+   max-width:88%`, which collided with the logo in landscape. */
+html.sd-mobile.sd-tab-search #global-nav-bar {
+  display: flex !important;
+  position: fixed !important;
+  top: calc(var(--sd-safe-t) + 6px) !important;
+  left: var(--sd-safe-l) !important;
+  right: var(--sd-safe-r) !important;
+  z-index: 20 !important;
+  height: 48px !important;
+  padding: 0 16px !important;
+  background: transparent !important;
+  align-items: center !important;
+}
+html.sd-mobile.sd-tab-search #global-nav-bar > * {
+  display: none !important;
+}
+html.sd-mobile.sd-tab-search #global-nav-bar form[role="search"],
+html.sd-mobile.sd-tab-search #global-nav-bar [data-testid="search-input-form"] {
+  display: flex !important;
+  flex: 1 1 auto !important;
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+}
+/* If Spotify wraps the field in a container, un-hide that container too.
+   (`:has()` is supported by every WebView since Chromium 105 / 2022; the rule
+   is purely additive, so an older WebView just keeps the form rule above.) */
+html.sd-mobile.sd-tab-search #global-nav-bar :is(div, section, li):has(> form[role="search"]) {
+  display: flex !important;
+  flex: 1 1 100% !important;
+  width: 100% !important;
+  max-width: none !important;
+  justify-content: stretch !important;
+}
+html.sd-mobile.sd-tab-search input[data-testid="search-input"] {
+  width: 100% !important;
+  height: 40px !important;
+  padding: 0 14px 0 40px !important;
+  border-radius: var(--sd-radius) !important;
+  background: var(--sd-bg-hi) !important;
+  color: var(--sd-text) !important;
+  font-size: 15px !important;
+  border: 1px solid var(--sd-border) !important;
+}
+
+/* Search results: 2-column browse grid, 1:1 tiles with the coloured cards. */
+html.sd-mobile section[data-testid="search-page"] {
+  padding: 0 0 16px !important;
+}
+html.sd-mobile section[data-testid="search-page"] > div:first-child {
+  padding-top: 56px !important; /* clear our floating search field */
+}
+html.sd-mobile section[data-testid="search-page"] h1,
+html.sd-mobile section[data-testid="search-page"] h2 {
+  font-size: var(--sd-fs-section) !important;
+  padding-inline: 16px !important;
+}
+html.sd-mobile section[data-testid="search-page"] div[data-testid="grid-container"] {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 12px !important;
+  padding: 0 16px !important;
+  margin: 0 !important;
+  overflow: visible !important;
+}
+html.sd-mobile section[data-testid="search-page"] div[data-testid="search-card"],
+html.sd-mobile section[data-testid="search-page"] li {
+  border-radius: var(--sd-radius) !important;
+  overflow: hidden !important;
+  aspect-ratio: 1 / 1;
+}
+
+/* Search results while typing: simple list rows with 56px covers. */
+
+/* --------------------------------------------------------------------------
+   7. Library page (Spotify's own sidebar, restyled for touch)
+   -------------------------------------------------------------------------- */
+html.sd-mobile #Desktop_LeftSidebar_Id header {
+  padding: 0 16px !important;
+  min-height: var(--sd-player-header-h) !important;
+}
+/* Spotify's own "Bibliothèque" header is replaced by ours (§13) so the title
+   can be large, sticky and translatable. */
+html.sd-mobile #Desktop_LeftSidebar_Id header > div > div:first-child {
+  display: none !important;
+}
+html.sd-mobile #Desktop_LeftSidebar_Id header > div > div:last-child {
+  display: none !important; /* the "+" / expand desktop cluster */
+}
+
+html.sd-mobile .YourLibraryX {
+  background: transparent !important;
+  overflow: hidden !important;
+}
+html.sd-mobile .YourLibraryX > div > header {
+  padding: 4px 16px 8px !important;
+}
+html.sd-mobile .YourLibraryX > div[role="grid"],
+html.sd-mobile .YourLibraryX div[role="grid"] {
+  padding-inline: 8px !important;
+}
+
+/* Library rows: 64px tall, 48px rounded cover, 2-line clamp — the desktop
+   rows are 40px tall with 10px text, unusable with a finger. */
+html.sd-mobile .YourLibraryX div[role="row"] {
+  min-height: 64px !important;
+  padding: 6px 8px !important;
+  border-radius: var(--sd-radius) !important;
+  gap: 12px !important;
+}
+html.sd-mobile .YourLibraryX div[role="row"] img {
+  width: 48px !important;
+  height: 48px !important;
+  min-width: 48px !important;
+  border-radius: 6px !important;
+  object-fit: cover !important;
+}
+html.sd-mobile .YourLibraryX div[role="row"] div[class*="encore-text-body-medium"],
+html.sd-mobile .YourLibraryX div[role="row"] .encore-text-body-medium {
+  font-size: var(--sd-fs-body) !important;
+  line-height: 1.25 !important;
+}
+html.sd-mobile .YourLibraryX div[role="row"] div[class*="encore-text-body-small"],
+html.sd-mobile .YourLibraryX div[role="row"] .encore-text-body-small {
+  font-size: var(--sd-fs-meta) !important;
+}
+/* The old layer left a broken "Playlist · 中 · OV32LO2D · 中" subtitle: the
+   separator dots are echoed for every metadata node. Keep one dot max. */
+html.sd-mobile .YourLibraryX div[role="row"] span[aria-hidden="true"]:not(:first-of-type) {
+  display: none !important;
+}
+
+/* "Créer une playlist" row and sort/filter headers of the library. */
+html.sd-mobile .YourLibraryX div[role="row"] button,
+html.sd-mobile .YourLibraryX header button {
+  min-width: var(--sd-tap) !important;
+  min-height: var(--sd-tap) !important;
+}
+
+/* --------------------------------------------------------------------------
+   8. Tracklists (playlist / album / liked songs)
+   -------------------------------------------------------------------------- */
+
+/* Desktop columns use a fixed 46px index column + minmax(82px,…) trailing
+   columns with !important: on a 360px screen that pushed the 3rd/4th column
+   off-screen (visible as clipped text in the old screenshots). */
+html.sd-mobile div[data-testid="tracklist-row"] {
+  display: grid !important;
+  grid-template-columns: 44px minmax(0, 1fr) auto !important;
+  grid-template-areas: "index first last" !important;
+  align-items: center !important;
+  gap: 0 8px !important;
+  height: 56px !important;
+  min-height: 56px !important;
+  padding: 0 12px 0 0 !important;
+  border-radius: 6px !important;
+}
+html.sd-mobile [aria-colcount] div[data-testid="tracklist-row"],
+html.sd-mobile section[data-testid="track-page"] > div.contentSpacing > div:nth-child(2) [aria-colcount] div[data-testid="tracklist-row"] {
+  grid-template-columns: 44px minmax(0, 1fr) auto !important;
+  grid-template-areas: "index first last" !important;
+}
+html.sd-mobile div[data-testid="tracklist-row"] [aria-colindex="1"],
+html.sd-mobile div[data-testid="tracklist-row"] > div:first-child {
+  grid-area: index !important;
+  justify-self: center !important;
+}
+html.sd-mobile div[data-testid="tracklist-row"] [aria-colindex="2"],
+html.sd-mobile div[data-testid="tracklist-row"] > div:nth-child(2) {
+  grid-area: first !important;
+  min-width: 0 !important;
+}
+/* Every secondary column (album, date, plays) is dropped on mobile: the
+   native app shows title + artist only. */
+html.sd-mobile div[data-testid="tracklist-row"] > *:nth-child(n + 3):not(:last-child) {
+  display: none !important;
+}
+html.sd-mobile div[data-testid="tracklist-row"] > *:last-child {
+  grid-area: last !important;
+  justify-self: end !important;
+}
+html.sd-mobile div[data-testid="tracklist-row"] div[role="button"],
+html.sd-mobile div[data-testid="tracklist-row"] button {
+  min-width: 36px !important;
+  min-height: 36px !important;
+}
+html.sd-mobile div[data-testid="tracklist-row"] img {
+  width: 44px !important;
+  height: 44px !important;
+  min-width: 44px !important;
+  border-radius: 4px !important;
+  object-fit: cover !important;
+}
+html.sd-mobile div[data-testid="tracklist-row"] div[class*="encore-text"] {
+  font-size: var(--sd-fs-body) !important;
+  line-height: 1.25 !important;
+}
+html.sd-mobile div[data-testid="tracklist-row"] div[class*="encore-text"]:not(:first-child) {
+  font-size: var(--sd-fs-meta) !important;
+  color: var(--sd-sub) !important;
+}
+/* Hide every "who wants to see column headers on a phone" header row. */
+html.sd-mobile div[data-testid="tracklist-header"] {
+  display: none !important;
+}
+
+/* Expandable "…" menu of a row becomes a real bottom sheet on mobile. */
+html.sd-mobile #context-menu,
+html.sd-mobile [data-testid="context-menu"] {
+  position: fixed !important;
+  inset: auto 0 var(--sd-bottom) 0 !important;
+  width: auto !important;
+  max-width: none !important;
+  max-height: 70vh !important;
+  border-radius: var(--sd-radius-lg) var(--sd-radius-lg) 0 0 !important;
+  background: var(--sd-bg-elev) !important;
+  z-index: 60 !important;
+  overflow: auto !important;
+}
+html.sd-mobile #context-menu button,
+html.sd-mobile [data-testid="context-menu"] button,
+html.sd-mobile #context-menu [role="menuitem"] {
+  min-height: var(--sd-tap) !important;
+  font-size: 15px !important;
+}

@@ -1,0 +1,239 @@
+/* ==========================================================================
+   77 — Le contenu se met en page pour un téléphone
+
+   Ce que la capture du 24/09 à 21 h 47 montre : la page **s'affiche** (c'est
+   déjà ça), mais avec les métriques d'un bureau — pochettes minuscules
+   (~59 px) perdues dans des cellules larges, gouttières de ~36 px, grands
+   vides entre les rangées, et une quatrième colonne qui dépasse. Autrement
+   dit : la feuille de l'application d'origine fait **tenir** la page dans
+   l'écran (c'est son rôle, §28), elle ne la **met** pas en page pour un
+   téléphone.
+
+   Cette passe-ci s'en occupe, et elle ne repose que sur des mesures :
+
+       pochette = toute la largeur de sa cellule (au lieu d'un timbre au milieu)
+       gouttière  = 12 px × unité (au lieu de ~36 px)
+       rangées    = espacement 14 px × unité (au lieu de ~85 px)
+       titres     = 17 px × unité
+       grilles    = 2 colonnes de grandes cartes, les carrousels restent des
+                    carrousels (c'est ce que fait l'application mobile)
+
+   **Elle s'applique partout, large compris** — c'est une leçon payée : la
+   capture du 24/09 à 21 h 47 vient d'un appareil **large** (≥ 600 px de mise en
+   page, la barre du haut fait le tour de l'écran), et la version précédente de
+   cette passe était réservée aux écrans étroits : elle ne faisait donc rien
+   chez lui. Ce qui reste réservé aux écrans étroits, c'est le **nombre de
+   colonnes** ; la taille des pochettes et les espacements, eux, concernent tous
+   les appareils.
+
+   Ce que la sonde a nommé sur la vraie page (structure de la première rangée) :
+
+       section[data-testid=component-shelf] 360×130, deux enfants :
+         · l'en-tête                (titre + « tout afficher »)
+         · div[data-testid=carousel-scroller] 440×66  img=122
+             └── la piste 3830 px de large, cartes de ~140 px
+
+   Autrement dit : la pochette (122 px) ne remplit pas sa carte, la piste
+   déborde de la rangée, et les gouttières de bureau (~36 px) restent.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1. Les pochettes remplissent leur carte
+   C'est le défaut le plus visible : une image de 59 px au milieu d'une cellule
+   de 95 px laisse 36 px de vide de chaque côté — et c'est ce vide qui fait
+   « pas très beau », pas la taille des cartes elle-même.
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile .sd-root section[data-testid="component-shelf"] img,
+html.sd-mobile .sd-root section[data-testid="component-shelf"] [data-testid="card-image"],
+html.sd-mobile .sd-root div[data-testid="grid-container"] img,
+html.sd-mobile .sd-root div[data-testid="grid-container"] [data-testid="card-image"] {
+  width: 100% !important;
+  max-width: 100% !important;
+  height: auto !important;
+  /* La forme est celle que Spotify décide (pochette carrée, portrait d'artiste
+     rond, logo de playlist) : on ne touche qu'à la **taille**, jamais au
+     rayon — écraser `border-radius` ici transformerait les ronds en carrés. */
+  object-fit: cover;
+}
+/* Une pochette de card reste carrée même quand le conteneur est étiré. */
+html.sd-mobile .sd-root section[data-testid="component-shelf"] [data-testid="card-image"],
+html.sd-mobile .sd-root section[data-testid="component-shelf"] img[data-testid="cover-art-image"] {
+  aspect-ratio: 1 / 1;
+}
+
+/* Les conteneurs de cartes : on ne touche pas à leur largeur (c'est le
+   carrousel), seulement à ce qui **borne** la pochette à l'intérieur. */
+html.sd-mobile .sd-root section[data-testid="component-shelf"] [data-testid="carousel-scroller"],
+html.sd-mobile .sd-root section[data-testid="component-shelf"] [data-testid="carousel-scroller"] > *,
+html.sd-mobile .sd-root section[data-testid="component-shelf"] [data-testid="carousel-scroller"] > * > * {
+  max-width: none !important;
+}
+/* Pas de largeur/hauteur figées sur une image de carte : elle prend la sienne
+   de son conteneur (c'est le « img=122 » de la sonde qui rendait les pochettes
+   minuscules dans des cellules larges). */
+html.sd-mobile .sd-root section[data-testid="component-shelf"] img[width],
+html.sd-mobile .sd-root section[data-testid="component-shelf"] img[height] {
+  width: 100% !important;
+  height: auto !important;
+}
+html.sd-mobile .sd-root section[data-testid="component-shelf"] div[data-testid="grid-container"] > *,
+html.sd-mobile .sd-root section[data-testid="component-shelf"] div[data-testid="grid-container"] > * > * {
+  padding-inline: 0 !important;
+  margin-inline: 0 !important;
+  width: auto !important;
+  max-width: none !important;
+  min-width: 0 !important;
+}
+
+/* --------------------------------------------------------------------------
+   2. Les gouttières et la grille
+   2 colonnes sur un téléphone (des grandes cartes, comme l'application), et
+   jamais plus que la largeur de l'écran.
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile .sd-root div[data-testid="grid-container"] {
+  column-gap: calc(12px * var(--sd-u)) !important;
+  row-gap: calc(12px * var(--sd-u)) !important;
+  grid-gap: calc(12px * var(--sd-u)) !important;
+  margin-inline: 0 !important;
+}
+
+/* **Le nombre de colonnes.** C'est le vrai responsable de la capture du 24/09
+   à 21 h 47 : quatre colonnes de pochettes de 59 px, séparées par 36 px de vide,
+   soit une grille calculée pour un bureau. Sur un téléphone, l'application en
+   montre deux (les grandes cartes des raccourcis) : on laisse donc la grille
+   décider du nombre de colonnes à partir d'une **largeur de carte utile** —
+   150 px × unité ⇒ deux colonnes sur un 412, trois sur un 480, et sur un écran
+   large autant que la place le permet (des cartes larges, jamais des timbres).
+
+   La sonde mesure ces rangées : `cols=4` avant, deux ou trois après, avec des
+   pochettes qui remplissent leur case au lieu d'y flotter. */
+html.sd-mobile .sd-root section[data-testid="component-shelf"] div[data-testid="grid-container"] {
+  grid-template-columns: repeat(auto-fill, minmax(calc(150px * var(--sd-u)), 1fr)) !important;
+  grid-auto-flow: row !important;
+}
+html.sd-mobile.sd-size-wide .sd-root section[data-testid="component-shelf"] div[data-testid="grid-container"] {
+  grid-template-columns: repeat(auto-fill, minmax(calc(170px * var(--sd-u)), 1fr)) !important;
+}
+/* Les carrousels : la même gouttière, sur tous les appareils. La piste de la
+   sonde mesurait 3830 px pour une rangée de 360 — c'est ce qui met les cartes
+   à l'étroit et les pochettes au milieu d'un vide. */
+html.sd-mobile .sd-root section[data-testid="component-shelf"] [data-testid="carousel-scroller"] {
+  column-gap: calc(12px * var(--sd-u)) !important;
+  gap: calc(12px * var(--sd-u)) !important;
+}
+html.sd-mobile .sd-root section[data-testid="component-shelf"] [data-testid="carousel-scroller"] > * {
+  gap: calc(12px * var(--sd-u)) !important;
+}
+
+/* Les carrousels de l'accueil (rangées qui défilent horizontalement) : cartes
+   d'environ 42 % de la largeur, donc deux et demie visibles — l'utilisateur
+   voit qu'il peut faire glisser. */
+/* Une carte de carrousel : environ deux et demie visibles sur un téléphone,
+   trois et demie sur un écran large — comme l'application. */
+html.sd-mobile .sd-root section[data-testid="component-shelf"] [data-testid="card-clickable"],
+html.sd-mobile .sd-root section[data-testid="component-shelf"] [role="button"][data-encore-id="card"] {
+  min-width: calc(150px * var(--sd-u)) !important;
+  max-width: calc(190px * var(--sd-u)) !important;
+}
+html.sd-mobile.sd-size-wide .sd-root section[data-testid="component-shelf"] [data-testid="carousel-scroller"] img {
+  max-width: calc(200px * var(--sd-u)) !important;
+}
+
+/* --------------------------------------------------------------------------
+   3. Les rangées respirent moins
+   La capture montre ~85 px entre deux rangées et des titres de la taille d'un
+   paragraphe au-dessus de pochettes de 59 px : proportions de site web.
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile .sd-root section[data-testid="component-shelf"] {
+  margin-block: calc(14px * var(--sd-u)) !important;
+  padding-block: 0 !important;
+}
+html.sd-mobile .sd-root section[data-testid="component-shelf"] [data-testid="carousel-scroller"] {
+  height: auto !important;
+  max-height: none !important;
+}
+
+/* Uniquement le **titre de rangée** : `h2`, ou son équivalent Encore. Les
+   titres des cartes (qui portent aussi `data-encore-id="text"`) ne sont pas
+   concernés — leur taille appartient à la carte. */
+html.sd-mobile .sd-root section[data-testid="component-shelf"] > div:first-child h2,
+html.sd-mobile .sd-root section[data-testid="component-shelf"] h2,
+html.sd-mobile .sd-root section[data-testid="component-shelf"] > div:first-child .encore-text-headline-large {
+  font-size: calc(17px * var(--sd-u)) !important;
+  line-height: 1.3 !important;
+  letter-spacing: -0.2px !important;
+}
+
+/* « Tout afficher » : un lien, pas un titre. */
+html.sd-mobile .sd-root section[data-testid="component-shelf"] a[data-testid="see-all-link"],
+html.sd-mobile .sd-root section[data-testid="component-shelf"] a[href*="see-all"] {
+  font-size: calc(12px * var(--sd-u)) !important;
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+}
+
+/* --------------------------------------------------------------------------
+   4. Aucune hauteur réservée plus grande que le contenu
+   Les rangées de Spotify réservent parfois une hauteur fixe (25vh) : sur un
+   téléphone, c'est une bande noire à la fin de chaque rangée.
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile .sd-root section[data-testid="component-shelf"],
+html.sd-mobile .sd-root section[data-testid="component-shelf"] > * {
+  height: auto !important;
+  min-height: 0 !important;
+}
+
+/* --------------------------------------------------------------------------
+   5. Rien ne dépasse de l'écran — le « c'est encore coupé »
+   La sonde a nommé le défaut, et il explique exactement la quatrième colonne
+   rognée de la capture :
+
+       carousel-scroller 440px depasse=14 · div 440px depasse=14
+       div 3830px depasse=3404 · div 3862px depasse=3420 (la piste du carrousel)
+
+   Le **conteneur** de la rangée est plus large que la mise en page (440 px pour
+   412) : comme notre feuille rogne ce qui dépasse (`overflow-x: hidden`, sans
+   quoi la page déborde de partout), le trop-plein est coupé net. On ne rogne
+   plus, on **borne** : la rangée fait la largeur de la page, et la piste du
+   carrousel coulisse à l'intérieur comme elle le fait déjà.
+
+   Rien ici ne fixe un nombre de colonnes ni une largeur en dur : ce sont des
+   bornes, elles tiennent quel que soit l'appareil.
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile .sd-root section[data-testid="component-shelf"],
+html.sd-mobile .sd-root section[data-testid="component-shelf"] > *,
+html.sd-mobile .sd-root section[data-testid="component-shelf"] [data-testid="carousel-scroller"],
+html.sd-mobile .sd-root div[data-testid="grid-container"] {
+  max-width: 100% !important;
+  min-width: 0 !important;
+  box-sizing: border-box !important;
+}
+/* Le rembourrage horizontal de la page fait partie de la largeur : un conteneur
+   à `width: 100 %` dans un parent rembourré déborderait de la valeur du
+   rembourrage (c'est le cas typique des 28 px manquants). */
+html.sd-mobile .sd-root section[data-testid="home-page"],
+html.sd-mobile .sd-root section[data-testid="home-page"] > div,
+html.sd-mobile .sd-root #main-view,
+html.sd-mobile .sd-root main {
+  max-width: 100% !important;
+  box-sizing: border-box !important;
+}
+/* Une piste de carrousel plus longue que son conteneur, c'est normal : elle
+   défile. Ce qui ne doit pas arriver, c'est qu'elle rogne la page — la borne
+   est mise sur le conteneur, pas sur la piste. */
+html.sd-mobile .sd-root section[data-testid="component-shelf"] [data-testid="carousel-scroller"] {
+  width: 100% !important;
+}
+
+/* Le bas de page (publicités, pieds de page) n'a pas sa place dans
+   l'application : il est déjà masqué par la feuille d'origine, on garde la
+   dernière rangée collée au mini-lecteur sans bande vide. */
+html.sd-mobile .sd-root section[data-testid="home-page"] {
+  padding-bottom: calc(8px * var(--sd-u)) !important;
+  margin-bottom: 0 !important;
+}

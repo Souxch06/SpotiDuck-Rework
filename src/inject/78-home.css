@@ -1,0 +1,543 @@
+/* ==========================================================================
+   78 — L'accueil SpotiDuck
+
+   Notre page d'accueil : **notre** mise en page, les **données** de la page
+   (titres de rangées, pochettes, liens). Elle a été décidée avec l'utilisateur
+   après trois reprises de l'accueil du web player, dont la mise en page de
+   bureau ne tient pas sur un téléphone : quatre colonnes de pochettes de 59 px,
+   conteneurs de 440 px rognés dans une page de 412, « rien qui va », « c'est
+   encore coupé ».
+
+   Tout est écrit pour un téléphone, et rien ne dépend des mesures de Spotify :
+
+       grille    = auto-fill sur une largeur de carte utile (jamais un nombre
+                   de colonnes fixe, jamais une largeur en dur)
+       pochette  = toute la largeur de la carte, carrée
+       gouttière = 12 px × unité
+       rangées   = espacement 16 px × unité, titres 17 px × unité
+
+   Le calque occupe la zone de contenu : sous la barre du haut, au-dessus du
+   mini-lecteur (`--sd-bottom`), avec ses propres zones sûres. Il n'existe que
+   quand il a des données à montrer (`hidden` sinon) — la page reprend alors la
+   main : jamais d'écran maison vide par-dessus un écran vide.
+   ========================================================================== */
+
+html.sd-mobile .sd-layer .sd-home {
+  position: fixed;
+  top: calc(var(--sd-safe-t) + var(--sd-nav-h));
+  left: var(--sd-safe-l);
+  right: var(--sd-safe-r);
+  bottom: var(--sd-bottom);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: calc(10px * var(--sd-u));
+  /* Le bas de page garde une respiration, et la place du mini-lecteur est
+     ajoutée **ici** quand il est affiché : le conteneur s'arrête alors au-dessus
+     de lui, au lieu de passer dessous. */
+  padding: calc(6px * var(--sd-u)) 0 calc(20px * var(--sd-u));
+  scroll-padding-bottom: calc(20px * var(--sd-u));
+  background: var(--sd-bg);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  /* La WebView dessine une barre de défilement en surimpression : sur le
+     téléphone, elle apparaissait en haut à droite comme un bloc gris posé sur
+     la page (visible sur la capture du 25/09). Nos pages défilent au doigt,
+     sans barre — comme les écrans natifs. */
+  scrollbar-width: none;
+}
+html.sd-mobile .sd-layer .sd-home::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+html.sd-mobile .sd-layer .sd-home[hidden] {
+  display: none;
+}
+
+/* --------------------------------------------------------------------------
+   1. Salutation
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile .sd-layer .sd-home-greet {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 calc(14px * var(--sd-u));
+}
+html.sd-mobile .sd-layer .sd-home-hello {
+  font-size: calc(22px * var(--sd-u));
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  color: var(--sd-text);
+}
+html.sd-mobile .sd-layer .sd-home-sub {
+  font-size: calc(12.5px * var(--sd-u));
+  color: var(--sd-sub);
+}
+
+/* --------------------------------------------------------------------------
+   2. Filtres (Tout · Musique · Podcasts)
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile .sd-layer .sd-home-chips {
+  display: flex;
+  gap: calc(8px * var(--sd-u));
+  padding: 0 calc(14px * var(--sd-u));
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+html.sd-mobile .sd-layer .sd-home-chips::-webkit-scrollbar {
+  display: none;
+}
+html.sd-mobile .sd-layer .sd-chip {
+  flex: 0 0 auto;
+  min-height: calc(32px * var(--sd-u));
+  padding: 0 calc(14px * var(--sd-u));
+  border: 0;
+  border-radius: 999px;
+  background: var(--sd-bg-tint);
+  color: var(--sd-text);
+  font-size: calc(13px * var(--sd-u));
+  font-weight: 600;
+}
+html.sd-mobile .sd-layer .sd-chip.is-active {
+  background: var(--sd-accent);
+  color: var(--sd-bg);
+}
+html.sd-mobile .sd-layer .sd-chip:active {
+  opacity: 0.8;
+}
+/* Les trois filtres, nommés : chacun porte son propre libellé et son état. */
+html.sd-mobile .sd-layer .sd-chip-all,
+html.sd-mobile .sd-layer .sd-chip-music,
+html.sd-mobile .sd-layer .sd-chip-podcast {
+  flex: 0 0 auto;
+}
+
+/* --------------------------------------------------------------------------
+   3. Raccourcis — quatre commandes, toutes reliées au routeur ou aux feuilles
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile .sd-layer .sd-home-shortcuts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: calc(8px * var(--sd-u));
+  padding: 0 calc(14px * var(--sd-u));
+}
+html.sd-mobile .sd-layer .sd-shortcut {
+  display: flex;
+  align-items: center;
+  gap: calc(10px * var(--sd-u));
+  min-height: calc(56px * var(--sd-u));
+  padding: 0 calc(10px * var(--sd-u));
+  border: 0;
+  border-radius: calc(10px * var(--sd-u));
+  background: var(--sd-bg-hi, #1a1a1a);
+  color: var(--sd-text);
+  text-align: left;
+  font-size: calc(13px * var(--sd-u));
+  font-weight: 600;
+}
+html.sd-mobile .sd-layer .sd-shortcut:active {
+  background: var(--sd-bg-tint);
+}
+html.sd-mobile .sd-layer .sd-shortcut-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: calc(34px * var(--sd-u));
+  height: calc(34px * var(--sd-u));
+  border-radius: 50%;
+  background: var(--sd-bg-tint);
+  color: var(--sd-text);
+}
+html.sd-mobile .sd-layer .sd-shortcut-icon svg {
+  width: calc(18px * var(--sd-u));
+  height: calc(18px * var(--sd-u));
+  fill: currentColor;
+}
+html.sd-mobile .sd-layer .sd-shortcut-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --------------------------------------------------------------------------
+   4. Rangées
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile .sd-layer .sd-home-sections {
+  display: flex;
+  flex-direction: column;
+  gap: calc(16px * var(--sd-u));
+  padding-bottom: calc(10px * var(--sd-u));
+}
+html.sd-mobile .sd-layer .sd-home-section {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8px * var(--sd-u));
+}
+/* Même règle que pour la bibliothèque : le conteneur défile, donc ses enfants
+   (titre, filtres, en-têtes de rangée) gardent leur taille au lieu d'être
+   rétrécis par le moteur quand la liste est plus haute que l'écran. */
+html.sd-mobile .sd-layer .sd-home > * {
+  flex: 0 0 auto;
+}
+
+html.sd-mobile .sd-layer .sd-home-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: calc(10px * var(--sd-u));
+  padding: 0 calc(14px * var(--sd-u));
+}
+html.sd-mobile .sd-layer .sd-home-section-title {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(17px * var(--sd-u));
+  font-weight: 700;
+  letter-spacing: -0.2px;
+  color: var(--sd-text);
+}
+html.sd-mobile .sd-layer .sd-home-more {
+  flex: 0 0 auto;
+  font-size: calc(12px * var(--sd-u));
+  font-weight: 600;
+  color: var(--sd-sub);
+  text-decoration: none;
+}
+html.sd-mobile .sd-layer .sd-home-more:active {
+  color: var(--sd-text);
+}
+
+/* La grille : `auto-fill` sur une largeur de carte utile ⇒ deux colonnes sur
+   un téléphone, trois sur un grand, quatre sur un écran large — et jamais une
+   largeur en dur, donc jamais de rognage. */
+html.sd-mobile .sd-layer .sd-home-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(calc(140px * var(--sd-u)), 1fr));
+  gap: calc(12px * var(--sd-u));
+  padding: 0 calc(14px * var(--sd-u));
+}
+
+html.sd-mobile .sd-layer .sd-home-card {
+  display: flex;
+  flex-direction: column;
+  gap: calc(6px * var(--sd-u));
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+html.sd-mobile .sd-layer .sd-home-cover {
+  display: block;
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+  border-radius: calc(8px * var(--sd-u));
+  background: var(--sd-bg-hi, #1a1a1a);
+}
+html.sd-mobile .sd-layer .sd-home-cover img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+html.sd-mobile .sd-layer .sd-home-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+html.sd-mobile .sd-layer .sd-home-title {
+  font-size: calc(13px * var(--sd-u));
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--sd-text);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+html.sd-mobile .sd-layer .sd-home-sub {
+  font-size: calc(11.5px * var(--sd-u));
+  color: var(--sd-sub);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+html.sd-mobile .sd-layer .sd-home-card:active .sd-home-cover {
+  opacity: 0.75;
+}
+/* Chaque carte porte son type ; seuls les podcasts se distinguent par le
+   texte, pas par une couleur de plus. */
+html.sd-mobile .sd-layer .sd-home-card-music,
+html.sd-mobile .sd-layer .sd-home-card-other,
+html.sd-mobile .sd-layer .sd-home-card-podcast {
+  min-width: 0;
+}
+html.sd-mobile .sd-layer .sd-home-card-podcast .sd-home-sub {
+  color: var(--sd-accent);
+}
+
+/* Une catégorie vide : on le dit, plutôt que de laisser un blanc. */
+html.sd-mobile .sd-layer .sd-home.sd-home-empty .sd-home-sections::after {
+  content: attr(data-empty);
+  display: block;
+  padding: 0 calc(14px * var(--sd-u));
+  font-size: calc(13px * var(--sd-u));
+  color: var(--sd-sub);
+}
+
+/* --------------------------------------------------------------------------
+   5. Vos statistiques
+   Le bloc qui répond à « mets les statistiques d'écoutes et plein de données
+   intéressantes » : tuiles de chiffres, sept derniers jours, classements,
+   moments de la journée, découvertes. Rien n'est décoratif : tout est calculé
+   par `Stats.summary()` à partir des écoutes enregistrées (localement).
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile .sd-layer .sd-home-stats {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8px * var(--sd-u));
+  padding: 0 calc(14px * var(--sd-u));
+}
+html.sd-mobile .sd-layer .sd-home-stats[hidden] {
+  display: none;
+}
+
+/* Tuiles : deux par ligne sur un téléphone, trois sur un écran large. */
+html.sd-mobile .sd-layer .sd-stat-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(calc(104px * var(--sd-u)), 1fr));
+  gap: calc(8px * var(--sd-u));
+}
+html.sd-mobile .sd-layer .sd-stat-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: calc(10px * var(--sd-u));
+  border-radius: calc(10px * var(--sd-u));
+  background: var(--sd-bg-hi, #1a1a1a);
+  min-width: 0;
+}
+html.sd-mobile .sd-layer .sd-stat-value {
+  font-size: calc(18px * var(--sd-u));
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  color: var(--sd-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+html.sd-mobile .sd-layer .sd-stat-label {
+  font-size: calc(11px * var(--sd-u));
+  color: var(--sd-sub);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Les tuiles portent maintenant leur unité et ce qu'elles comptent : la
+   troisième ligne est là pour lever l'ambiguïté, pas pour décorer. */
+html.sd-mobile .sd-layer .sd-stat-hint {
+  font-size: calc(10px * var(--sd-u));
+  line-height: 1.35;
+  color: var(--sd-muted, var(--sd-sub));
+  opacity: 0.72;
+}
+html.sd-mobile .sd-layer .sd-stat-value {
+  font-variant-numeric: tabular-nums;
+}
+/* La phrase de tête : le temps écouté, en clair, avant les cartes. */
+html.sd-mobile .sd-layer .sd-stat-lead {
+  margin: 0 0 calc(10px * var(--sd-u));
+  font-size: calc(13px * var(--sd-u));
+  line-height: 1.45;
+  color: var(--sd-text);
+  font-weight: 600;
+}
+/* Une note dit toujours d'où vient le chiffre — mesuré ou annoncé. */
+html.sd-mobile .sd-layer .sd-stat-note {
+  margin: calc(8px * var(--sd-u)) 0 0;
+  font-size: calc(11px * var(--sd-u));
+  line-height: 1.4;
+  color: var(--sd-sub);
+}
+html.sd-mobile .sd-layer .sd-stat-note-est {
+  opacity: 0.85;
+}
+
+/* Cartes de statistiques. */
+html.sd-mobile .sd-layer .sd-stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8px * var(--sd-u));
+  padding: calc(12px * var(--sd-u));
+  border-radius: calc(12px * var(--sd-u));
+  background: var(--sd-bg-hi, #1a1a1a);
+}
+html.sd-mobile .sd-layer .sd-stat-card-title {
+  margin: 0;
+  font-size: calc(14px * var(--sd-u));
+  font-weight: 700;
+  color: var(--sd-text);
+}
+html.sd-mobile .sd-layer .sd-stat-reset {
+  min-height: calc(28px * var(--sd-u));
+  padding: 0 calc(10px * var(--sd-u));
+  border: 1px solid var(--sd-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--sd-sub);
+  font-size: calc(11.5px * var(--sd-u));
+  font-weight: 600;
+}
+html.sd-mobile .sd-layer .sd-stat-reset:active {
+  color: var(--sd-text);
+}
+html.sd-mobile .sd-layer .sd-stat-empty {
+  margin: 0;
+  font-size: calc(13px * var(--sd-u));
+  line-height: 1.4;
+  color: var(--sd-sub);
+}
+
+/* Sept derniers jours : une barre par jour, aujourd'hui mis en avant. */
+html.sd-mobile .sd-layer .sd-stat-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: calc(6px * var(--sd-u));
+  height: calc(84px * var(--sd-u));
+}
+html.sd-mobile .sd-layer .sd-stat-col {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+  height: 100%;
+}
+html.sd-mobile .sd-layer .sd-stat-bar {
+  width: 100%;
+  min-height: calc(3px * var(--sd-u));
+  border-radius: calc(4px * var(--sd-u));
+  background: var(--sd-sub);
+  opacity: 0.5;
+}
+html.sd-mobile .sd-layer .sd-stat-col.is-today .sd-stat-bar {
+  background: var(--sd-accent);
+  opacity: 1;
+}
+html.sd-mobile .sd-layer .sd-stat-count {
+  font-size: calc(10px * var(--sd-u));
+  color: var(--sd-sub);
+  font-variant-numeric: tabular-nums;
+}
+html.sd-mobile .sd-layer .sd-stat-day {
+  font-size: calc(10px * var(--sd-u));
+  color: var(--sd-sub);
+}
+
+/* Classements (artistes, titres) et moments de la journée. */
+html.sd-mobile .sd-layer .sd-stat-bars,
+html.sd-mobile .sd-layer .sd-stat-bands {
+  display: flex;
+  flex-direction: column;
+  gap: calc(7px * var(--sd-u));
+}
+html.sd-mobile .sd-layer .sd-stat-bar-row,
+html.sd-mobile .sd-layer .sd-stat-band {
+  display: grid;
+  grid-template-columns: minmax(0, 40%) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: calc(8px * var(--sd-u));
+  min-width: 0;
+}
+html.sd-mobile .sd-layer .sd-stat-band {
+  grid-template-columns: minmax(0, 34%) minmax(0, 1fr) auto;
+}
+html.sd-mobile .sd-layer .sd-stat-bar-label,
+html.sd-mobile .sd-layer .sd-stat-band-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(12.5px * var(--sd-u));
+  font-weight: 600;
+  color: var(--sd-text);
+}
+html.sd-mobile .sd-layer .sd-stat-bar-track {
+  display: block;
+  position: relative;
+  height: calc(6px * var(--sd-u));
+  border-radius: 999px;
+  background: var(--sd-bg-tint);
+  overflow: hidden;
+  min-width: 0;
+}
+html.sd-mobile .sd-layer .sd-stat-bar-track > i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--sd-accent);
+}
+html.sd-mobile .sd-layer .sd-stat-band.is-fav .sd-stat-bar-track > i {
+  background: var(--sd-text);
+}
+html.sd-mobile .sd-layer .sd-stat-band.is-fav .sd-stat-band-name {
+  color: var(--sd-accent);
+}
+html.sd-mobile .sd-layer .sd-stat-bar-value {
+  font-size: calc(11px * var(--sd-u));
+  color: var(--sd-sub);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Faits marquants : moment préféré, jour préféré, temps du jour. */
+html.sd-mobile .sd-layer .sd-stat-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(6px * var(--sd-u));
+}
+html.sd-mobile .sd-layer .sd-stat-fact {
+  display: inline-flex;
+  flex-direction: column;
+  padding: calc(6px * var(--sd-u)) calc(10px * var(--sd-u));
+  border-radius: calc(8px * var(--sd-u));
+  background: var(--sd-bg-tint);
+  font-size: calc(11px * var(--sd-u));
+}
+html.sd-mobile .sd-layer .sd-stat-fact b {
+  font-size: calc(13px * var(--sd-u));
+  font-weight: 700;
+  color: var(--sd-text);
+}
+html.sd-mobile .sd-layer .sd-stat-fact span {
+  color: var(--sd-sub);
+}
+
+/* Découvertes de la semaine. */
+html.sd-mobile .sd-layer .sd-stat-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(6px * var(--sd-u));
+}
+html.sd-mobile .sd-layer .sd-stat-chip {
+  padding: calc(6px * var(--sd-u)) calc(12px * var(--sd-u));
+  border-radius: 999px;
+  background: var(--sd-bg-tint);
+  color: var(--sd-text);
+  font-size: calc(12px * var(--sd-u));
+  font-weight: 600;
+}

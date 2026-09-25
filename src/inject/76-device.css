@@ -1,0 +1,79 @@
+/* ==========================================================================
+   76 — L'affichage suit l'appareil (paliers)
+
+   `--sd-u` est déjà déduite de l'appareil par la coque (`Device.apply` : largeur
+   de mise en page **et** hauteur, entre 0,92 et 1,15). Cette feuille-ci règle
+   ce qu'une simple proportion ne dit pas : sur un écran étroit on **resserre**
+   la mise en page plutôt que de rétrécir le texte ; en paysage c'est la hauteur
+   qui manque, donc les barres s'amincissent ; sur un écran large, elles
+   reprennent de l'air.
+
+   Les classes sont posées sur `<html>` par la coque, jamais devinées en CSS :
+   une WebView ne connaît ni les pouces de l'écran, ni le réglage de taille du
+   système. Ce sont donc des mesures, pas des suppositions.
+   ========================================================================== */
+
+/* Téléphone étroit (≤ 379 px de large) : des barres plus fines, du texte intact.
+   Les commandes, elles, gardent `--sd-tap` (48 dp × 0,92 = 44,2 px) : une barre
+   plus fine ne doit pas donner des boutons intouchables. */
+html.sd-mobile.sd-size-compact {
+  --sd-nav-h: calc(52px * var(--sd-u));
+  --sd-mini-h: calc(108px * var(--sd-u));
+  --sd-tabbar-h: calc(54px * var(--sd-u));
+}
+/* Téléphone courant (380–599 px) : la référence du projet. */
+html.sd-mobile.sd-size-normal {
+  --sd-nav-h: calc(56px * var(--sd-u));
+  --sd-mini-h: calc(120px * var(--sd-u));
+  --sd-tabbar-h: calc(64px * var(--sd-u));
+}
+/* Écran large (≥ 600 px : tablette, pliable ouvert) : les barres prennent de
+   l'air, et le contenu garde toute la largeur — c'est lui qui en profite. */
+html.sd-mobile.sd-size-wide {
+  --sd-nav-h: calc(60px * var(--sd-u));
+  --sd-mini-h: calc(136px * var(--sd-u));
+  --sd-tabbar-h: calc(68px * var(--sd-u));
+  --m-pad: calc(20px * var(--sd-u));
+}
+
+/* Paysage : la hauteur est la ressource rare. Les barres s'amincissent — mais
+   rien ne disparaît : « les boutons en bas de l'écran disparaissent » a déjà
+   été le reproche d'une version précédente. */
+html.sd-mobile.sd-orient-landscape {
+  --sd-nav-h: calc(46px * var(--sd-u));
+  --sd-mini-h: calc(96px * var(--sd-u));
+  --sd-tabbar-h: calc(50px * var(--sd-u));
+  --sd-player-header-h: calc(48px * var(--sd-u));
+}
+/* En paysage, le mini-lecteur garde ses trois rangées mais serre les
+   espacements : sinon il mange la moitié de l'écran. */
+html.sd-mobile.sd-orient-landscape .sd-layer .sd-mini {
+  gap: calc(2px * var(--sd-u));
+  padding: calc(4px * var(--sd-u)) calc(12px * var(--sd-u)) calc(4px * var(--sd-u));
+}
+html.sd-mobile.sd-orient-landscape .sd-layer .sd-mini-top .sd-mini-art {
+  width: calc(40px * var(--sd-u));
+  height: calc(40px * var(--sd-u));
+  flex-basis: calc(40px * var(--sd-u));
+}
+html.sd-mobile.sd-orient-landscape .sd-layer .sd-mini-row {
+  height: calc(34px * var(--sd-u));
+}
+
+/* Les cibles tactiles ne suivent pas les barres : elles gardent leur plancher
+   (`--sd-tap` = 48 dp × unité ≥ 44 px) quel que soit le palier. C'est la règle
+   Material, et la sonde la mesure à chaque exécution. */
+html.sd-mobile .sd-layer .sd-mini-row,
+html.sd-mobile .sd-layer .sd-mini-row2 {
+  min-height: var(--sd-tap);
+}
+
+/* **La barre d'onglets désactivée : sa place est nulle.** Ce bloc doit rester
+   **après** les paliers ci-dessus : `--sd-tabbar-h` y est redéclaré avec la même
+   spécificité, donc la dernière règle gagne. Mesuré en CI le 25/09 : la barre
+   était cachée (`sd-no-tabbar`) et sa hauteur de 64 px restait dans la réserve du
+   bas — l'écran montrait la page coupée avec une bande morte de 64 px en dessous,
+   exactement ce que l'utilisateur a signalé (« l'écran est bugué vers le bas »). */
+html.sd-mobile.sd-no-tabbar {
+  --sd-tabbar-h: 0px;
+}

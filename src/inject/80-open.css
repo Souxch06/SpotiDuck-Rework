@@ -1,0 +1,127 @@
+/* ==========================================================================
+   80 — Ouvrir une page : jamais d'écran noir
+
+   Signalé le 25/09 : « quand on appuie sur une playlist, écran noir » — et le
+   retour ne ramenait pas à la bibliothèque.
+
+   La cause est dans la façon d'ouvrir la page, pas dans la page : nos lignes
+   de bibliothèque sont des liens, et un appui faisait donc charger l'adresse
+   par la WebView **comme un premier chargement** — Spotify entier se
+   rechargeait (plusieurs secondes pendant lesquelles il n'y a rien à peindre :
+   du noir), notre coque repartait de zéro, et l'historique de l'application ne
+   contenait plus rien à défaire.
+
+   Le module `Open` remet la navigation au lecteur (application d'une seule
+   page). Ce fichier ne s'occupe que du filet : un voile qui **dit** ce qui
+   s'ouvre, pour que l'écran ne soit jamais vide, même sur la dernière issue —
+   une navigation réelle, quand le routeur de la page ne suit pas.
+
+   Deux règles ont guidé le dessin :
+     · il ne couvre que la zone de contenu : la navigation et le lecteur
+       restent visibles (le lecteur ne disparaît jamais, c'est la règle), et
+       `pointer-events: none` laisse tout utilisable ;
+     · il disparaît tout seul — au plus tard au bout de huit secondes, même si
+       la page ne dit rien : un voile qui reste serait pire que le noir.
+   ========================================================================== */
+
+html.sd-mobile .sd-layer .sd-open {
+  position: fixed;
+  /* La zone de contenu : sous la barre de navigation, au-dessus du lecteur. */
+  top: calc(var(--sd-safe-t) + var(--sd-nav-h));
+  left: var(--sd-safe-l);
+  right: var(--sd-safe-r);
+  bottom: var(--sd-bottom);
+  /* Au-dessus des pages (20) et sous la feuille du lecteur (40). */
+  z-index: 38;
+  /* Pas tout à fait opaque : la liste qu'on quitte reste lisible derrière le
+     voile. Le noir plein, c'est justement ce que l'utilisateur a signalé. */
+  background: var(--sd-bg);
+  opacity: 0.9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+html.sd-mobile .sd-layer .sd-open[hidden] {
+  display: none;
+}
+
+/* La barre de progression : elle respire, elle ne prétend pas connaître le
+   pourcentage — on ne sait pas où en est la page. */
+html.sd-mobile .sd-layer .sd-open-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+html.sd-mobile .sd-layer .sd-open-bar::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 40%;
+  background: var(--sd-green, #1ed760);
+  animation: sd-open-move 1100ms linear infinite;
+}
+
+@keyframes sd-open-move {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+
+html.sd-mobile .sd-layer .sd-open-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 78%;
+  padding: 12px 16px;
+  border-radius: var(--sd-radius-lg);
+  background: var(--sd-bg-elev);
+  color: var(--sd-text);
+  font-size: 14px;
+  line-height: 1.2;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+}
+
+html.sd-mobile .sd-layer .sd-open-spin {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  border-top-color: var(--sd-text);
+  animation: sd-open-turn 800ms linear infinite;
+}
+
+@keyframes sd-open-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+html.sd-mobile .sd-layer .sd-open-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Qui a demandé moins d'animation n'en a pas. */
+@media (prefers-reduced-motion: reduce) {
+  html.sd-mobile .sd-layer .sd-open-bar::after,
+  html.sd-mobile .sd-layer .sd-open-spin {
+    animation: none;
+  }
+  html.sd-mobile .sd-layer .sd-open-bar::after {
+    width: 100%;
+    opacity: 0.5;
+  }
+}

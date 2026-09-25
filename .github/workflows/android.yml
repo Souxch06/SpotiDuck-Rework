@@ -1,0 +1,187 @@
+name: Android APK
+
+# Builds a signed, installable APK from `android/` and attaches it to the
+# matching GitHub release.
+#
+#   • tag push (v2.2.0)      → build + attach to the release of that tag
+#   • release published      → build + attach to that release
+#   • manual run             → build + upload the artifact only
+#
+# Signing key: set `SD_KEYSTORE_BASE64` + `SD_KEYSTORE_PASSWORD`
+# (+ optional `SD_KEY_ALIAS` / `SD_KEY_PASSWORD`) as repository secrets to sign
+# with your own key. Without them the build uses the project's public key
+# (`android/keystore/`, certificate committed): it is identical on every run, so
+# Android accepts the update over an already installed copy.
+#
+# The certificate must be the *same* for every build: Android compares the
+# signer certificate, not just the key pair. Generating a fresh self-signed
+# certificate per run (random serial + build date) made every release
+# un-installable over the previous one — that was the "package conflicts with an
+# existing package" error.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+          cache-read-only: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build the injected UI bundle
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+          node tools/sync-android.mjs
+
+      - name: Check the cross-file links (bridge, classes, resources)
+        run: npm run audit
+
+      - name: Run the UI smoke tests
+        run: npm run smoke
+
+      - name: Prepare the signing keystore
+        id: signing
+        env:
+          KEYSTORE_B64: ${{ secrets.SD_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -n "${KEYSTORE_B64:-}" ]; then
+            printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.p12"
+            echo "SD_KEYSTORE_PASSWORD=${{ secrets.SD_KEYSTORE_PASSWORD }}" >> "$GITHUB_ENV"
+            echo "SD_KEY_ALIAS=${{ secrets.SD_KEY_ALIAS }}" >> "$GITHUB_ENV"
+            echo "SD_KEY_PASSWORD=${{ secrets.SD_KEY_PASSWORD }}" >> "$GITHUB_ENV"
+            echo "signed=private" >> "$GITHUB_OUTPUT"
+          else
+            # Public, frozen key of the project: the private material is in this
+            # repository (it is not a secret — anyone can read it), and the
+            # *certificate* is committed in `android/keystore/spotiduck.crt`
+            # with a fixed serial number and fixed validity dates. Both are
+            # required for the signature to stay identical from one release to
+            # the next.
+            printf '%s' \
+              'MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgYMYLwgR3UF2BJ8ccubVxPp4rdoKfrCobj70tVAGCaE2hRANCAASBMuT1rH77L+PzW3ww0RypDVAcbtMx2/iTVu24Ar5tXFQCI7rWZ2URckr86rorZUFN0NkDo1uvN9MooBbJoNjo' \
+              | base64 -d > "$RUNNER_TEMP/derived.der"
+            openssl pkcs8 -inform DER -in "$RUNNER_TEMP/derived.der" -nocrypt -out "$RUNNER_TEMP/derived.pem"
+            openssl pkcs12 -export -inkey "$RUNNER_TEMP/derived.pem" -in android/keystore/spotiduck.crt \
+              -name spotiduck -passout pass:spotiduck -out "$RUNNER_TEMP/release.p12"
+            echo "SD_KEYSTORE_PASSWORD=spotiduck" >> "$GITHUB_ENV"
+            echo "SD_KEY_ALIAS=spotiduck" >> "$GITHUB_ENV"
+            echo "SD_KEY_PASSWORD=spotiduck" >> "$GITHUB_ENV"
+            echo "signed=project (public key)" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Keystore secret missing::Signing with the project's public key. Add SD_KEYSTORE_BASE64 to sign with your own key."
+          fi
+          # The signer certificate is what Android compares when updating an
+          # installed app: print it so a change is visible in the log.
+          openssl pkcs12 -in "$RUNNER_TEMP/release.p12" -nokeys -passin pass:"${{ secrets.SD_KEYSTORE_PASSWORD || 'spotiduck' }}" 2>/dev/null \
+            | openssl x509 -noout -fingerprint -sha256 || true
+          echo "SD_KEYSTORE=$RUNNER_TEMP/release.p12" >> "$GITHUB_ENV"
+          echo "SD_KEYSTORE_TYPE=PKCS12" >> "$GITHUB_ENV"
+
+      - name: Assemble the release APK
+        id: assemble
+        working-directory: android
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          gradle --no-daemon --stacktrace --console=plain \
+            -PsdVersionCode="${GITHUB_RUN_NUMBER}" \
+            -PsdVersionName="$(node -p "require('../package.json').version")" \
+            assembleRelease 2>&1 | tee build.log
+
+      # A failed Gradle run must be diagnosable from the API alone: the log is
+      # echoed as annotations (the artifact host is not always reachable from
+      # CI-less tooling).
+      - name: Report Gradle errors
+        if: steps.assemble.outcome == 'failure'
+        run: |
+          set -euo pipefail
+          LOG=android/build.log
+          {
+            grep -n "What went wrong" -A 12 "$LOG" | head -20 || true
+            grep -nE "^e: |error: |Could not |Unresolved reference|FAILURE: " "$LOG" | head -10 || true
+            echo "=== tail ==="
+            tail -12 "$LOG"
+          } > /tmp/report.txt
+          cat /tmp/report.txt
+          MSG=$(head -c 2200 /tmp/report.txt | tr '\n' '|' | sed 's/%/%25/g; s/\r//g')
+          echo "::error title=Gradle failure::${MSG}"
+          exit 1
+
+      - name: Locate and rename the APK
+        id: apk
+        if: steps.assemble.outcome == 'success'
+        run: |
+          set -euo pipefail
+          SRC=$(find android/app/build/outputs/apk/release -name '*.apk' | head -1)
+          test -n "$SRC"
+          NAME="SpotiDuck-$(node -p "require('./package.json').version")-$(git rev-parse --short HEAD).apk"
+          cp "$SRC" "$NAME"
+          echo "path=$NAME" >> "$GITHUB_OUTPUT"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          ls -lh "$NAME"
+
+      - name: Show the signature
+        if: steps.assemble.outcome == 'success'
+        run: |
+          APK="${{ steps.apk.outputs.path }}"
+          "$ANDROID_HOME"/build-tools/*/apksigner verify --print-certs "$APK" || true
+
+      - name: Upload the APK artifact
+        if: steps.assemble.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.apk.outputs.name }}
+          path: ${{ steps.apk.outputs.path }}
+          if-no-files-found: error
+
+      - name: Attach the APK to the release
+        if: steps.assemble.outcome == 'success' && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'release')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "$TAG" --notes "SpotiDuck $TAG" --verify-tag
+          fi
+          gh release upload "$TAG" "${{ steps.apk.outputs.path }}" --clobber
+          gh release view "$TAG" --json assets --jq '.assets[].name'
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### SpotiDuck APK"
+            echo ""
+            echo "- file: \`${{ steps.apk.outputs.name }}\`"
+            echo "- signing: **${{ steps.signing.outputs.signed }}**"
+            echo "- commit: \`${{ github.sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
