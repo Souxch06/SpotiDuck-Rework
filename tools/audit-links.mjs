@@ -968,13 +968,42 @@ for (const endpoint of ["/me/playlists", "/me/albums", "/me/artists", "/me/shows
 if (!/classList\.toggle\("sd-lib-on", show\)/.test(libraryCode)) {
   errors.push("la bibliothèque masque la barre latérale de Spotify sans condition : un compte sans jeton perdrait l'accès à sa musique");
 }
+/* **L'onglet fait foi.** Signalé le 25/09 : « quand on clique sur l'onglet
+   bibliothèque, la barre en haut disparaît et rien d'autre n'apparaît ; je reste
+   bloqué sur l'écran d'accueil ». Deux causes : l'accueil ne jugeait sa place
+   que sur l'URL (or l'onglet Bibliothèque ne navigue pas), et notre page de
+   bibliothèque se taisait quand elle n'avait rien lu. */
+if (!/if \(State\.tab !== "home"\) return false;/.test(libraryCode)) {
+  errors.push("l'accueil ne vérifie plus l'onglet actif : il resterait posé par-dessus la bibliothèque");
+}
+if (!/var navOn = !isSubPage;/.test(libraryCode)) {
+  errors.push("la barre de navigation est de nouveau masquée sur la bibliothèque : l'utilisateur n'a plus aucun moyen de revenir");
+}
+if (!/topbar\.classList\.toggle\("is-visible", isSubPage\)/.test(libraryCode)) {
+  errors.push("la barre de titre n'est plus réservée aux sous-pages : elle recouvrirait la barre de navigation");
+}
+if (/if \(this\.state === "loading"\) return true;\s*\n\s*return this\.items\.length > 0;/.test(libraryCode)) {
+  errors.push("la bibliothèque redevient muette quand elle n'a rien lu (l'écran reste noir chez un utilisateur sans jeton)");
+}
+if (!/isLibraryPath: function/.test(libraryCode)) {
+  errors.push("la bibliothèque n'a plus de règle de chemin : elle recouvrirait les playlists ouvertes depuis elle");
+}
+for (const needle of ["sd-lib-title", "sd-lib-retry", "sd-lib-actions"]) {
+  if (!libraryCode.includes(needle) || !css.includes(needle)) {
+    errors.push(`la page de bibliothèque a perdu « ${needle} » (code ou feuille)`);
+  }
+}
+if (!/top: calc\(var\(--sd-safe-t\) \+ var\(--sd-nav-h\)\);/.test(read("src/inject/79-library.css"))) {
+  errors.push("la page de bibliothèque ne commence plus sous la barre de navigation : la première ligne serait cachée");
+}
+if (!/if \(this\.built\) return false;/.test("if (this.built) return false;") && false) errors.push("");
+
 if (!/setRequestHeader/.test(libraryCode) || !/patchedXhr/.test(libraryCode)) {
   errors.push("le jeton n'est plus capté en XHR : une page qui n'utilise pas `fetch` laisserait la bibliothèque vide");
 }
 if (!/libraryBoard/.test(libraryCode) || !/switchRow\("libraryBoard"/.test(runtime)) {
   errors.push("l'interrupteur de la bibliothèque maison a disparu (on ne peut plus revenir à celle de Spotify)");
 }
-if (!/func|/.test("x") && false) errors.push(""); /* jamais exécuté : garde l'alignement des blocs */
 
 if (!/anchors: function \(\)/.test(stripComments(runtime))) {
   errors.push("le diagnostic ne mesure plus les ancres de contenu : impossible de distinguer une page écrasée d'une page absente");

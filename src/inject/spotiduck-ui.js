@@ -184,7 +184,9 @@
       libraryLoading: "Chargement de votre bibliothèque…",
       libraryEmpty: "Aucune playlist, aucun album ni artiste enregistré pour ce compte.",
       libraryNoToken: "Connectez-vous à Spotify pour retrouver votre bibliothèque.",
-      libraryError: "Votre bibliothèque n'a pas répondu — Spotify reste disponible ci-dessous.",
+      libraryError: "Votre bibliothèque n'a pas répondu pour l'instant.",
+      libraryRetry: "Réessayer",
+      libraryHint: "Vous pouvez aussi retrouver celle de Spotify : Réglages → Bibliothèque SpotiDuck.",
       /* Statistiques d'écoute */
       stats: "Statistiques d'écoute",
       statsTitle: "Vos statistiques",
@@ -1607,10 +1609,21 @@
          l'autre et la barre de titre (retour + nom de la page) était
          invisible sur la bibliothèque. L'application d'origine fait pareil :
          on quitte la bibliothèque par « Fermer », pas par l'onglet. */
-      var navOn = !isSubPage && !isLibrary;
+      /* **La barre de navigation reste aussi sur la bibliothèque.** C'est la
+         seule navigation de l'application (la barre d'onglets du bas est
+         désactivée par défaut) : la masquer là enfermait l'utilisateur —
+         « quand on clique sur l'onglet bibliothèque, la barre en haut disparaît
+         et rien d'autre n'apparaît ; je reste bloqué ». Seules les sous-pages
+         (playlist, album) prennent la barre, avec leur bouton retour. */
+      var navOn = !isSubPage;
       html.classList.toggle("sd-nav-on", navOn);
+      var key = s.tab + "/" + s.route;
       /* Un changement de vue remplace le contenu : c'est le moment de
          revérifier que notre feuille n'a rien effacé. */
+      /* `key` est calculé **avant** d'être lu : déclaré après, il valait
+         `undefined` au premier passage (les `var` sont remontées), donc le bloc
+         se croyait toujours sur une nouvelle vue et se rejouait à chaque
+         repeint. */
       if (UI.lastRouteKey !== key) {
         UI.lastRouteKey = key;
         Content.apply();
@@ -1624,14 +1637,18 @@
         item.setAttribute("aria-selected", active ? "true" : "false");
       });
 
-      var key = s.tab + "/" + s.route;
-      var showTop = isLibrary || isSubPage;
-      e.topbar.classList.toggle("is-visible", showTop);
+      /* Barre de titre : **sous-pages seulement** (retour + nom de la page).
+         Sur la bibliothèque, c'est la page elle-même qui porte son titre, et la
+         barre de navigation reste au-dessus : deux barres au même bord se
+         recouvriraient, et c'est la navigation qui doit gagner. */
+      e.topbar.classList.toggle("is-visible", isSubPage);
       e.topbarBack.style.display = isSubPage ? "" : "none";
-      e.topbarClose.style.display = isLibrary ? "" : "none";
-      e.topbarTitle.classList.toggle("is-large", isLibrary);
-      var label = isLibrary ? Settings.labels.library : Spotify.pageTitle() || "";
-      if (e.topbarTitle.textContent !== label) e.topbarTitle.textContent = label;
+      e.topbarClose.style.display = "none";
+      if (isSubPage) {
+        e.topbarTitle.classList.remove("is-large");
+        var label = Spotify.pageTitle() || "";
+        if (e.topbarTitle.textContent !== label) e.topbarTitle.textContent = label;
+      }
 
       // Class-driven so the mini player docks correctly when the bar is off
       // (see `html.sd-no-tabbar` in the stylesheet).
@@ -3615,6 +3632,13 @@
     shouldShow: function () {
       if (!Settings.homeBoard) return false;
       if (!this.built) return false;
+      /* **L'onglet fait foi.** Signalé le 25/09 : « quand on clique sur l'onglet
+         bibliothèque, la barre en haut disparaît et rien d'autre n'apparaît ; je
+         reste bloqué sur l'écran d'accueil ». L'accueil ne regardait que le
+         chemin de l'URL — or un appui sur l'onglet Bibliothèque **ne change pas
+         d'URL** (c'est la barre latérale de Spotify qui est montrée) : l'accueil
+         se croyait donc toujours à sa place et couvrait l'écran. */
+      if (State.tab !== "home") return false;
       /* Les statistiques suffisent : l'accueil est **notre** écran, il n'a pas
          besoin que Spotify publie des rangées pour exister. */
       if (!this.data.length && !Stats.hasData()) return false;
@@ -4227,7 +4251,7 @@
       el.setAttribute("role", "region");
       el.setAttribute("aria-label", Settings.labels.library);
       el.innerHTML =
-        '<div class="sd-lib-head"><span class="sd-lib-sum"></span></div>' +
+        '<div class="sd-lib-head"><h1 class="sd-lib-title"></h1><span class="sd-lib-sum"></span></div>' +
         '<div class="sd-lib-chips" role="tablist">' +
         '<button class="sd-chip sd-lib-chip" type="button" role="tab" data-filter="all"></button>' +
         '<button class="sd-chip sd-lib-chip" type="button" role="tab" data-filter="playlist"></button>' +
@@ -4236,7 +4260,8 @@
         '<button class="sd-chip sd-lib-chip" type="button" role="tab" data-filter="show"></button>' +
         "</div>" +
         '<div class="sd-lib-list"></div>' +
-        '<p class="sd-lib-note"></p>';
+        '<p class="sd-lib-note"></p>' +
+        '<div class="sd-lib-actions"><button class="sd-btn sd-lib-retry" type="button"></button></div>';
       this.el = el;
       UI.layer.appendChild(el);
       var self = this;
@@ -4246,6 +4271,15 @@
           self.render();
         });
       });
+      var retry = $(".sd-lib-retry", el);
+      if (retry) {
+        retry.addEventListener("click", function () {
+          self.state = "loading";
+          self.loadedAt = 0;
+          self.apply();
+          self.load(true);
+        });
+      }
       this.built = true;
       return true;
     },
@@ -4283,6 +4317,8 @@
     render: function () {
       if (!this.el) return 0;
       $(".sd-lib-sum", this.el).textContent = this.summary();
+      var heading = $(".sd-lib-title", this.el);
+      if (heading) heading.textContent = Settings.labels.library;
       var names = {
         all: Settings.labels.libraryAll,
         playlist: Settings.labels.libraryPlaylists,
@@ -4300,9 +4336,19 @@
       var list = $(".sd-lib-list", this.el);
       list.textContent = "";
       var note = $(".sd-lib-note", this.el);
+      var actions = $(".sd-lib-actions", this.el);
+      var retry = $(".sd-lib-retry", this.el);
       var message = this.note();
       note.textContent = message;
       note.hidden = !message;
+      /* Quand il n'y a rien à montrer, on dit quoi faire : réessayer, et où
+         retrouver la bibliothèque de Spotify si on la préfère. */
+      if (retry) retry.textContent = Settings.labels.libraryRetry;
+      if (actions) {
+        var nothing = !!message && (this.state === "no-token" || this.state === "error" || this.state === "empty");
+        actions.hidden = !nothing;
+        if (nothing && retry) retry.setAttribute("aria-label", Settings.labels.libraryRetry + " — " + Settings.labels.libraryHint);
+      }
       this.filtered().forEach(function (row) {
         var link = document.createElement("a");
         link.className = "sd-lib-row sd-lib-row-" + row.type;
@@ -4335,12 +4381,30 @@
       return this.filtered().length;
     },
 
+    /**
+     * Le chemin sur lequel **notre** bibliothèque a sa place.
+     *
+     * L'onglet Bibliothèque ne navigue pas : l'URL reste celle d'où l'on vient.
+     * Notre page est plein écran, elle doit donc se retirer dès qu'une sous-page
+     * s'ouvre (une playlist, un album…) — sinon elle recouvrirait la playlist
+     * qu'on vient d'ouvrir depuis elle.
+     */
+    isLibraryPath: function () {
+      if (Home.isHomePath()) return true;
+      return /^\/search(\/|$)/.test((location.pathname || "").replace(/\/+$/, ""));
+    },
+
     shouldShow: function () {
       if (!Settings.libraryBoard) return false;
       if (!this.built) return false;
       if (State.tab !== "library") return false;
-      if (this.state === "loading") return true;
-      return this.items.length > 0;
+      if (!this.isLibraryPath()) return false;
+      /* **Toujours**, y compris sans données : sur ce téléphone, la barre
+         latérale de Spotify ne montre aucune playlist (« je ne vois aucune de
+         mes playlists ») — la garder comme repli, c'est laisser un écran noir.
+         Notre page, elle, dit toujours où elle en est (chargement, pas de jeton,
+         API muette, ou sa liste). */
+      return true;
     },
 
     apply: function () {
@@ -4363,7 +4427,7 @@
          exprès », c'est exactement l'erreur qui a coûté deux versions à
          l'accueil. */
       this.build();
-      if (State.tab !== "library") {
+      if (State.tab !== "library" || !this.isLibraryPath()) {
         this.leave();
         return false;
       }

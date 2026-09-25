@@ -2560,3 +2560,67 @@ collée au bord.
   pages ;
 * sonde : `Bas de page` relève l'espace réservé, l'état du mini-lecteur et de la
   barre d'onglets, et la **marge** entre la page et le bas de l'écran.
+
+---
+
+## §41 — L'onglet Bibliothèque ne bloque plus l'écran (v2.11.6)
+
+Signalé le 25/09 : « quand on clique sur l'onglet bibliothèque, la barre en haut
+disparaît et rien d'autre n'apparaît ; je reste bloqué sur l'écran d'accueil ».
+
+### L'accueil se croyait toujours chez lui
+
+`Home.shouldShow()` ne jugeait sa place que sur le **chemin de l'URL** — or un
+appui sur l'onglet Bibliothèque **ne navigue pas** (c'est la barre latérale de
+Spotify qui est montrée). L'accueil, dont le chemin était encore celui de
+l'accueil, restait donc posé par-dessus la page de bibliothèque : l'écran ne
+changeait pas. L'onglet fait désormais foi (`State.tab !== "home"` ⇒ l'accueil se
+retire), et une règle CSS indépendante le garantit de toute façon
+(`html.sd-tab-library .sd-home { display: none }`) : même si le script manquait un
+battement, l'accueil ne peut plus couvrir un autre onglet.
+
+### La navigation disparaissait — donc plus aucun moyen de revenir
+
+`navOn = !isSubPage && !isLibrary` masquait la barre de navigation sur la
+bibliothèque, où la barre de titre prenait sa place (retour + « Fermer »). Cet
+arbitrage datait du temps où la barre d'onglets du bas était active : avec le
+défaut actuel (pas de barre d'onglets), la barre du haut est **la seule
+navigation**, et la masquer enferme l'utilisateur. La séparation est donc :
+
+* **barre de navigation** : accueil, recherche **et bibliothèque** ;
+* **barre de titre** (retour + nom de la page) : sous-pages seulement — deux
+  barres au même bord ne peuvent pas cohabiter, et c'est la navigation qui gagne.
+
+La page de bibliothèque commence sous la barre de navigation (comme l'accueil) et
+porte son **propre titre** (« Bibliothèque »), au lieu d'emprunter celui de la
+barre de titre.
+
+### La page ne se taisait plus jamais
+
+`Library.shouldShow()` exigeait des données : sans jeton ou sans réponse de l'API,
+la page disparaissait et la barre latérale de Spotify était censée reprendre la
+main — sauf que sur ce téléphone elle n'affiche **aucune** playlist (« je ne vois
+aucune de mes playlists »), donc la place restait vide. Notre page s'affiche
+maintenant **toujours** sur son onglet, avec sa raison d'être vide (chargement,
+pas de jeton, API muette, compte vide) et un bouton **« Réessayer »**, plus le
+chemin pour retrouver celle de Spotify (Réglages → Bibliothèque SpotiDuck). Le
+jeton arrivant souvent après le premier affichage, « Réessayer » relit vraiment.
+
+Enfin, une sous-page ouverte **depuis** la bibliothèque (playlist, album) garde
+l'onglet « bibliothèque » : la page plein écran se retire sur le chemin
+(`isLibraryPath`), et la barre latérale n'est jamais laissée posée sur la
+sous-page.
+
+### Vérifications
+
+* banc : l'onglet Bibliothèque garde la **navigation**, n'affiche pas la barre de
+  titre, montre la page de bibliothèque et son titre ; l'**accueil se retire**
+  (`shouldShow()` faux, `hidden` vrai) ; une playlist ouverte depuis la
+  bibliothèque retire notre page et laisse la sous-page propre ;
+* banc : sans jeton, la page s'affiche **et s'explique** (titre, note, bouton
+  « Réessayer »), et un appui sur « Réessayer » avec un jeton arrivé entre-temps
+  relit vraiment (état `empty`) ;
+* audit : l'onglet fait foi côté accueil, la navigation reste sur la bibliothèque,
+  la barre de titre est réservée aux sous-pages, la bibliothèque ne peut plus se
+  taire faute de données, `isLibraryPath`, le titre et le bouton de la page, et
+  son départ sous la barre de navigation.

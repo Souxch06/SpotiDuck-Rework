@@ -126,12 +126,21 @@ check("tab bar: 3 tabs, French labels", () => {
 });
 
 await checkAsync("tab → Bibliothèque shows the library page", async () => {
+  /* Signalé le 25/09 : « quand on clique sur l'onglet bibliothèque, la barre en
+     haut disparaît et rien d'autre n'apparaît ; je reste bloqué sur l'écran
+     d'accueil ». Donc : la **navigation reste** (c'est la seule de l'application),
+     et la page de bibliothèque s'affiche avec son propre titre — la barre de
+     titre, elle, est réservée aux sous-pages (deux barres au même bord se
+     recouvriraient : c'est elle qui doit céder). */
   q('.sd-tab[data-tab="library"]').click();
   await tick();
   assert(doc.documentElement.classList.contains("sd-tab-library"), "sd-tab-library not set");
-  assert(q(".sd-topbar").classList.contains("is-visible"), "top bar should be visible on the library");
-  assert(q(".sd-topbar-title").textContent === "Bibliothèque", "title: " + q(".sd-topbar-title").textContent);
-  return "top bar + class ✓";
+  assert(doc.documentElement.classList.contains("sd-nav-on"), "la barre de navigation disparaît sur la bibliothèque : plus aucun moyen de revenir");
+  assert(!q(".sd-topbar").classList.contains("is-visible"), "la barre de titre est posée sur la bibliothèque, par-dessus la navigation");
+  const panel = q(".sd-lib");
+  assert(panel && !panel.hidden, "la page de bibliothèque ne s'affiche pas");
+  assert(panel.querySelector(".sd-lib-title").textContent === "Bibliothèque", "titre de la page : " + panel.querySelector(".sd-lib-title").textContent);
+  return "navigation gardée · page de bibliothèque + titre ✓";
 });
 
 await checkAsync("tab → Rechercher navigates the web player", async () => {
@@ -838,14 +847,17 @@ await checkAsync("the mini player carries the original app's fourth row", async 
 });
 
 await checkAsync("the nav bar and the title bar never cover each other", async () => {
-  /* Les deux sont collées en haut : quand la barre de navigation est là, la
-     barre de titre est dessous — invisible, donc « rien ne s'affiche ». */
+  /* Les deux sont collées en haut : elles ne peuvent pas être affichées en même
+     temps. La règle a changé le 25/09 — la navigation gagne (elle est seule à
+     permettre de revenir), la barre de titre n'est plus que pour les sous-pages,
+     qui ont leur bouton retour. */
   const src = await read("src/inject/spotiduck-ui.js");
+  assert(/var navOn = !isSubPage;/.test(src), "la barre de navigation n'est plus liée aux seules sous-pages");
   assert(
-    /var navOn = !isSubPage && !isLibrary;/.test(src),
-    "la barre de navigation et la barre de titre se recouvrent encore"
+    /e\.topbar\.classList\.toggle\("is-visible", isSubPage\)/.test(src),
+    "la barre de titre s'affiche ailleurs que sur une sous-page : elle recouvrirait la navigation"
   );
-  return "navigation (accueil/recherche) · titre (bibliothèque/sous-page) ✓";
+  return "navigation partout (accueil · recherche · bibliothèque) · titre sur les sous-pages ✓";
 });
 
 await checkAsync("the content is laid out for a phone, not for a desktop", async () => {
@@ -1287,7 +1299,7 @@ await checkAsync("a tall, narrow page is not 'nothing displayed', and the diagno
     const width = isMain ? 29 : hasText ? 24 : 0;
     return { width, height, top: 0, left: 0, right: width, bottom: height, x: 0, y: 0 };
   };
-  w.AndBridge = { version: () => "2.11.5", session: () => false };
+  w.AndBridge = { version: () => "2.11.6", session: () => false };
   w.eval(await read("dist/spotiduck-ui.js"));
   await tick(250);
 
@@ -1305,7 +1317,7 @@ await checkAsync("a tall, narrow page is not 'nothing displayed', and the diagno
   );
   const diag = api.content.diagnose();
   assert(!/2\.9\.0/.test(diag), "le diagnostic annonce encore une version figée : " + diag);
-  assert(/SpotiDuck 2\.11\.5/.test(diag), "le diagnostic n'annonce pas la version de l'application : " + diag);
+  assert(/SpotiDuck 2\.11\.6/.test(diag), "le diagnostic n'annonce pas la version de l'application : " + diag);
   assert(/page \/intl-fr\//.test(diag), "le diagnostic ne dit pas sur quelle page il a été pris : " + diag);
   /* Le diagnostic doit porter **les mots de la page** (« Choisissez votre
      langue ») et l'état réel de la session : sans ça, une capture ne dit pas ce
@@ -1421,8 +1433,23 @@ await checkAsync("the library shows the account's playlists, albums, artists and
 
   /* Ce qui se voit : l'onglet bibliothèque ouverte, notre page remplace la barre
      latérale (et donc la masque), les lignes portent de vraies adresses. */
+  /* **L'appui sur l'onglet Bibliothèque.** Le chemin de l'URL ne change pas,
+     donc l'accueil doit se retirer sur le seul critère de l'onglet — c'est ce
+     qui manquait (« je reste bloqué sur l'écran d'accueil »). */
   api.state.tab = "library";
+  api.home.apply ? api.home.apply() : api.home.refresh("test");
   api.library.apply();
+  const board = page.querySelector(".sd-home");
+  assert(board.hidden === true, "l'accueil reste affiché par-dessus la bibliothèque");
+  assert(
+    !api.home.shouldShow(),
+    "l'accueil se croit encore à sa place alors que l'onglet actif est la bibliothèque"
+  );
+  /* Et la barre de navigation reste : c'est la seule navigation de l'application. */
+  assert(
+    page.documentElement.className.includes("sd-nav-on"),
+    "la barre de navigation disparaît sur la bibliothèque : plus aucun moyen de revenir"
+  );
   const panel = page.querySelector(".sd-lib");
   assert(panel && panel.hidden === false, "la bibliothèque ne s'affiche pas sur son onglet");
   assert(page.documentElement.className.includes("sd-lib-on"), "la barre latérale de Spotify n'est pas remplacée (classe sd-lib-on absente)");
@@ -1456,6 +1483,34 @@ await checkAsync("the library shows the account's playlists, albums, artists and
 
   /* Le diagnostic dit ce qu'il en est, pour une capture de téléphone. */
   assert(/biblio 6 éléments/.test(api.content.diagnose()), "le diagnostic ne dit pas ce que contient la bibliothèque : " + api.content.diagnose());
+
+  /* Une playlist ouverte **depuis** la bibliothèque garde l'onglet
+     « bibliothèque » mais change de page : notre page plein écran doit se
+     retirer, sinon elle recouvrirait la playlist. */
+  /* jsdom ne permet pas de réécrire `location` : on mesure le chemin sur une
+     copie du module, comme pour la garde des chemins de l'accueil. */
+  const sub = new JSDOM("<!doctype html><html><body><main></main></body></html>", {
+    url: "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M",
+    pretendToBeVisual: true,
+    runScripts: "dangerously",
+  });
+  sub.window.AndBridge = new Proxy({}, { get: () => () => undefined });
+  sub.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(150);
+  const subApi = sub.window.SpotiDuckUI;
+  assert(subApi.library.isLibraryPath() === false, "une playlist est prise pour une page de bibliothèque");
+  assert(subApi.home.isHomePath() === false, "une playlist est prise pour l'accueil");
+  subApi.state.tab = "library";
+  subApi.library.enter();
+  assert(
+    sub.window.document.querySelector(".sd-lib").hidden === true,
+    "la bibliothèque recouvre la playlist ouverte depuis elle"
+  );
+  assert(
+    !sub.window.document.documentElement.className.includes("sd-lib-on"),
+    "la barre latérale de Spotify reste posée sur la playlist"
+  );
+  sub.window.close();
 
   /* Quitter la bibliothèque rend la main à Spotify. */
   api.state.tab = "home";
@@ -1502,9 +1557,30 @@ await checkAsync("without a token the library keeps Spotify's sidebar (never an 
   api.library.enter();
   await tick(120);
   assert(api.library.state === "no-token", `état attendu « no-token », obtenu « ${api.library.state} »`);
-  assert(page.querySelector(".sd-lib").hidden === true, "la bibliothèque s'affiche alors qu'elle n'a rien lu");
-  assert(!page.documentElement.className.includes("sd-lib-on"), "la barre latérale de Spotify est masquée alors qu'on n'a rien à mettre à la place");
-  assert(/biblio pas de jeton/.test(api.content.diagnose()), "le diagnostic ne dit pas pourquoi la bibliothèque est absente");
+  /* **Notre page s'affiche même sans données, et elle le dit.** Signalé le
+     25/09 : « quand on clique sur l'onglet bibliothèque, la barre en haut
+     disparaît et rien d'autre n'apparaît ; je reste bloqué sur l'écran
+     d'accueil ». La barre latérale de Spotify, gardée comme repli, ne montre
+     aucune playlist sur ce téléphone : un écran noir. Notre page, elle, explique
+     toujours où elle en est, et propose de réessayer. */
+  const panelNoToken = page.querySelector(".sd-lib");
+  assert(panelNoToken.hidden === false, "la bibliothèque reste masquée faute de données : l'utilisateur n'a plus rien à l'écran");
+  assert(panelNoToken.querySelector(".sd-lib-title").textContent === "Bibliothèque", "la page ne porte pas son titre");
+  assert(panelNoToken.querySelector(".sd-lib-note").textContent.length > 10, "la page ne dit pas pourquoi elle est vide");
+  assert(panelNoToken.querySelector(".sd-lib-actions").hidden === false, "aucune action proposée pour réessayer");
+  const retry = panelNoToken.querySelector(".sd-lib-retry");
+  assert(retry && retry.textContent === "Réessayer", "le bouton « Réessayer » est absent");
+  /* Le bouton relance vraiment la lecture — ici avec un jeton arrivé entre-temps
+     (c'est exactement le cas d'un téléphone : la page du lecteur émet ses
+     requêtes quelques secondes après l'affichage). */
+  answers = () => ({ total: 0, items: [] });
+  const xhrEarly = new dom.window.XMLHttpRequest();
+  xhrEarly.open("GET", "https://api.spotify.com/v1/me");
+  xhrEarly.setRequestHeader("Authorization", "Bearer jeton-tardif");
+  retry.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  for (let i = 0; i < 40 && api.library.state === "loading"; i++) await tick(25);
+  assert(api.library.state === "empty", `après « Réessayer », état attendu « empty », obtenu « ${api.library.state} »`);
+  assert(/biblio/.test(api.content.diagnose()), "le diagnostic ne dit pas où en est la bibliothèque");
 
   /* Une seule des cinq sources répond — et le jeton arrive par **XHR**, comme
      il peut le faire sur un téléphone dont la page n'utilise pas `fetch` pour

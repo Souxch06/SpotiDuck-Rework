@@ -260,6 +260,11 @@ html.sd-mobile.sd-subpage #global-nav-bar {
 html.sd-mobile #Desktop_LeftSidebar_Id {
   display: none !important;
 }
+/* Une sous-page ouverte depuis la bibliothèque (une playlist, un album) doit
+   prendre tout l'écran : la barre latérale ne peut pas rester posée dessus. */
+html.sd-mobile.sd-tab-library.sd-subpage #Desktop_LeftSidebar_Id {
+  display: none !important;
+}
 html.sd-mobile.sd-tab-library #Desktop_LeftSidebar_Id {
   display: flex !important;
   flex-direction: column !important;

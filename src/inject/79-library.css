@@ -27,7 +27,9 @@ html.sd-mobile.sd-lib-on #Desktop_LeftSidebar_Id {
 
 html.sd-mobile .sd-layer .sd-lib {
   position: fixed;
-  top: calc(var(--sd-safe-t) + var(--sd-player-header-h));
+  /* Sous la **barre de navigation** (elle reste affichée sur la bibliothèque :
+     c'est la seule navigation de l'application), comme l'accueil. */
+  top: calc(var(--sd-safe-t) + var(--sd-nav-h));
   left: var(--sd-safe-l);
   right: var(--sd-safe-r);
   bottom: var(--sd-bottom);
@@ -58,9 +60,16 @@ html.sd-mobile .sd-layer .sd-lib[hidden] {
 
 html.sd-mobile .sd-layer .sd-lib-head {
   padding: 0 calc(14px * var(--sd-u));
-  min-height: calc(24px * var(--sd-u));
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  gap: 2px;
+}
+html.sd-mobile .sd-layer .sd-lib-title {
+  margin: 0;
+  font-size: calc(22px * var(--sd-u));
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  color: var(--sd-text);
 }
 html.sd-mobile .sd-layer .sd-lib-sum {
   font-size: calc(12.5px * var(--sd-u));
@@ -182,4 +191,25 @@ html.sd-mobile .sd-layer .sd-lib-note[hidden] {
 /* Un filtre qui ne montre rien : la liste est vide, la phrase explique. */
 html.sd-mobile .sd-layer .sd-lib-nofilter .sd-lib-list {
   display: none;
+}
+
+/* Quand il n'y a rien à montrer : une phrase **et** de quoi agir — réessayer,
+   et le chemin pour revenir à la bibliothèque de Spotify (Réglages). */
+html.sd-mobile .sd-layer .sd-lib-actions {
+  padding: 0 calc(16px * var(--sd-u)) calc(24px * var(--sd-u));
+}
+html.sd-mobile .sd-layer .sd-lib-actions[hidden] {
+  display: none;
+}
+html.sd-mobile .sd-layer .sd-lib-retry {
+  min-height: var(--sd-tap);
+}
+
+/* **L'accueil ne couvre jamais un autre onglet.** La règle du script est la
+   même (`Home.shouldShow`), mais celle-ci ne dépend de rien : un appui sur
+   l'onglet Bibliothèque ne change pas l'URL, donc l'accueil pouvait s'y croire
+   encore chez lui (signalé : « je reste bloqué sur l'écran d'accueil »). */
+html.sd-mobile.sd-tab-library .sd-layer .sd-home,
+html.sd-mobile.sd-tab-search .sd-layer .sd-home {
+  display: none !important;
 }

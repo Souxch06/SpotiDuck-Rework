@@ -125,8 +125,11 @@ html.sd-mobile.sd-nav-on .sd-layer .sd-topbar {
 html.sd-mobile.sd-nav-on.sd-welcome-on body {
   padding-top: var(--sd-safe-t) !important;
 }
+/* Plus de barre de titre au-dessus de la bibliothèque (elle reste sur les
+   sous-pages) : la barre latérale, quand elle sert de repli, commence donc
+   directement sous la barre de navigation. */
 html.sd-mobile.sd-nav-on.sd-tab-library #Desktop_LeftSidebar_Id {
-  top: calc(var(--sd-safe-t) + var(--sd-nav-h) + var(--sd-player-header-h)) !important;
+  top: calc(var(--sd-safe-t) + var(--sd-nav-h)) !important;
 }
 
 /* --------------------------------------------------------------------------
