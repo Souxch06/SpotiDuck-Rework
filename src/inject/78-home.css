@@ -32,12 +32,26 @@ html.sd-mobile .sd-layer .sd-home {
   display: flex;
   flex-direction: column;
   gap: calc(10px * var(--sd-u));
-  padding: calc(6px * var(--sd-u)) 0 0;
+  /* Le bas de page garde une respiration, et la place du mini-lecteur est
+     ajoutée **ici** quand il est affiché : le conteneur s'arrête alors au-dessus
+     de lui, au lieu de passer dessous. */
+  padding: calc(6px * var(--sd-u)) 0 calc(20px * var(--sd-u));
+  scroll-padding-bottom: calc(20px * var(--sd-u));
   background: var(--sd-bg);
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
+  /* La WebView dessine une barre de défilement en surimpression : sur le
+     téléphone, elle apparaissait en haut à droite comme un bloc gris posé sur
+     la page (visible sur la capture du 25/09). Nos pages défilent au doigt,
+     sans barre — comme les écrans natifs. */
+  scrollbar-width: none;
+}
+html.sd-mobile .sd-layer .sd-home::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
 }
 html.sd-mobile .sd-layer .sd-home[hidden] {
   display: none;

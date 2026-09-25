@@ -392,6 +392,48 @@
       return pick(SEL.progress);
     },
 
+    /* ------------------------------------------------------------------ *
+     * L'unité du curseur de progression.
+     *
+     * Le 25/09, le téléphone affichait « 56095 h 50 » d'écoute : sur sa page,
+     * le curseur de Spotify est gradué en **millisecondes**, alors que le code
+     * multipliait par 1000 comme s'il était en secondes — durées 1000 fois trop
+     * grandes, sur un seul titre écouté.
+     *
+     * On ne devine plus l'unité, on la **mesure** : pendant la lecture, la
+     * valeur du curseur avance de 1 par seconde s'il est en secondes, de 1000
+     * s'il est en millisecondes. La vitesse observée tranche, et le repli (audit
+     * de grandeur) ne sert qu'entre deux mesures.
+     * ------------------------------------------------------------------ */
+    unit: 0,
+    sample: null,
+    /* Unité mesurée, ou repli : 1000 au-delà de 10 000 de course (un titre de
+       trois minutes fait 180 en secondes, 180 000 en millisecondes). */
+    unitFactor: function () {
+      if (this.unit) return this.unit;
+      var input = this.progressInput();
+      var max = input ? parseFloat(input.getAttribute("max")) : 0;
+      return isFinite(max) && max > 10000 ? 1000 : 1;
+    },
+    calibrate: function () {
+      var input = this.progressInput();
+      if (!input) return this.unit;
+      var value = parseFloat(input.value);
+      var now = Date.now();
+      if (!isFinite(value)) return this.unit;
+      var last = this.sample;
+      this.sample = { v: value, t: now };
+      if (!last || !State.playing) return this.unit;
+      var elapsed = (now - last.t) / 1000;
+      var advanced = value - last.v;
+      /* Trop court pour dire quoi que ce soit, ou curseur immobile (pause
+         déguisée, publicité, mise en mémoire tampon). */
+      if (elapsed < 0.6 || advanced <= 0) return this.unit;
+      var speed = advanced / elapsed;
+      if (speed >= 0.4 && speed <= 1e6) this.unit = speed >= 60 ? 1000 : 1;
+      return this.unit;
+    },
+
     /** True when the web player has booted far enough to be driven. */
     ready: function () {
       return !!(pick(SEL.npBar) && (pick(SEL.play) || this.progressInput()));
@@ -419,10 +461,11 @@
 
       var input = this.progressInput();
       if (input) {
+        var factor = this.unitFactor();
         var dur = parseFloat(input.getAttribute("max"));
         var pos = parseFloat(input.value);
-        if (isFinite(dur) && dur > 0) out.duration = dur * 1000;
-        if (isFinite(pos)) out.position = pos * 1000;
+        if (isFinite(dur) && dur > 0) out.duration = (dur / factor) * 1000;
+        if (isFinite(pos)) out.position = (pos / factor) * 1000;
       }
 
       var like = pick(SEL.like);
@@ -855,6 +898,7 @@
         if (now - self.last < 100) return; // 10 fps is plenty for a progress bar
         self.last = now;
         if (!State.playing || State.seeking) return;
+        Spotify.calibrate();
         UI.paintProgress();
         /* Keep the Android media session / lock-screen scrubber honest: the
            old layer pushed a position only when it happened to scrape the DOM
@@ -1391,7 +1435,10 @@
          celle que la page annonce (sinon une durée moyenne). */
       if (s.hasTrack && s.title && s.title !== UI.lastStatTitle) {
         UI.lastStatTitle = s.title;
-        Stats.record(s.title, s.artist, s.duration);
+        /* `s.duration` est en **millisecondes** : on convertit ici. Le module
+           des statistiques contrôle de toute façon la plausibilité (voir
+           `Stats.plausible`) — une durée ne se devine pas, elle se vérifie. */
+        Stats.record(s.title, s.artist, Math.round((s.duration || 0) / 1000));
       }
 
       /* titles — sans titre, le mini-lecteur dit où il en est plutôt que de
@@ -4409,6 +4456,12 @@
       return !!Settings.stats;
     },
 
+    /**
+     * Charge les écoutes enregistrées — et **répare** celles qui portent une
+     * durée impossible (voir `plausible`). Sans cette passe, un seul titre
+     * écouté avant ce correctif continuerait d'afficher « 56095 h 50 », et
+     * l'utilisateur devrait effacer ses statistiques pour s'en débarrasser.
+     */
     load: function () {
       if (this.loaded) return this.entries;
       this.loaded = true;
@@ -4417,9 +4470,23 @@
         if (!raw) return this.entries;
         var parsed = JSON.parse(raw);
         var list = (parsed && parsed.e) || [];
-        this.entries = list.filter(function (e) {
-          return e && typeof e.t === "string" && e.t && typeof e.ts === "number";
-        });
+        var self = this;
+        var repaired = 0;
+        this.entries = list
+          .filter(function (e) {
+            return e && typeof e.t === "string" && e.t && typeof e.ts === "number";
+          })
+          .map(function (e) {
+            var d = self.plausible(e.d);
+            if (d !== (e.d || 0)) {
+              repaired++;
+              return { k: e.k, t: e.t, a: e.a, ts: e.ts, d: d };
+            }
+            return e;
+          });
+        /* Une seule écriture, et seulement si quelque chose a changé : la passe
+           de réparation ne doit pas peser à chaque lecture. */
+        if (repaired) this.save();
       } catch (e) {
         this.entries = [];
       }
@@ -4439,6 +4506,29 @@
     },
 
     /** Note une écoute. `at` (ms) permet d'importer un historique daté. */
+    /**
+     * Une durée d'écoute **plausible**, en secondes.
+     *
+     * Une seule écoute ne dure pas plus de douze heures : au-delà, la page a
+     * annoncé une durée dans une autre unité (millisecondes, microsecondes) et
+     * le chiffre ne dit plus rien. On redescend par paliers de mille jusqu'à une
+     * valeur qui a un sens — c'est ce qui répare les statistiques déjà
+     * enregistrées, celles qui affichaient « 56095 h 50 ».
+     */
+    MAX_SECONDS: 12 * 3600,
+    plausible: function (value) {
+      var v = Number(value);
+      if (!isFinite(v) || v <= 0) return 0;
+      /* Trois paliers suffisent à couvrir les unités qu'une page peut annoncer
+         (millisecondes, microsecondes, nanosecondes) : 202 s vaut 202 000 ms,
+         202 000 000 µs, 202 000 000 000 ns. Au-delà, la valeur n'est pas une
+         durée — on préfère ne rien compter qu'inventer seize minutes. */
+      var guard = 0;
+      while (v > this.MAX_SECONDS && guard++ < 3) v = v / 1000;
+      if (v > this.MAX_SECONDS) return 0;
+      return Math.round(v);
+    },
+
     record: function (title, artist, durationSec, at) {
       if (!this.enabled()) return false;
       title = (title || "").trim();
@@ -4456,7 +4546,7 @@
         t: title.slice(0, 80),
         a: (artist || "").slice(0, 80),
         ts: when,
-        d: durationSec > 0 ? Math.round(durationSec) : 0,
+        d: this.plausible(durationSec),
       });
       /* Chronologique : l'import d'un historique insère des écoutes passées. */
       this.entries.sort(function (a, b) {

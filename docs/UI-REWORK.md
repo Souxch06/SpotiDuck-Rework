@@ -2492,3 +2492,71 @@ changement de vue est exactement ce que l'ancienne couche faisait).
   l'interdiction de masquer la barre latérale sans condition ;
 * sonde : `Bibliothèque` relève l'état, la zone, le nombre de lignes et de
   filtres, et si la barre latérale de Spotify est remplacée ou laissée en place.
+
+---
+
+## §40 — Les durées d'écoute, et le bas de l'écran (v2.11.5)
+
+Capture du 25/09 au matin : « Les statistiques sont buguées » — un seul titre
+écouté, et **56095 h 50** de temps d'écoute — plus « l'écran est bugué vers le
+bas ».
+
+### 56 095 heures pour un titre de trois minutes
+
+`State.duration` valait `max × 1000`, en supposant que le curseur de Spotify est
+gradué en secondes. Sur cette page-là, il est gradué en **millisecondes** : une
+piste de 3 min 22 s annonçait 201 945, la durée conservée devenait 201 945 000 —
+et l'affichage, qui la lisait comme des secondes, écrivait 56 095 h 50. Le
+raccourci « on multiplie par 1000 » a tenu tant que personne n'écoutait un
+titre ; il est faux dès qu'on regarde le chiffre.
+
+L'unité n'est plus supposée, elle est **mesurée** : pendant la lecture, la valeur
+du curseur avance de 1 par seconde s'il compte en secondes, de 1000 s'il compte
+en millisecondes — la vitesse observée tranche (`Spotify.calibrate`). Le repli
+(audit de grandeur : au-delà de 10 000 de course, c'est des millisecondes) ne
+sert qu'entre deux mesures. La conversion de la position passe par le même
+facteur, donc le progresseur de la notification et les durées affichées sont
+justes aussi.
+
+Deux protections de plus, parce qu'une unité peut encore se cacher :
+
+* **toute durée enregistrée est contrôlée** (`Stats.plausible`) : une seule
+  écoute ne dure pas plus de douze heures ; au-delà, la valeur redescend par
+  paliers de mille (millisecondes, microsecondes, nanosecondes), et si elle reste
+  absurde elle ne compte pas plutôt que d'inventer seize minutes ;
+* **les écoutes déjà écrites sont réparées au chargement** : sans cette passe,
+  le seul titre écouté avant ce correctif aurait continué d'afficher 56 095 h, et
+  il aurait fallu **effacer ses statistiques** pour s'en débarrasser. La
+  réparation s'écrit une fois, et seulement si quelque chose a changé.
+
+### La bande noire sous la page
+
+`--sd-bottom` réserve la place du mini-lecteur — sauf que cette place était
+réservée **en toutes circonstances**, même quand le mini-lecteur n'était pas
+affiché (page ouverte avant que le lecteur soit prêt). L'écran montrait donc la
+page coupée, avec une soixantaine de pixels de noir en dessous. L'espace suit
+maintenant l'affichage : `--sd-mini-h-current` vaut 0 par défaut et prend la
+hauteur du mini **quand il est réellement là** (mêmes classes que sa mise en
+page, `sd-mini-on` / `sd-has-track`) — la réserve ne peut plus contredire l'écran.
+
+Deux détails de la même capture : la **barre de défilement** que la WebView
+dessine en surimpression (le bloc gris en haut à droite) est masquée sur nos pages
+(`scrollbar-width: none` + `::-webkit-scrollbar`), et le bas de l'accueil garde
+une respiration (`padding-bottom`), pour que la dernière carte ne soit jamais
+collée au bord.
+
+### Vérifications
+
+* banc : « une durée annoncée en millisecondes ne devient jamais des milliers
+  d'heures » — curseur en millisecondes (202 000 → 202 000 ms), curseur en
+  secondes (202 → 202 000 ms), **mesure qui l'emporte** sur le repli, contrôles
+  de plausibilité (201 945 000 → 202, 202 000 → 202, 210 → 210, 1e15 → écartée),
+  et la **réparation** de l'écoute de la capture : 201 945 000 enregistrée dans le
+  stockage ⇒ 1 écoute, 202 s, « 3 min », et la valeur corrigée réécrite ;
+* audit : unité mesurée (`unitFactor`, `calibrate`), conversion de la position,
+  `plausible()` et son plafond, contrôle à l'enregistrement, conversion des
+  millisecondes à la source, `--sd-mini-h-current: 0px` par défaut et sa mise en
+  relation avec l'affichage du mini, barres de défilement masquées sur les deux
+  pages ;
+* sonde : `Bas de page` relève l'espace réservé, l'état du mini-lecteur et de la
+  barre d'onglets, et la **marge** entre la page et le bas de l'écran.

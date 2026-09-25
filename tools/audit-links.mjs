@@ -908,6 +908,41 @@ if (!/label: "page-fr", url: "https:\/\/open\.spotify\.com\/intl-fr\/"/.test(pro
    le repli (ne **jamais** masquer la barre latérale sans avoir de quoi la
    remplacer) et l'interrupteur. */
 const libraryCode = stripComments(runtime);
+
+/* 2-ter-sexies. Les durées et le bas de l'écran — la capture du 25/09.
+   « 56095 h 50 » pour un seul titre écouté : l'unité du curseur de Spotify
+   (millisecondes sur cette page-là) était supposée, et multipliée par 1000.
+   Et sous la page, une bande noire : la place du mini-lecteur restait réservée
+   alors qu'il n'était pas affiché. */
+if (!/unitFactor: function/.test(libraryCode) || !/calibrate: function/.test(libraryCode)) {
+  errors.push("l'unité du curseur de progression n'est plus mesurée : les durées peuvent redevenir 1000 fois trop grandes");
+}
+if (!/dur \/ factor\) \* 1000/.test(libraryCode) || !/pos \/ factor\) \* 1000/.test(libraryCode)) {
+  errors.push("la lecture de la position ne passe plus par l'unité mesurée");
+}
+if (!/plausible: function/.test(libraryCode) || !/MAX_SECONDS: 12 \* 3600/.test(libraryCode)) {
+  errors.push("les durées enregistrées ne sont plus contrôlées : une valeur absurde s'afficherait telle quelle");
+}
+if (!/d: this\.plausible\(durationSec\)/.test(libraryCode)) {
+  errors.push("l'enregistrement d'une écoute ne contrôle plus la durée");
+}
+if (!/Math\.round\(\(s\.duration \|\| 0\) \/ 1000\)/.test(libraryCode)) {
+  errors.push("l'écoute est enregistrée sans convertir les millisecondes de la page");
+}
+const baseCss = read("src/inject/10-base.css");
+if (!/--sd-mini-h-current: 0px/.test(baseCss)) {
+  errors.push("la place du mini-lecteur est de nouveau réservée en toutes circonstances : une bande morte apparaîtrait sous la page");
+}
+if (!/sd-mini-on,\s*\nhtml\.sd-mobile\.sd-has-track \{[\s\S]{0,80}--sd-mini-h-current: var\(--sd-mini-h\)/.test(baseCss)) {
+  errors.push("la place du mini-lecteur n'est plus liée à son affichage");
+}
+for (const sheet of ["78-home.css", "79-library.css"]) {
+  const body = read(`src/inject/${sheet}`);
+  if (!/scrollbar-width: none/.test(body) || !/::-webkit-scrollbar \{\s*width: 0/.test(body)) {
+    errors.push(`${sheet} : la barre de défilement de la WebView réapparaîtrait sur la page`);
+  }
+}
+
 for (const method of ["load", "parse", "render", "apply", "enter", "describe", "watch"]) {
   if (!new RegExp(method + ": function").test(libraryCode)) {
     errors.push(`la bibliothèque maison a perdu « ${method}() »`);

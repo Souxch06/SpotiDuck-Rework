@@ -1287,7 +1287,7 @@ await checkAsync("a tall, narrow page is not 'nothing displayed', and the diagno
     const width = isMain ? 29 : hasText ? 24 : 0;
     return { width, height, top: 0, left: 0, right: width, bottom: height, x: 0, y: 0 };
   };
-  w.AndBridge = { version: () => "2.11.4", session: () => false };
+  w.AndBridge = { version: () => "2.11.5", session: () => false };
   w.eval(await read("dist/spotiduck-ui.js"));
   await tick(250);
 
@@ -1305,7 +1305,7 @@ await checkAsync("a tall, narrow page is not 'nothing displayed', and the diagno
   );
   const diag = api.content.diagnose();
   assert(!/2\.9\.0/.test(diag), "le diagnostic annonce encore une version figée : " + diag);
-  assert(/SpotiDuck 2\.11\.4/.test(diag), "le diagnostic n'annonce pas la version de l'application : " + diag);
+  assert(/SpotiDuck 2\.11\.5/.test(diag), "le diagnostic n'annonce pas la version de l'application : " + diag);
   assert(/page \/intl-fr\//.test(diag), "le diagnostic ne dit pas sur quelle page il a été pris : " + diag);
   /* Le diagnostic doit porter **les mots de la page** (« Choisissez votre
      langue ») et l'état réel de la session : sans ça, une capture ne dit pas ce
@@ -1532,6 +1532,81 @@ await checkAsync("without a token the library keeps Spotify's sidebar (never an 
   );
   dom.window.close();
   return "sans jeton : rien ne masque Spotify · une source en panne : les autres suffisent ✓";
+});
+
+await checkAsync("a duration announced in milliseconds never becomes thousands of hours", async () => {
+  /* **La capture du 25/09 : « 56095 h 50 » pour un seul titre écouté.**
+     Sur cette page, le curseur de progression de Spotify est gradué en
+     millisecondes ; le code multipliait par 1000 comme s'il était en secondes.
+     Trois protections sont vérifiées ici : l'unité se **mesure**, la durée
+     enregistrée est contrôlée, et les statistiques déjà écrites sont réparées au
+     chargement (sinon l'utilisateur devrait les effacer pour s'en débarrasser). */
+  const dom = new JSDOM(
+    '<!doctype html><html><body><aside><div data-testid="playback-progressbar">' +
+      '<input type="range" min="0" max="202000" value="42000"></div></aside></body></html>',
+    { url: "https://open.spotify.com/intl-fr/", pretendToBeVisual: true, runScripts: "dangerously" }
+  );
+  dom.window.AndBridge = new Proxy({}, { get: () => () => undefined });
+  dom.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(200);
+  const api = dom.window.SpotiDuckUI;
+  const internals = api._internals;
+  const spotify = internals.Spotify;
+
+  /* Curseur en millisecondes (course 202 000 = 3 min 22 s). */
+  const read1 = spotify.read();
+  assert(read1.duration === 202000, `durée attendue 202000 ms, lue ${read1.duration}`);
+  assert(read1.position === 42000, `position attendue 42000 ms, lue ${read1.position}`);
+
+  /* Curseur en secondes (course 202) : le repli de grandeur doit suffire. */
+  const input = dom.window.document.querySelector("input");
+  input.setAttribute("max", "202");
+  input.value = "42";
+  spotify.unit = 0;
+  const read2 = spotify.read();
+  assert(read2.duration === 202000, `durée attendue 202000 ms, lue ${read2.duration}`);
+  assert(read2.position === 42000, `position attendue 42000 ms, lue ${read2.position}`);
+
+  /* Et quand la mesure parle, c'est elle qui décide : ici la valeur avance de
+     1 par seconde — donc la page compte en secondes, malgré une course à
+     202 000. Un titre de 3 min ne fait pas 56 heures. */
+  input.setAttribute("max", "202000");
+  api.state.playing = true;
+  spotify.unit = 0;
+  spotify.sample = { v: 0, t: Date.now() - 2000 };
+  input.value = "2";
+  spotify.calibrate();
+  assert(spotify.unit === 1, `unité mesurée attendue 1 (secondes), obtenue ${spotify.unit}`);
+  const read3 = spotify.read();
+  assert(read3.duration === 202000000, `durée attendue 202000000 ms si la page compte en secondes, lue ${read3.duration}`);
+  api.state.playing = false;
+
+  /* La durée enregistrée est contrôlée : une seule écoute ne dure pas plus de
+     douze heures, et une valeur dans une autre unité redescend jusqu'à un
+     chiffre qui a un sens. */
+  assert(api.stats.plausible(201945000) === 202, `plausible(201945000) = ${api.stats.plausible(201945000)}`);
+  assert(api.stats.plausible(202000) === 202, `plausible(202000) = ${api.stats.plausible(202000)}`);
+  assert(api.stats.plausible(210) === 210, `plausible(210) = ${api.stats.plausible(210)}`);
+  assert(api.stats.plausible(0) === 0 && api.stats.plausible(-5) === 0, "une durée nulle ou négative devrait valoir 0");
+  assert(api.stats.plausible(1e15) === 0, "une durée absurde devrait être écartée");
+
+  /* Réparation des écoutes déjà enregistrées : celle de la capture, telle
+     quelle, dans le stockage du téléphone. */
+  api.stats.clear();
+  dom.window.localStorage.setItem(
+    "sd.stats.v1",
+    JSON.stringify({ v: 1, e: [{ k: "worry - slowed\u0000lonown", t: "worry - Slowed", a: "LONOWN", ts: Date.now(), d: 201945000 }] })
+  );
+  api.stats.loaded = false;
+  api.stats.entries = [];
+  const sum = api.stats.summary();
+  assert(sum.total === 1, `une écoute attendue après réparation, ${sum.total} comptée(s)`);
+  assert(sum.seconds === 202, `202 s attendues après réparation, ${sum.seconds} calculées`);
+  assert(api.stats.human(sum.seconds) === "3 min", `affichage attendu « 3 min », obtenu « ${api.stats.human(sum.seconds)} »`);
+  const stored = JSON.parse(dom.window.localStorage.getItem("sd.stats.v1"));
+  assert(stored.e[0].d === 202, `la réparation n'a pas été écrite : ${stored.e[0].d}`);
+  dom.window.close();
+  return "unité mesurée (ms/s) · durée contrôlée · 56095 h 50 réparé en 3 min ✓";
 });
 
 await checkAsync("the interface unit follows the device, not a fixed guess", async () => {

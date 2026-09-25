@@ -440,6 +440,33 @@ const MEASURE = async () => {
     );
   })();
 
+  /* **Le bas de l'écran.** La capture du 25/09 montrait la page coupée avec une
+     bande noire en dessous : la place du mini-lecteur était réservée alors qu'il
+     n'était pas affiché. On mesure donc ce qui est réservé, ce qui est
+     réellement affiché, et la marge entre le contenu et le bas de l'écran. */
+  out.bottom = (function () {
+    var cs = window.getComputedStyle(document.documentElement);
+    var reserved = cs.getPropertyValue("--sd-bottom").trim();
+    var state = function (el) {
+      if (!el) return "absent";
+      var r = el.getBoundingClientRect();
+      var c = window.getComputedStyle(el);
+      return r.width > 0 && r.height > 0 && c.display !== "none" ? "affiché" : "caché";
+    };
+    var mini = state(document.querySelector(".sd-mini"));
+    var tabbar = state(document.querySelector(".sd-tabbar"));
+    /* Le conteneur qui porte notre page (accueil ou bibliothèque), s'il est là. */
+    var page = document.querySelector(".sd-home:not([hidden]), .sd-lib:not([hidden])");
+    var margin = "";
+    if (page) {
+      var r = page.getBoundingClientRect();
+      margin =
+        " · page jusqu'à " + Math.round(r.bottom) + "/" + window.innerHeight +
+        " (marge " + Math.round(window.innerHeight - r.bottom) + "px)";
+    }
+    return "réservé=" + reserved + " · mini=" + mini + " · barre-onglets=" + tabbar + margin;
+  })();
+
   out.tapTargets = (function () {
     var els = document.querySelectorAll(".sd-layer .sd-nav-item, .sd-layer .sd-iconbtn, .sd-layer .sd-tab");
     var min = 999;
@@ -921,6 +948,7 @@ async function main() {
       if (after && after.rognes) pageLines.push(`Rognage - ${target.label} : ${after.rognes}`);
       if (after && after.home) pageLines.push(`Accueil maison - ${target.label} : ${after.home}`);
       if (after && after.library) pageLines.push(`Bibliothèque - ${target.label} : ${after.library}`);
+      if (after && after.bottom) pageLines.push(`Bas de page - ${target.label} : ${after.bottom}`);
       lines.push(summary, ...pageLines);
       console.log(`[Sonde coque] ${summary}`);
       note(`Mesure — ${target.label}`, summary);

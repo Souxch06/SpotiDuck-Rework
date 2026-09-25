@@ -25,7 +25,12 @@ html.sd-mobile {
   /* Chrome metrics */
   --sd-tabbar-h: 56px;
   --sd-mini-h: 60px;
-  --sd-mini-h-current: var(--sd-mini-h);
+  /* L'espace réservé au mini-lecteur suit son **affichage** : réservé quand il
+     est là, nul quand il est caché (voir plus bas). Le 25/09, le téléphone
+     montrait sa page coupée avec une bande noire en dessous : la place du
+     mini-lecteur était réservée alors qu'il n'était pas affiché (lecteur pas
+     encore prêt), et rien ne venait l'occuper. */
+  --sd-mini-h-current: 0px;
   --sd-player-header-h: 48px;
   --sd-radius: 8px;
   --sd-radius-lg: 12px;
@@ -76,6 +81,10 @@ html.sd-mobile {
   height: 100%;
 }
 
+/* Le mini-lecteur est visible : sa place est réservée. `sd-mini-on` est la
+   classe qui l'affiche réellement (`display: flex` dans 20-shell.css) — les
+   deux vont donc ensemble, et l'espace réservé ne peut plus contredire l'écran. */
+html.sd-mobile.sd-mini-on,
 html.sd-mobile.sd-has-track {
   --sd-mini-h-current: var(--sd-mini-h);
 }
