@@ -921,6 +921,9 @@ for (const endpoint of ["/me/playlists", "/me/albums", "/me/artists", "/me/shows
 if (!/classList\.toggle\("sd-lib-on", show\)/.test(libraryCode)) {
   errors.push("la bibliothèque masque la barre latérale de Spotify sans condition : un compte sans jeton perdrait l'accès à sa musique");
 }
+if (!/setRequestHeader/.test(libraryCode) || !/patchedXhr/.test(libraryCode)) {
+  errors.push("le jeton n'est plus capté en XHR : une page qui n'utilise pas `fetch` laisserait la bibliothèque vide");
+}
 if (!/libraryBoard/.test(libraryCode) || !/switchRow\("libraryBoard"/.test(runtime)) {
   errors.push("l'interrupteur de la bibliothèque maison a disparu (on ne peut plus revenir à celle de Spotify)");
 }

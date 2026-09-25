@@ -1506,15 +1506,21 @@ await checkAsync("without a token the library keeps Spotify's sidebar (never an 
   assert(!page.documentElement.className.includes("sd-lib-on"), "la barre latérale de Spotify est masquée alors qu'on n'a rien à mettre à la place");
   assert(/biblio pas de jeton/.test(api.content.diagnose()), "le diagnostic ne dit pas pourquoi la bibliothèque est absente");
 
-  /* Une seule des cinq sources répond : on garde ce qui a répondu, et on ne
-     prétend pas que le reste est vide. */
+  /* Une seule des cinq sources répond — et le jeton arrive par **XHR**, comme
+     il peut le faire sur un téléphone dont la page n'utilise pas `fetch` pour
+     ses requêtes d'API. Deux choses à la fois : on garde ce qui a répondu (sans
+     prétendre que le reste est vide), et le jeton posé en XHR est bien capté. */
   answers = (key) =>
     key === "/me/playlists?limit=50"
       ? { total: 1, items: [{ id: "p9", name: "La seule", owner: { display_name: "Moi" }, images: [] }] }
       : null;
-  await dom.window.fetch("https://api.spotify.com/v1/me", { headers: { Authorization: "Bearer banc" } });
+  const xhr = new dom.window.XMLHttpRequest();
+  xhr.open("GET", "https://api.spotify.com/v1/me");
+  xhr.setRequestHeader("Authorization", "Bearer jeton-xhr");
   api.library.load(true);
   for (let i = 0; i < 40 && !api.library.items.length; i++) await tick(25);
+  assert(api.library.items.length === 1, "le jeton posé en XHR n'est pas capté : la bibliothèque resterait vide");
+  assert(api.library.items[0].name === "La seule", "l'élément lu par le jeton XHR n'est pas le bon");
   api.library.apply();
   assert(api.library.items.length === 1, `la seule playlist qui a répondu devrait suffire : ${api.library.items.length} ligne(s)`);
   assert(page.querySelector(".sd-lib").hidden === false, "la bibliothèque ne s'affiche pas alors qu'elle a une playlist");

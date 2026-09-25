@@ -4701,6 +4701,7 @@
     uri: "",
     clientToken: "",
     authToken: "",
+    patchedXhr: false,
     reloads: 0,
     lastReload: 0,
     patched: false,
@@ -4708,6 +4709,27 @@
     RE_CONNECT: /\/connect-state\/v1\/player\/(?:command|transfer)\/from\/([^/]+)\/to\/([^/?]+)/,
 
     watch: function () {
+      /* Le jeton peut aussi partir en **XHR** (`setRequestHeader`) selon les
+         appels du lecteur : sans cette seconde prise, la bibliothèque maison
+         resterait vide sur un téléphone dont la page n'utilise pas `fetch` pour
+         ses requêtes d'API — et « je ne vois aucune de mes playlists » se
+         reproduirait à l'identique. */
+      if (!this.patchedXhr && window.XMLHttpRequest && XMLHttpRequest.prototype) {
+        this.patchedXhr = true;
+        var sendHeader = XMLHttpRequest.prototype.setRequestHeader;
+        if (typeof sendHeader === "function") {
+          XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
+            try {
+              var key = String(name).toLowerCase();
+              if (key === "authorization" && value) Api.authToken = value;
+              if (key === "client-token" && value) Api.clientToken = value;
+            } catch (e) {
+              /* une requête ne doit jamais échouer parce qu'on l'observe */
+            }
+            return sendHeader.apply(this, arguments);
+          };
+        }
+      }
       if (this.patched || !window.fetch) return;
       this.patched = true;
       var orig = window.fetch;
