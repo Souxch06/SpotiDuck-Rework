@@ -280,6 +280,18 @@ html.sd-mobile.sd-tab-library #Desktop_LeftSidebar_Id {
   overflow: hidden !important;
 }
 
+/* **Une page ouverte n'est jamais recouverte par un de nos écrans.**
+   Signalé le 25/09 : « quand on clique sur les playlists, y'a un écran noir ».
+   Nos écrans pleine page (accueil maison, bibliothèque, écran d'accueil
+   marketing) n'ont rien à faire sur une sous-page — playlist, album, artiste,
+   titres likés — et cette règle ne dépend d'aucun état de script : même si une
+   classe restait en place, la page ouverte reste visible. */
+html.sd-mobile.sd-subpage .sd-layer .sd-home,
+html.sd-mobile.sd-subpage .sd-layer .sd-lib,
+html.sd-mobile.sd-subpage .sd-layer .sd-welcome {
+  display: none !important;
+}
+
 /* Desktop "Now playing view" side panel: reused as a bottom sheet (§12). */
 html.sd-mobile #Desktop_PanelContainer_Id {
   display: none !important;

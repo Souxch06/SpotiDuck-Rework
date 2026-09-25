@@ -598,6 +598,7 @@ const TABMEASURE = () => {
         ` · panneau ${c("#Desktop_PanelContainer_Id a[href^='/playlist/']")}` +
         ` · page ${c("#main-view a[href^='/playlist/']")}` +
         ` · rangées-à-vous ${c("[data-sd-mine]")}` +
+        ` · bibliothèque ${lib && typeof lib.scopes === "number" ? lib.scopes : "?"} conteneur(s)` +
         ` · lues ${lib ? (lib.scan || []).join("+") || 0 : "?"}`
       );
     })(),
@@ -696,6 +697,102 @@ const SCROLLPROBE = async () => {
       : "?",
     classe: document.documentElement.classList.contains("sd-mini-on") ? "sd-mini-on" : "sans sd-mini-on",
     bas: window.getComputedStyle(document.documentElement).getPropertyValue("--sd-mini-h-current").trim(),
+  };
+};
+
+/* **Une playlist ouverte : ce qui recouvre l'écran.** Signalé le 25/09 :
+   « quand on clique sur les playlists, y'a un écran noir » — et, dans le même
+   message, « le lecteur qui disparaît ». On ouvre donc une playlist comme un
+   doigt le ferait (la première ligne de la bibliothèque, sinon un lien de la
+   page, sinon l'adresse d'une playlist connue) et on relève : le chemin, ce que
+   le contenu mesure, **ce qui se trouve au-dessus** au centre et sous le
+   lecteur, quels écrans à nous sont visibles, et l'état du lecteur. Une seule
+   annotation doit suffire à savoir si l'écran est noir à cause de nous. */
+const CLICKPLAYLIST = () => {
+  const row = document.querySelector(".sd-lib-row[href*='/playlist/'], .sd-lib-row[href*='/collection/']");
+  const link = document.querySelector("#main-view a[href^='/playlist/'], #Desktop_LeftSidebar_Id a[href^='/playlist/']");
+  const before = location.pathname;
+  if (row) {
+    row.click();
+    return { via: "ligne de la bibliothèque", before, apres: location.pathname };
+  }
+  if (link) {
+    link.click();
+    return { via: "lien de la page", before, apres: location.pathname };
+  }
+  /* Aucun lien : on ouvre une playlist connue, comme le ferait l'application en
+     suivant une adresse. La navigation peut être **complète** (hors SPA) : elle
+     emporte alors le contexte — c'est pourquoi l'attente et la mesure se font
+     côté sonde, pas ici. */
+  location.href = "/playlist/37i9dQZF1DXcBWIGoYBM5M";
+  return { via: "adresse de playlist", before, apres: "chargement" };
+};
+
+const SUBPAGE_PROBE = () => {
+  const visible = (el) => {
+    if (!el) return false;
+    if (el.hidden === true) return false;
+    const r = el.getBoundingClientRect();
+    const c = window.getComputedStyle(el);
+    return r.width > 2 && r.height > 2 && c.display !== "none" && c.visibility !== "hidden" && Number(c.opacity || 1) > 0.05;
+  };
+  const box = (el) => {
+    const r = el.getBoundingClientRect();
+    return Math.round(r.width) + "x" + Math.round(r.height);
+  };
+  const content = document.querySelector('[data-testid="home-page"], #main-view, main[data-testid], .Root__main-view, main');
+  const at = (fy) => {
+    try {
+      const el = document.elementFromPoint(Math.round(window.innerWidth * 0.5), Math.round(window.innerHeight * fy));
+      if (!el) return "rien";
+      const mine = el.closest && el.closest(".sd-layer");
+      const cls = String(el.className || "").split(" ").filter(Boolean)[0] || "";
+      return el.tagName.toLowerCase() + (cls ? "." + cls : "") + (mine ? "[nous]" : "");
+    } catch (e) {
+      return "non mesurable";
+    }
+  };
+  const calques = [".sd-home", ".sd-lib", ".sd-welcome", ".sd-content-alert", ".sd-sheet", ".sd-scrim", ".sd-player"]
+    .map((sel) => {
+      const el = document.querySelector(".sd-layer " + sel);
+      return sel.replace(".sd-", "") + "=" + (visible(el) ? box(el) : "caché");
+    })
+    .join(" ");
+  const mini = document.querySelector(".sd-mini");
+  const lecteur = mini
+    ? (visible(mini) ? "visible " + box(mini) : "caché") +
+      " · dessus=" + at(0.93) +
+      " · transform=" + (mini.style.transform || "aucun")
+    : "absent";
+  const text = content ? (content.textContent || "").trim().length : 0;
+  const els = content ? content.querySelectorAll("*").length : 0;
+  return {
+    chemin: location.pathname,
+    contenu: content ? box(content) + " " + els + " éléments " + text + " car." : "aucun élément de contenu",
+    vide: !content || (text < 20 && els === 0),
+    dessus: "centre=" + at(0.45) + " bas=" + at(0.75),
+    calques: calques,
+    lecteur: lecteur,
+    classes: document.documentElement.className,
+    /* Les dialogues de Spotify : combien sont **visibles**. Un dialogue fermé
+       resté dans l'arbre ne doit plus éteindre nos barres (ni le lecteur). */
+    dialogues: (() => {
+      const all = document.querySelectorAll('[role="dialog"], [aria-modal="true"], [data-testid="modal"]');
+      let seen = 0;
+      all.forEach((el) => {
+        if (el.closest(".sd-layer")) return;
+        if (el.hidden === true || el.getAttribute("aria-hidden") === "true") return;
+        const r = el.getClientRects ? el.getClientRects() : null;
+        if (r && r.length) seen++;
+      });
+      return `${seen} visibles/${all.length}`;
+    })(),
+    barreLaterale: (() => {
+      const el = document.querySelector("#Desktop_LeftSidebar_Id");
+      if (!el) return "absente";
+      const c = window.getComputedStyle(el);
+      return (visible(el) ? "visibile " + box(el) : "cachée") + " display=" + c.display;
+    })(),
   };
 };
 
@@ -1039,6 +1136,67 @@ async function main() {
            départ, et les captures aussi. */
         await safely(() => page.evaluate(CLICK, '.sd-nav-item[data-tab="home"]'));
         await sleep(600);
+      }
+
+      /* **Une playlist ouverte : écran noir ? lecteur disparu ?** Le parcours
+         de l'utilisateur — bibliothèque, puis une playlist — mesuré de bout en
+         bout : on ouvre, on relève tout de suite, puis deux secondes plus tard
+         (le contenu d'une playlist arrive après la barre de titre). */
+      if (hasNav === true) {
+        const before = await safely(() => page.evaluate(SUBPAGE_PROBE));
+        const opened = await safely(() => page.evaluate(CLICKPLAYLIST));
+        await sleep(3500);
+        /* **Une navigation complète emporte la coque** — et l'application, elle,
+           la réinjecte à chaque chargement (`injectAtDocumentEnd`). On fait donc
+           pareil : sans cela la mesure porterait sur une page de Spotify **sans
+           coque**, et ne dirait rien de « l'écran noir » (qui est justement une
+           page de Spotify sous notre coque). */
+        const sansCoque = await safely(() => page.evaluate(() => !document.querySelector(".sd-layer")));
+        let reinjectee = false;
+        if (sansCoque === true) {
+          await safely(() => page.evaluate(target.mode === "original" ? original : bundle));
+          await sleep(2500);
+          reinjectee = true;
+        }
+        const at = await safely(() => page.evaluate(SUBPAGE_PROBE));
+        await sleep(2000);
+        const after = await safely(() => page.evaluate(SUBPAGE_PROBE));
+        if (at && opened) {
+          const lecture = (m) =>
+            m
+              ? `chemin=${m.chemin} contenu=${m.contenu} dessus=${m.dessus} calques=${m.calques} ` +
+                `lecteur=${m.lecteur} barre-laterale=${m.barreLaterale} dialogues=${m.dialogues} classes="${m.classes}"`
+              : "?";
+          const line =
+            `ouvert par ${opened.via} (${opened.before} → ${opened.apres})` +
+            (reinjectee ? " · coque réinjectée après un chargement complet" : "") +
+            ` · ${lecture(at)}` +
+            ` · +2 s : chemin=${after ? after.chemin : "?"} contenu=${after ? after.contenu : "?"} ` +
+            `dessus=${after ? after.dessus : "?"} lecteur=${after ? after.lecteur : "?"} ` +
+            `classes="${after ? after.classes : "?"}"`;
+          /* Un écran noir se reconnaît à trois signes : le contenu est vide, un
+             de **nos** calques est posé dessus, ou le lecteur a disparu (il
+             était visible avant l'appui). */
+          const noir =
+            at.vide === true ||
+            /(^| )centre=[^ ]+\[nous\]/.test(at.dessus) ||
+            (before && before.lecteur.indexOf("visible") === 0 && at.lecteur.indexOf("visible") !== 0);
+          if (noir) warn(`Sous-page playlist — ${target.label}`, line);
+          else note(`Sous-page playlist — ${target.label}`, line);
+          report.pages.push({ label: `${target.label} (playlist)`, sub: at, after });
+        } else {
+          warn(`Sous-page playlist — ${target.label}`, "la playlist n'a pas pu être ouverte (aucune mesure)");
+        }
+        /* Et on revient : les mesures suivantes (défilement, captures) ont
+           besoin de la page de départ, pas d'une playlist ouverte. */
+        try {
+          await page.goto(target.url, { waitUntil: "domcontentloaded", timeout: 45000 });
+          await sleep(2500);
+          await safely(() => page.evaluate(target.mode === "original" ? original : bundle));
+          await sleep(2000);
+        } catch (e) {
+          /* page irrécupérable : les mesures suivantes le diront */
+        }
       }
 
       /* **Le lecteur pendant le défilement** : il ne doit pas s'effacer. */

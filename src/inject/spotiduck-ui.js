@@ -673,6 +673,23 @@
       return "other";
     },
 
+    /**
+     * **Une sous-page, décidée par l'adresse.** Playlist, album, artiste,
+     * section, titres likés : tout ce qui n'est ni la racine du lecteur, ni la
+     * recherche, ni la connexion. Le DOM ne suffisait pas — le 25/09, une
+     * playlist ouverte depuis la bibliothèque n'était pas reconnue comme une
+     * sous-page, la barre latérale de Spotify (devenue pleine page) restait
+     * posée dessus, et l'écran paraissait noir.
+     */
+    isSubPagePath: function () {
+      var path = (location.pathname || "/").replace(/\/+$/, "");
+      if ((location.host || "").indexOf("accounts.spotify.com") >= 0) return false;
+      if (/\/login(\/|$)/.test(path)) return false;
+      if (/^\/search(\/|$)/.test(path)) return false;
+      if (Home.isHomePath()) return false;
+      return true;
+    },
+
     /** Title of the page currently open (playlist/album/artist…). */
     pageTitle: function () {
       var h1 = pick(SEL.pageH1);
@@ -987,6 +1004,10 @@
         if (now - self.lastMini > 1000) {
           self.lastMini = now;
           if (UI.reassertMini()) UI.paint(State, "réaffirmation");
+          /* **Et rien de nous sur une page ouverte** : une playlist reste
+             visible même si un chemin de code a laissé un de nos écrans en
+             place. */
+          if (UI.reassertSurfaces()) UI.paintChrome(State);
         }
         if (!State.playing || State.seeking) return;
         Spotify.calibrate();
@@ -1691,7 +1712,58 @@
         html.classList.remove("sd-player-open");
         fixed = true;
       }
+      /* **Un dialogue fermé ne doit pas éteindre le lecteur.** La classe qui
+         fait reculer notre coque devant un dialogue de Spotify était posée par
+         une simple présence dans le DOM : un dialogue resté monté une fois
+         fermé l'éteignait **pour de bon** (« le lecteur disparaît »). On la
+         revérifie donc ici — une fois par seconde, et seulement quand elle est
+         posée. */
+      if (html.classList.contains("sd-native-modal") && Polish.syncOverlay()) fixed = true;
       return fixed;
+    },
+
+    /**
+     * **Aucun de nos écrans ne recouvre une page ouverte.**
+     *
+     * « Quand on clique sur les playlists, y'a un écran noir » (25/09). Une
+     * playlist ouverte **depuis** la bibliothèque laissait nos écrans pleine
+     * page — accueil maison, bibliothèque — par-dessus, ou la barre latérale de
+     * Spotify restait en pleine page. Plutôt que d'espérer que chaque chemin de
+     * code range ce qu'il a ouvert, on le **réaffirme** : dès que la vue est une
+     * sous-page, nos écrans pleine page sont rangés, la classe d'état est
+     * remise d'aplomb et le garde-fou de contenu est réappliqué. Une fois par
+     * seconde, comme le mini-lecteur — et sans rien recalculer d'autre.
+     */
+    reassertSurfaces: function () {
+      if (!this.built || !this.el) return false;
+      /* Le chemin décide (voir `Spotify.isSubPagePath`) : une playlist ouverte
+         depuis la bibliothèque n'est pas reconnue par le DOM tout de suite. */
+      if (!Spotify.isSubPagePath()) return false;
+      var html = document.documentElement;
+      var changed = false;
+      if (this.el.home && !this.el.home.hidden) {
+        Home.hide();
+        changed = true;
+      }
+      if (this.el.lib && !this.el.lib.hidden) {
+        Library.leave();
+        changed = true;
+      }
+      if (html.classList.contains("sd-lib-on")) {
+        html.classList.remove("sd-lib-on");
+        changed = true;
+      }
+      if (html.classList.contains("sd-welcome-on")) {
+        Welcome.hide();
+        changed = true;
+      }
+      if (!html.classList.contains("sd-subpage")) {
+        html.classList.add("sd-subpage");
+        changed = true;
+      }
+      /* Et le contenu ne peut pas rester masqué par une de nos règles (§31). */
+      Content.apply();
+      return changed;
     },
 
     /** Header / tab-bar visibility for the current route + tab. */
@@ -1701,7 +1773,13 @@
       var isLibrary = s.tab === "library";
       var isSubPage = s.route === "page";
 
-      html.classList.toggle("sd-subpage", isSubPage && !isLibrary);
+      /* **Une page ouverte reste ouverte.** `sd-subpage` était annulé sur
+         l'onglet Bibliothèque : une playlist ouverte depuis la bibliothèque
+         n'était donc pas reconnue, et la barre latérale de Spotify — que la
+         feuille transforme en page pleine sur cet onglet — restait posée
+         par-dessus (« quand on clique sur les playlists, il y a un écran
+         noir », 25/09). La vue fait foi, pas l'onglet. */
+      html.classList.toggle("sd-subpage", isSubPage);
       html.classList.toggle("sd-has-track", !!s.hasTrack);
       /* **Le lecteur ne disparaît plus.** `sd-mini-on` dépendait d'une lecture
          instantanée de l'état : la barre de lecture de Spotify quitte l'arbre
@@ -2461,6 +2539,23 @@
      * recharger, et sait copier le diagnostic (une seule ligne à coller pour
      * savoir ce qui se passe sur un téléphone qu'on n'a pas sous la main).
      */
+    /**
+     * **Un écran noir se dit, même en changeant de page.** Jusqu'ici l'alerte
+     * n'était armée qu'au démarrage : une playlist ouverte plus tard qui
+     * n'affichait rien restait un écran noir muet (signalé : « quand on clique
+     * sur les playlists, y'a un écran noir »). On la réarme donc après chaque
+     * changement de vue, une fois, sans boucle.
+     */
+    alertSoon: function (ms) {
+      var self = this;
+      window.clearTimeout(this.alertTimer);
+      this.alertTimer = window.setTimeout(function () {
+        self.alertTimer = 0;
+        self.alertIfBlank();
+      }, typeof ms === "number" ? ms : 1500);
+      return true;
+    },
+
     alertIfBlank: function () {
       var state = this.state();
       var html = document.documentElement;
@@ -3594,6 +3689,12 @@
   }
 
   var Welcome = {
+    /** Ranger l'écran d'accueil — une seule façon de le faire. */
+    hide: function () {
+      document.documentElement.classList.remove("sd-welcome-on");
+      if (UI.el.welcome) UI.el.welcome.setAttribute("aria-hidden", "true");
+      return false;
+    },
     apply: function () {
       var html = document.documentElement;
       var login = html.classList.contains("sd-login");
@@ -3607,8 +3708,9 @@
          d'accueil n'a de sens que sur la page marketing du lecteur, quand
          personne n'est connecté et qu'il n'y a rien à remplir. */
       var show = !app && !login && !LoginState.isLoginPage() && marketing;
-      html.classList.toggle("sd-welcome-on", show);
-      if (UI.el.welcome) UI.el.welcome.setAttribute("aria-hidden", show ? "false" : "true");
+      if (!show) return this.hide();
+      html.classList.add("sd-welcome-on");
+      if (UI.el.welcome) UI.el.welcome.setAttribute("aria-hidden", "false");
       return show;
     },
   };
@@ -4830,10 +4932,14 @@
       var self = this;
       var page = pick(SEL.mainView);
       this.ignored = 0;
-      var scopes = [];
-      [pick(SEL.sidebar), pick(SEL.panel)].forEach(function (node) {
-        if (node && scopes.indexOf(node) < 0) scopes.push(node);
-      });
+      /* **La bibliothèque se reconnaît à ce qu'elle dit**, pas seulement à ses
+         identifiants : le 25/09, la lecture ne sortait plus des zones connues
+         (`#Desktop_LeftSidebar_Id`, panneau) — et sur un téléphone dont la
+         disposition a changé, cela pouvait vouloir dire « aucune playlist » sur
+         une page qui les affichait toutes. Un conteneur qui porte le mot
+         (« Votre bibliothèque », `data-testid` qui le dit, `aria-label` qui le
+         dit) et qui contient des playlists **est** la bibliothèque. */
+      var scopes = this.libraryScopes();
       var trusted = scopes.slice();
       var shelves = this.mineShelves();
       this.shelves = shelves.length;
@@ -4904,10 +5010,70 @@
             ? "page (à vous)"
             : scopeIsMine
             ? "rangée à vous"
-            : "corps";
+            : "bibliothèque";
         if (rows.length > before) self.scan.push(label + " " + (rows.length - before));
       });
       return rows;
+    },
+
+    /**
+     * **Où est la bibliothèque ?** Les repères historiques d'abord, puis tout
+     * conteneur qui se présente comme la bibliothèque : un titre, un
+     * `data-testid`, un `aria-label` qui porte le mot, et des playlists dedans.
+     * La disposition du web player change (et n'est pas la même sur un
+     * téléphone) : une liste d'identifiants en dur, c'est zéro ligne lue le jour
+     * où Spotify renomme son conteneur.
+     */
+    libraryScopes: function () {
+      var found = [];
+      var self = this;
+      var add = function (node, known) {
+        if (!node || found.indexOf(node) >= 0) return;
+        if (!node.querySelector) return;
+        if (!node.querySelector("a[href^='/playlist/'], a[href^='/album/'], a[href^='/collection/']")) return;
+        if (!known) {
+          var head = node.querySelector("h1, h2, h3, [role='heading']");
+          var hay = (
+            (node.getAttribute("aria-label") || "") +
+            " " +
+            (node.getAttribute("data-testid") || "") +
+            " " +
+            (head ? head.textContent || "" : "")
+          ).toLowerCase();
+          /* « bibliothèque » / « your library » : le mot qui décide. */
+          if (!/biblioth|library/.test(hay)) return;
+        }
+        found.push(node);
+      };
+      add(pick(SEL.sidebar), true);
+      add(pick(SEL.panel), true);
+      var candidates = document.querySelectorAll(
+        '[data-testid*="librar" i], [data-testid*="collect" i], [aria-label*="iblioth" i], [aria-label*="ibrary" i], nav, aside, [role="navigation"]'
+      );
+      var max = Math.min(candidates.length, 60);
+      var i;
+      for (i = 0; i < max && found.length < 10; i++) add(candidates[i], false);
+      /* **Et par le titre.** Une bibliothèque peut n'avoir aucun repère
+         technique : c'est son titre qui la nomme (« Votre bibliothèque »), et
+         le conteneur qui la porte est le plus proche ancêtre qui contient des
+         playlists. C'est ainsi que la barre latérale se présente elle-même. */
+      var heads = document.querySelectorAll("h1, h2, h3, [role='heading']");
+      var cap = Math.min(heads.length, 400);
+      for (i = 0; i < cap && found.length < 10; i++) {
+        var text = (heads[i].textContent || "").trim();
+        if (!text || text.length > 40) continue;
+        if (!/biblioth|library/i.test(text)) continue;
+        var node = heads[i];
+        var walk = 0;
+        while (node && node !== document.body && walk < 6) {
+          if (node.querySelector && node.querySelector("a[href^='/playlist/'], a[href^='/album/'], a[href^='/collection/']")) break;
+          node = node.parentElement;
+          walk++;
+        }
+        if (node && node !== document.body) add(node, true);
+      }
+      this.scopes = found.length;
+      return found;
     },
 
     /**
@@ -6674,6 +6840,11 @@
     /** Called when the web player navigates on its own (link taps…). */
     sync: function () {
       var route = Spotify.route();
+      /* Le DOM ne dit pas toujours qu'on est sur une sous-page (le contenu d'une
+         playlist arrive après la barre de titre) : l'adresse, elle, le dit tout
+         de suite. `route` commande la place de nos barres **et** le bouton
+         retour — le deviner au DOM, c'est l'écran noir signalé. */
+      if (route === "other" && Spotify.isSubPagePath()) route = "page";
       var patch = { route: route };
       if (route === "home" && State.tab !== "library" && State.tab !== "search") patch.tab = "home";
       if (route === "search") patch.tab = "search";
@@ -6925,6 +7096,27 @@
       });
     },
 
+    /**
+     * **Un dialogue compte quand il est *visible*.**
+     *
+     * `querySelector` seul tombait sur les dialogues que Spotify garde montés
+     * dans son arbre une fois fermés : la coque croyait alors qu'un dialogue
+     * était ouvert **pour toujours** — nos barres s'éteignaient (dont le
+     * mini-lecteur, en `opacity: 0`) et notre calque passait derrière la page.
+     * C'est exactement ce que l'utilisateur appelle « le lecteur disparaît » et
+     * « tous les affichages sont bugués ». Un dialogue ouvert, lui, a une taille.
+     */
+    dialogVisible: function (node) {
+      if (!node) return false;
+      if (node.hidden === true) return false;
+      if (node.getAttribute("aria-hidden") === "true") return false;
+      var rects = node.getClientRects ? node.getClientRects() : null;
+      if (!rects || !rects.length) return false;
+      var cs = window.getComputedStyle ? window.getComputedStyle(node) : null;
+      if (cs && (cs.display === "none" || cs.visibility === "hidden" || Number(cs.opacity || 1) < 0.05)) return false;
+      return true;
+    },
+
     syncOverlay: function () {
       var open = false;
       for (var i = 0; i < this.OVERLAYS.length && !open; i++) {
@@ -6933,13 +7125,15 @@
           /* Our own player and sheets are dialogs too — never treat them as a
              native overlay, or the shell would hide itself on open. */
           if (found[j].closest(".sd-layer")) continue;
+          if (!this.dialogVisible(found[j])) continue;
           open = true;
           break;
         }
       }
-      if (open === this.overlayOpen) return;
+      if (open === this.overlayOpen) return false;
       this.overlayOpen = open;
       document.documentElement.classList.toggle("sd-native-modal", open);
+      return true;
     },
 
     /** 2) Software keyboard → `html.sd-keyboard` hides the tab bar + mini so
@@ -7158,6 +7352,11 @@
         syncFromDom("page");
         UI.paintChrome(State);
         Login.apply(); // the login page is rendered by the same container
+        /* Une vue qui change, c'est le moment où une de nos règles peut se
+           retrouver posée sur la mauvaise page : on range, et si la page
+           n'affiche rien, on le dit (avec de quoi recharger). */
+        UI.reassertSurfaces();
+        Content.alertSoon(1500);
       }, 250));
       pageObs.observe(main, { childList: true, subtree: false });
     }

@@ -854,16 +854,36 @@ await checkAsync("tab bar can be disabled without leaving a floating mini player
   return "class toggled ✓";
 });
 
-await checkAsync("a native dialog makes our chrome step back", async () => {
+await checkAsync("un dialogue *visible* fait reculer nos barres, un dialogue fermé ne fait rien", async () => {
+  /* « Le lecteur disparaît » venait aussi de là : un `role="dialog"` resté
+     monté dans l'arbre de Spotify **une fois fermé** faisait croire à un
+     dialogue ouvert — nos barres s'éteignaient alors pour de bon. Un dialogue
+     ne compte donc que s'il est **visible** (une taille, pas `hidden`). */
   const modal = doc.createElement("div");
   modal.setAttribute("role", "dialog");
+  modal.hidden = true;
   doc.body.appendChild(modal);
   await tick(300);
-  assert(doc.documentElement.classList.contains("sd-native-modal"), "sd-native-modal not set");
+  assert(!doc.documentElement.classList.contains("sd-native-modal"), "un dialogue fermé (`hidden`) éteint nos barres");
+  /* Fermé, mais sans l'attribut : aucun nœud sans taille ne doit compter. */
+  modal.hidden = false;
+  await tick(300);
+  assert(!doc.documentElement.classList.contains("sd-native-modal"), "un dialogue sans taille éteint nos barres");
+  /* Un vrai dialogue, lui, a une taille. */
+  modal.getClientRects = () => [{ width: 300, height: 200 }];
+  SD._internals.Polish.syncOverlay();
+  await tick(30);
+  assert(doc.documentElement.classList.contains("sd-native-modal"), "un dialogue visible ne fait plus reculer nos barres");
+  /* Et le mini-lecteur reste affiché : c'est nos barres qui reculent, pas lui. */
+  await tick(1100);
+  assert(
+    doc.documentElement.classList.contains("sd-mini-on"),
+    "le mini-lecteur a été éteint par un dialogue : c'est exactement « le lecteur disparaît »"
+  );
   modal.remove();
   await tick(300);
   assert(!doc.documentElement.classList.contains("sd-native-modal"), "sd-native-modal not cleared");
-  return "ours fades, dialog keeps the taps ✓";
+  return "dialogue visible = nos barres reculent · fermé = rien · lecteur intact ✓";
 });
 
 await checkAsync("a shrinking viewport alone does not hide the bars", async () => {
@@ -1645,7 +1665,7 @@ await checkAsync("a tall, narrow page is not 'nothing displayed', and the diagno
     const width = isMain ? 29 : hasText ? 24 : 0;
     return { width, height, top: 0, left: 0, right: width, bottom: height, x: 0, y: 0 };
   };
-  w.AndBridge = { version: () => "2.11.12", session: () => false };
+  w.AndBridge = { version: () => "2.11.13", session: () => false };
   w.eval(await read("dist/spotiduck-ui.js"));
   await tick(250);
 
@@ -1914,6 +1934,110 @@ await checkAsync("la bibliothèque s'affiche sans attendre le réseau", async ()
   );
   dom.window.close();
   return "2 lignes affichées sans le moindre appel réseau ✓";
+});
+
+await checkAsync("une playlist ouverte n'est jamais recouverte par nos écrans", async () => {
+  /* Signalé le 25/09 : « quand on clique sur les playlists, y'a un écran noir ».
+     Une playlist ouverte **depuis** la bibliothèque laissait nos écrans pleine
+     page par-dessus (ou la barre latérale de Spotify, devenue pleine page sur
+     cet onglet). Ici : on ouvre la bibliothèque, puis on ouvre une playlist, et
+     nos écrans doivent être rangés — sans que rien d'autre ne soit appelé. */
+  const dom = new JSDOM(
+    "<!doctype html><html><body>" +
+      "<div id='Desktop_LeftSidebar_Id'><a href='/playlist/p1' aria-label='Mes tubes'></a></div>" +
+      "<main id='main-view'><section data-testid='home-page'></section></main>" +
+      "</body></html>",
+    { url: "https://open.spotify.com/intl-fr/", pretendToBeVisual: true, runScripts: "dangerously" }
+  );
+  dom.window.fetch = () => Promise.resolve({ ok: false, status: 401, json: () => Promise.resolve({}) });
+  dom.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => undefined }));
+  dom.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(200);
+  const api = dom.window.SpotiDuckUI;
+  const page = dom.window.document;
+  const html = page.documentElement;
+  api.state.tab = "library";
+  api.library.load(true);
+  await tick(120);
+  assert(api.library.el.hidden === false, "la bibliothèque n'est pas affichée : le banc ne peut pas éprouver le recouvrement");
+  assert(html.classList.contains("sd-lib-on"), "la classe qui montre la bibliothèque n'est pas posée");
+  assert(html.classList.contains("sd-subpage") === false, "la vue de départ n'est pas une sous-page");
+
+  /* Le doigt : une ligne de la bibliothèque mène à une playlist — la page
+     change de vue **et** d'adresse, comme dans le lecteur. */
+  page.getElementById("main-view").innerHTML = "<section data-testid='playlist-page'><h1>Ma playlist</h1></section>";
+  dom.window.history.pushState({}, "", "/intl-fr/playlist/p1");
+  assert(api._internals.Spotify.isSubPagePath() === true, "une adresse de playlist n'est pas reconnue comme une sous-page");
+  api._internals.Router.sync();
+  await tick(1400);
+  assert(api.state.route === "page", `la vue n'est pas reconnue comme une sous-page : ${api.state.route}`);
+  assert(html.classList.contains("sd-subpage"), "la classe de sous-page n'est pas posée : la barre latérale resterait en pleine page");
+  assert(api.library.el.hidden === true, "notre bibliothèque reste posée sur la playlist");
+  assert(!html.classList.contains("sd-lib-on"), "la classe de bibliothèque reste posée : la barre latérale de Spotify resterait masquée/pleine page");
+  assert(api.home.el.hidden === true, "l'accueil maison reste posé sur la playlist");
+  assert(!html.classList.contains("sd-welcome-on"), "l'écran d'accueil marketing reste posé sur la playlist");
+  dom.window.close();
+  return "playlist ouverte · nos écrans rangés ✓";
+});
+
+await checkAsync("la barre du haut redevient celle d'une page quand on ouvre une playlist", async () => {
+  /* Et retour : revenir à l'accueil doit rendre la navigation, sans état
+     résiduel de la sous-page. */
+  const dom = new JSDOM(
+    "<!doctype html><html><body>" +
+      "<div id='Desktop_LeftSidebar_Id'><a href='/playlist/p1' aria-label='Mes tubes'></a></div>" +
+      "<main id='main-view'><section data-testid='playlist-page'><h1>Ma playlist</h1></section></main>" +
+      "</body></html>",
+    { url: "https://open.spotify.com/intl-fr/playlist/p1", pretendToBeVisual: true, runScripts: "dangerously" }
+  );
+  dom.window.fetch = () => Promise.resolve({ ok: false, status: 401, json: () => Promise.resolve({}) });
+  dom.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => undefined }));
+  dom.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(200);
+  const api = dom.window.SpotiDuckUI;
+  const page = dom.window.document;
+  const html = page.documentElement;
+  assert(html.classList.contains("sd-subpage"), "une playlist ouverte au démarrage n'est pas reconnue");
+  assert(page.querySelector(".sd-topbar").classList.contains("is-visible"), "la barre de titre (retour + nom) n'est pas affichée sur la playlist");
+  assert(page.querySelector(".sd-topbar-title").textContent === "Ma playlist", "la barre de titre ne dit pas le nom de la page : " + page.querySelector(".sd-topbar-title").textContent);
+  /* Retour à la racine : la navigation revient, la barre de titre s'efface. */
+  page.getElementById("main-view").innerHTML = "<section data-testid='home-page'></section>";
+  dom.window.history.pushState({}, "", "/intl-fr/");
+  api._internals.Router.sync();
+  await tick(300);
+  assert(!html.classList.contains("sd-subpage"), "la sous-page reste marquée après un retour à l'accueil");
+  assert(page.querySelector(".sd-topbar").classList.contains("is-visible") === false, "la barre de titre reste affichée sur l'accueil");
+  assert(html.classList.contains("sd-nav-on"), "la navigation ne revient pas après un retour à l'accueil");
+  dom.window.close();
+  return "sous-page reconnue · retour propre ✓";
+});
+
+await checkAsync("une playlist qui n'affiche rien le dit, avec de quoi recharger", async () => {
+  /* « Une capture doit suffire à diagnostiquer » : une sous-page vide ne doit
+     pas rester un écran noir muet — c'est exactement ce qui a été signalé. */
+  const dom = new JSDOM(
+    "<!doctype html><html><body><main id='main-view'></main></body></html>",
+    { url: "https://open.spotify.com/intl-fr/playlist/vide", pretendToBeVisual: true, runScripts: "dangerously" }
+  );
+  dom.window.fetch = () => Promise.resolve({ ok: false, status: 401, json: () => Promise.resolve({}) });
+  dom.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => undefined }));
+  dom.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(200);
+  const api = dom.window.SpotiDuckUI;
+  const page = dom.window.document;
+  /* Le changement de vue arme l'alerte (voir l'observateur de page). */
+  api._internals.Content.alertSoon(60);
+  await tick(400);
+  const alert = page.querySelector(".sd-content-alert");
+  assert(alert && alert.hidden === false, "une playlist vide reste un écran noir muet");
+  assert(alert.querySelector(".sd-content-alert-reload"), "le panneau ne propose pas de recharger");
+  assert(/contenu/.test(alert.querySelector(".sd-content-alert-text").textContent + alert.querySelector(".sd-content-alert-diag").textContent), "le panneau ne dit pas ce qu'il mesure");
+  /* Contenu revenu : le panneau s'efface de lui-même. */
+  page.getElementById("main-view").innerHTML = "<section data-testid='playlist-page'><h1>Ma playlist</h1><p>" + "titre ".repeat(80) + "</p></section>";
+  api._internals.Content.alertIfBlank();
+  assert(alert.hidden === true, "le panneau reste alors que la page affiche du contenu");
+  dom.window.close();
+  return "écran vide annoncé · rechargement proposé · effacé au retour du contenu ✓";
 });
 
 await checkAsync("un cache écrit par une version qui ramassait toute la page est jeté", async () => {
@@ -2266,6 +2390,76 @@ await checkAsync("hors bibliothèque : vos rangées « Vos playlists » sont lue
   assert(!again.some((h) => /\/playlist\/r[12]/.test(h)), "une recommandation est prise quand le compte est connu : " + again.join(", "));
   dom.window.close();
   return "rangée à vous lue · carte au nom du compte lue · recommandations écartées ✓";
+});
+
+await checkAsync("une bibliothèque sans aucun repère technique est trouvée par son titre", async () => {
+  /* Le cas du téléphone : pas d'identifiant, pas de repère de test — juste un
+     titre « Votre bibliothèque » et, dessous, les playlists du compte. */
+  const dom = new JSDOM(
+    "<!doctype html><html><body>" +
+      "<main id='main-view'>" +
+      "<section><h1>Votre bibliothèque</h1>" +
+      "<a href='/playlist/a1' aria-label='Mes tubes'></a>" +
+      "<a href='/playlist/a2' aria-label='Mix du soir'></a>" +
+      "</section>" +
+      "<section><h2>Recommandé pour vous</h2>" +
+      "<a href='/playlist/b1' aria-label=\"Today's Top Hits · Playlist · Spotify\"></a>" +
+      "</section>" +
+      "</main></body></html>",
+    { url: "https://open.spotify.com/intl-fr/", pretendToBeVisual: true, runScripts: "dangerously" }
+  );
+  dom.window.fetch = () => Promise.resolve({ ok: false, status: 401, json: () => Promise.resolve({}) });
+  dom.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => undefined }));
+  dom.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(200);
+  const api = dom.window.SpotiDuckUI;
+  api.state.tab = "library";
+  api.library.load(true);
+  for (let i = 0; i < 40 && api.library.state === "loading"; i++) await tick(25);
+  const hrefs = api.library.items.map((r) => r.href).join(",");
+  assert(hrefs.includes("/playlist/a1") && hrefs.includes("/playlist/a2"), "la bibliothèque nommée par son titre n'est pas lue : " + hrefs);
+  assert(!/\/playlist\/b1/.test(hrefs), "les recommandations sont entrées par la section nommée : " + hrefs);
+  assert(api.library.ignored >= 1, "la recommandation écartée n'est pas comptée");
+  dom.window.close();
+  return "bibliothèque trouvée par son titre (2 lignes) · 1 recommandation écartée ✓";
+});
+
+await checkAsync("la bibliothèque est reconnue même si Spotify a renommé son conteneur", async () => {
+  /* Le 25/09 : « tous les affichages ne soit plus buger ». La lecture ne
+     sortait plus des conteneurs connus (`#Desktop_LeftSidebar_Id`, panneau) —
+     et une disposition qui les renomme voulait dire « aucune playlist » sur une
+     page qui les affiche toutes. Un conteneur qui **dit** qu'il est la
+     bibliothèque est donc lu ; les rangées de recommandations, non. */
+  const dom = new JSDOM(
+    "<!doctype html><html><body>" +
+      /* Aucun des identifiants connus : la disposition a changé. */
+      "<div data-testid='library-root'><h1>Votre bibliothèque</h1>" +
+      "<a href='/playlist/s1' aria-label='Mes tubes'></a>" +
+      "<a href='/playlist/s2' aria-label='Mix du soir'></a>" +
+      "</div>" +
+      "<main id='main-view'><section><h2>Recommandé pour vous</h2>" +
+      "<a href='/playlist/r1' aria-label=\"Today's Top Hits · Playlist · Spotify\"></a>" +
+      "<a href='/playlist/r2' aria-label='RapCaviar · Playlist · Spotify'></a>" +
+      "</section></main>" +
+      "</body></html>",
+    { url: "https://open.spotify.com/intl-fr/", pretendToBeVisual: true, runScripts: "dangerously" }
+  );
+  dom.window.fetch = () => Promise.resolve({ ok: false, status: 401, json: () => Promise.resolve({}) });
+  dom.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => undefined }));
+  dom.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(200);
+  const api = dom.window.SpotiDuckUI;
+  api.state.tab = "library";
+  api.library.load(true);
+  for (let i = 0; i < 40 && api.library.state === "loading"; i++) await tick(25);
+  const hrefs = api.library.items.map((r) => r.href).join(",");
+  assert(hrefs.includes("/playlist/s1") && hrefs.includes("/playlist/s2"), "les playlists de la bibliothèque renommée ne sont pas lues : " + hrefs);
+  assert(!/\/playlist\/r[12]/.test(hrefs), "une recommandation est entrée par le conteneur renommé : " + hrefs);
+  assert(api.library.scopes >= 1, "le conteneur n'a pas été reconnu comme une bibliothèque");
+  const journal = [...dom.window.document.querySelectorAll(".sd-lib-log-list li")].map((li) => li.textContent).join(" | ");
+  assert(/bibliothèque 2/.test(journal), "le journal ne dit pas que les lignes viennent de la bibliothèque : " + journal);
+  dom.window.close();
+  return "bibliothèque reconnue par son titre (2 lignes) · recommandations écartées ✓";
 });
 
 await checkAsync("la liste de Spotify arrive après nous : la bibliothèque se remplit d'elle-même", async () => {

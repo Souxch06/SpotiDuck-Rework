@@ -1068,8 +1068,11 @@ if (!/headerNames: function/.test(libraryCode) || !/libraryHeaders/.test(runtime
 if (/pick\(SEL\.mainView\), document\.body/.test(libraryCode)) {
   errors.push("la lecture ramasse de nouveau toute la page : les playlists recommandées par Spotify reviendraient dans la bibliothèque");
 }
-if (!/\[pick\(SEL\.sidebar\), pick\(SEL\.panel\)\]/.test(libraryCode)) {
-  errors.push("la lecture ne se limite plus aux zones de la bibliothèque (barre latérale + panneau)");
+if (!/libraryScopes: function/.test(libraryCode) || !/add\(pick\(SEL\.sidebar\), true\)/.test(libraryCode)) {
+  errors.push("la bibliothèque n'est plus repérée par ses zones connues (barre latérale + panneau) : la lecture ne saurait plus où chercher");
+}
+if (!/biblioth\|library/.test(libraryCode) || !/if \(!known\)/.test(libraryCode)) {
+  errors.push("un conteneur inconnu peut de nouveau être pris pour la bibliothèque sans le dire (« bibliothèque »/« library » dans son titre ou ses repères) : les rangées de recommandations reviendraient");
 }
 if (!/self\.ignored\+\+/.test(libraryCode) || !/libraryIgnored/.test(runtime)) {
   errors.push("les playlists écartées ne sont plus comptées ni dites : une bibliothèque courte serait suspecte sans explication");
@@ -1100,6 +1103,46 @@ if (!/watchList: function/.test(libraryCode) || !/obsList/.test(libraryCode)) {
 }
 if (!/LIBRARY_CACHE_VERSION/.test(libraryCode) || !/data\.v === LIBRARY_CACHE_VERSION/.test(libraryCode)) {
   errors.push("le cache ne porte plus de version : un cache écrit par une lecture large réafficherait des playlists qui ne sont pas au compte");
+}
+
+/* **Une page ouverte n'est jamais recouverte.** Signalé deux fois : « quand on
+   clique sur les playlists, y'a un écran noir ». Une playlist ouverte depuis la
+   bibliothèque n'était pas reconnue comme une sous-page (l'onglet annulait la
+   classe) et nos écrans pleine page — ou la barre latérale transformée en page —
+   restaient posés dessus. */
+if (!/isSubPagePath: function/.test(runtime) || !/route === "other" && Spotify\.isSubPagePath\(\)/.test(stripComments(runtime))) {
+  errors.push("la vue ne reconnaît plus une sous-page par son adresse : une playlist ouverte depuis la bibliothèque ne serait plus reconnue (écran noir)");
+}
+if (/toggle\("sd-subpage", isSubPage && !isLibrary\)/.test(stripComments(runtime))) {
+  errors.push("la classe de sous-page est de nouveau annulée par l'onglet : ouvrir une playlist depuis la bibliothèque remettrait nos écrans dessus");
+}
+if (!/reassertSurfaces: function/.test(stripComments(runtime))) {
+  errors.push("plus rien ne range nos écrans pleine page quand une page est ouverte : un état résiduel peut de nouveau faire un écran noir");
+}
+if (!/UI\.reassertSurfaces\(\)/.test(runtime) || !/Content\.alertSoon\(/.test(runtime)) {
+  errors.push("la réaffirmation des écrans (et l'alerte d'écran vide) n'est plus appelée à chaque changement de vue : le « je dois recharger à la main » reviendrait");
+}
+if (!/alertSoon: function/.test(runtime)) {
+  errors.push("l'alerte d'écran vide n'est plus armable hors du démarrage : une playlist qui n'affiche rien redeviendrait un écran noir muet");
+}
+if (!/\.sd-subpage \.sd-layer \.sd-home/.test(css) || !/\.sd-subpage \.sd-layer \.sd-lib/.test(css)) {
+  errors.push("la feuille n'interdit plus à nos écrans pleine page de s'afficher sur une sous-page : le garde-fou ne dépendrait plus que du script");
+}
+/* **Un dialogue fermé n'éteint pas le lecteur.** La règle qui faisait reculer
+   nos barres visait aussi le mini-lecteur : un `role="dialog"` resté dans le
+   DOM une fois fermé le faisait disparaître **pour de bon** (« le lecteur
+   disparaît », signalé quatre fois). */
+if (/sd-native-modal \.sd-layer > \.sd-mini/.test(css)) {
+  errors.push("le mini-lecteur s'éteint de nouveau quand Spotify affiche un dialogue : « le lecteur disparaît » reviendrait");
+}
+if (!/dialogVisible: function/.test(stripComments(runtime)) || !/Polish\.syncOverlay\(\)/.test(runtime)) {
+  errors.push("un dialogue n'est plus vérifié comme *visible* (et la classe n'est plus revérifiée) : un dialogue fermé resté dans le DOM éteindrait la coque");
+}
+if (!/dialogues: \(?\(\)/.test(probeTool) || !/dialogues=\$\{m\.dialogues\}/.test(probeTool)) {
+  errors.push("la sonde ne dit plus combien de dialogues de Spotify sont visibles : un dialogue fermé qui éteint le lecteur ne serait plus vu");
+}
+if (!/SUBPAGE_PROBE/.test(probeTool) || !/CLICKPLAYLIST/.test(probeTool) || !/Sous-page playlist — /.test(probeTool)) {
+  errors.push("la sonde n'ouvre plus de playlist : « écran noir quand on clique sur une playlist » ne serait plus mesuré en CI");
 }
 
 /* **Le lecteur est statique.** Deux versions ont tenté d'apprivoiser les gestes

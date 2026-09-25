@@ -3124,3 +3124,111 @@ mise à jour réafficherait exactement ce qu'on retire.
   détail par zone (`barre n · panneau n · page n · rangées-à-vous n · lues …`)
   dans l'annotation CI — la composition de la bibliothèque est vérifiable sans
   capture.
+
+## §48 — Une page ouverte n'est jamais recouverte (v2.11.13)
+
+Retour du 25/09, après la 2.11.12 :
+
+> « Fais en sorte que tous les affichages ne soit plus buger stp c'est vrm chiant
+> y'a que de ca. Et quand on clique sur les playlist, y'a un écran noir comme
+> j'ai dis au debut du message. Corrige encore une fois, le lecteur qui
+> disparaît etc (pour de bon sans rien touche plus tard) »
+
+### L'écran noir, et sa cause
+
+La 2.11.12 n'a pas touché à cette règle, écrite plus tôt : la classe de sous-page
+était **annulée sur l'onglet Bibliothèque** —
+
+```js
+html.classList.toggle("sd-subpage", isSubPage && !isLibrary);
+```
+
+Or la feuille transforme la barre latérale de Spotify en **page pleine** sur cet
+onglet, et c'est justement de là que l'utilisateur ouvre ses playlists : la
+playlist s'ouvrait, la barre latérale (pleine page, presque vide) restait posée
+dessus. D'où « quand on clique sur les playlists, y'a un écran noir ».
+
+Autre moitié du problème : `State.route` vient du **DOM** de Spotify
+(`section[data-testid$="-page"]`). Sur une page dont le contenu arrive après la
+barre de titre, la vue n'était pas reconnue du tout — ni sous-page, ni titre, ni
+bouton retour correct.
+
+### Ce qui change
+
+1. **La vue fait foi, plus l'onglet.** `sd-subpage` suit la vue : une page
+   ouverte reste ouverte, quelle que soit la barre d'où elle a été ouverte.
+2. **L'adresse décide de la vue** (`Spotify.isSubPagePath`) : playlist, album,
+   artiste, section, titres likés — tout ce qui n'est ni la racine, ni la
+   recherche, ni la connexion est une sous-page, même quand le DOM se tait. La
+   barre de titre (retour + nom) et le bouton retour matériel en dépendent aussi.
+3. **Nos écrans pleine page sont rangés, en continu.** `UI.reassertSurfaces()`
+   — une fois par seconde, comme la réaffirmation du lecteur, et à chaque
+   changement de vue : accueil maison, bibliothèque et écran d'accueil marketing
+   sont mis de côté dès que la vue est une sous-page, la classe d'état est remise
+   d'aplomb et le garde-fou de contenu (§31) réappliqué. **Sans rien toucher à la
+   main** : le chemin de code qui a laissé l'écran en place n'a pas à le ranger.
+4. **La feuille le garantit aussi** : sur une sous-page, nos écrans pleine page
+   ne s'affichent pas, quoi que fasse le script —
+   `html.sd-subpage .sd-layer .sd-home · .sd-lib · .sd-welcome { display: none }`.
+5. **Un écran vide se dit, même en changeant de page.** L'alerte d'écran vide
+   (§32) n'était armée qu'au démarrage : elle est réarmée après chaque
+   changement de vue (`Content.alertSoon`). Une playlist qui n'affiche rien
+   propose donc « Recharger » au lieu de rester noire et muette.
+
+### Et la bibliothèque se reconnaît à ce qu'elle dit
+
+Deuxième moitié du « tous les affichages ne soit plus buger » : depuis la
+2.11.12, la lecture ne sortait plus de deux identifiants en dur
+(`#Desktop_LeftSidebar_Id`, `#Desktop_PanelContainer_Id`). Si la disposition du
+téléphone ne les porte pas, la bibliothèque affichait « rien » sur une page qui
+montrait tout. Les surfaces sont donc repérées **par ce qu'elles disent** : les
+deux repères connus d'abord, puis tout conteneur qui porte le mot
+(« Votre bibliothèque », `data-testid`/`aria-label` qui le dit) **et** qui
+contient des playlists — y compris celui qui n'a **aucun** repère technique et
+que seul son titre nomme (le plus proche ancêtre qui contient des playlists). Un conteneur qui ne se présente pas comme la
+bibliothèque n'est jamais pris pour elle — les rangées de recommandations
+restent dehors, comptées (garde-fou d'audit).
+
+### Et le lecteur ne s'éteint plus pour un dialogue fermé
+
+La coque recule (barres effacées, calque au-dessous) devant un dialogue de
+Spotify — sauf que le test était « un nœud `[role="dialog"]` existe dans le
+DOM ». Or Spotify **garde ses dialogues montés** une fois fermés : le premier
+dialogue de la session (un menu, une confirmation, un message d'accueil)
+suffisait donc à poser `sd-native-modal` **pour de bon** — nos barres
+s'éteignaient, mini-lecteur compris (`opacity: 0`), et notre calque passait
+derrière la page. C'est très exactement « le lecteur disparaît » et « tous les
+affichages sont bugués ».
+
+Un dialogue ne compte plus que s'il est **visible** (`dialogVisible` : pas
+`hidden`, pas `aria-hidden`, une taille, pas `display:none`) — la même règle que
+`purgePopups` applique déjà au verrou de défilement. En plus, `reassertMini`
+revérifie la classe une fois par seconde : un dialogue qui disparaît sans le dire
+rend la main. Et le **mini-lecteur ne s'éteint plus** du tout quand un dialogue
+est ouvert : c'est lui qui descend derrière le dialogue, il reste visible là où
+le dialogue ne le recouvre pas.
+
+### Vérifications
+
+* banc : un dialogue fermé (`hidden`, ou sans taille) ne fait rien, un dialogue
+  visible fait reculer nos barres, et le mini-lecteur reste affiché ;
+* banc : une bibliothèque dont le conteneur a été renommé (aucun identifiant
+  connu, un repère de test et un titre) est lue quand même, et une bibliothèque
+  **sans aucun repère technique** — seulement un titre « Votre bibliothèque » —
+  aussi ; les recommandations de la page restent écartées et comptées ;
+* banc : ouvrir la bibliothèque, puis une playlist — nos écrans sont rangés,
+  `sd-lib-on` et `sd-subpage` sont justes, l'accueil maison et l'écran marketing
+  ne recouvrent rien ;
+* banc : une playlist ouverte **au démarrage** est reconnue (barre de titre avec
+  le nom de la page), et un retour à l'accueil rend la navigation ;
+* banc : une sous-page vide affiche le panneau (recharger · diagnostic) et
+  l'efface dès que du contenu revient ;
+* audit : reconnaissance par l'adresse, classe de sous-page non annulée par
+  l'onglet, `reassertSurfaces`/`alertSoon` appelés, garde-fou CSS présent,
+  bibliothèque reconnue par ce qu'elle dit, dialogue compté seulement s'il est
+  visible, mini-lecteur jamais éteint par un dialogue, ouverture de playlist
+  mesurée par la sonde ;
+* sonde CI : `Sous-page playlist — <page>` — `ouvert par … (chemin → chemin)`,
+  puis ce que le contenu mesure, **ce qui se trouve au-dessus** au centre et sous
+  le lecteur, quels écrans à nous sont visibles, l'état de la barre latérale et
+  celui du lecteur, relevés deux fois (à l'ouverture puis 2 s après).

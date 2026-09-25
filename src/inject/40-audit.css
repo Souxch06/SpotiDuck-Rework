@@ -248,9 +248,12 @@ html.sd-mobile .sd-root [data-testid="sticky-header"] + * {
    -------------------------------------------------------------------------- */
 
 /* While Spotify shows a dialog/menu (`.sd-native-modal`, toggled by the
-   runtime) the shell steps back: our bars fade, stop taking taps and drop
-   below the dialog, so nothing is hidden behind the mini player. */
-html.sd-mobile.sd-native-modal .sd-layer > .sd-mini,
+   runtime) the shell steps back: our **bars** fade and stop taking taps, so
+   nothing is hidden behind them.
+   Le **mini-lecteur** ne s'éteint plus : il passe derrière (notre calque
+   descend au-dessous du dialogue, juste en dessous) et reste visible là où le
+   dialogue ne le recouvre pas. « Le lecteur disparaît » venait justement de là :
+   un dialogue fermé resté dans le DOM éteignait la barre pour de bon. */
 html.sd-mobile.sd-native-modal .sd-layer > .sd-tabbar,
 html.sd-mobile.sd-native-modal .sd-layer > .sd-topbar {
   opacity: 0;
