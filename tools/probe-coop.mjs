@@ -1235,6 +1235,15 @@ async function main() {
     { label: "banc-tel", url: "http://127.0.0.1:5173/demo/player.html", mode: "notre", mobile: true },
   ];
 
+  /* **Mesurer une cible à la fois.** La sonde complète prend plusieurs minutes
+     et interroge la vraie page ; pour vérifier un changement, on veut pouvoir
+     la poser sur le banc seul : `PROBE_LABELS=banc-tel`. */
+  const seules = (process.env.PROBE_LABELS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const cibles = seules.length ? pages.filter((p) => seules.indexOf(p.label) >= 0) : pages;
+
   const lines = [];
   const shots = [];
 
@@ -1251,7 +1260,7 @@ async function main() {
     }
   };
 
-  for (const target of pages) {
+  for (const target of cibles) {
     const page = await browser.newPage();
     const errors = [];
     page.on("pageerror", (error) => errors.push(String(error && error.message).slice(0, 240)));
@@ -1569,6 +1578,11 @@ async function main() {
         let opened = null;
         let reinjectee = false;
         let retour = null;
+        /* L'état **avant** l'appui : c'est lui qui dit si l'on venait de la
+           bibliothèque. Sans cette comparaison, un retour mesuré depuis une
+           page où la bibliothèque n'était pas ouverte paraissait fautif — et
+           une alarme à tort est un défaut. */
+        const avantRetour = await safely(() => page.evaluate(RETOUR_PROBE));
         /* **Un rechargement se voit.** On pose une marque sur le document avant
            l'appui : si elle a disparu après, l'application a été rechargée —
            c'est exactement l'écran noir signalé le 25/09 (« quand on appuie sur
@@ -1653,10 +1667,19 @@ async function main() {
         await sleep(2200);
         const apresRetour = await safely(() => page.evaluate(RETOUR_PROBE));
         if (retour && apresRetour) {
+          const parLaBibliotheque =
+            /sd-lib-row/.test((opened && opened.via) || "") ||
+            !!(avantRetour && avantRetour.bibliotheque.indexOf("visible") === 0);
+          const revenu = apresRetour.bibliotheque.indexOf("visible") === 0 || apresRetour.onglet === "library";
+          const ligne =
+            `chemin=${apresRetour.chemin} onglet=${apresRetour.onglet} bibliothèque=${apresRetour.bibliotheque} ` +
+            `lecteur=${apresRetour.lecteur} · depuis la bibliothèque=${parLaBibliotheque ? "oui" : "non"}`;
+          /* On ne juge le retour que si l'on venait **de la bibliothèque** :
+             c'est là qu'il doit ramener (« le retour en arrière doit
+             fonctionner »). Ailleurs, on relève le chemin sans rien juger. */
+          if (parLaBibliotheque && !revenu) warn(`Retour depuis une playlist — ${target.label}`, ligne);
+          else note(`Retour depuis une playlist — ${target.label}`, ligne);
           retour = Object.assign(retour, apresRetour);
-          const rate = retour.bibliotheque.indexOf("visible") < 0 && retour.onglet !== "library";
-          if (rate) warn(`Retour depuis une playlist — ${target.label}`, `chemin=${retour.chemin} onglet=${retour.onglet} bibliothèque=${retour.bibliotheque} lecteur=${retour.lecteur}`);
-          else note(`Retour depuis une playlist — ${target.label}`, `chemin=${retour.chemin} onglet=${retour.onglet} bibliothèque=${retour.bibliotheque} lecteur=${retour.lecteur}`);
         }
 
         /* Et on revient : les mesures suivantes (défilement, captures) ont
