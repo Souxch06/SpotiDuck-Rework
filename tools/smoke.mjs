@@ -1444,7 +1444,7 @@ await checkAsync("a tall, narrow page is not 'nothing displayed', and the diagno
     const width = isMain ? 29 : hasText ? 24 : 0;
     return { width, height, top: 0, left: 0, right: width, bottom: height, x: 0, y: 0 };
   };
-  w.AndBridge = { version: () => "2.11.8", session: () => false };
+  w.AndBridge = { version: () => "2.11.9", session: () => false };
   w.eval(await read("dist/spotiduck-ui.js"));
   await tick(250);
 

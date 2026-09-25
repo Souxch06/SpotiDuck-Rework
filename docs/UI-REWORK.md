@@ -2782,3 +2782,85 @@ laisse la page respirer entre deux requêtes.
   `runJs` dans l'activité), son usage côté page, la réception par `window.__sdNet`,
   le délai de garde, la progression du chargement et la préférence pour la voie
   non bloquante.
+
+## §44 — La bibliothèque se rabat sur Spotify, le lecteur ne part plus (v2.11.9)
+
+Message du 25/09 (09:40), sans capture :
+
+> « Le lecteur a denouveaux disparu et la bibliothèque est tjrs buger. Il arrive
+> pas a reconnaître mes playlist »
+
+Trois choses, une seule cause probable : **le lecteur n'était pas connecté**. Pas
+de session, donc pas de lecteur (le mini-lecteur n'existait qu'avec un lecteur
+prêt : le bas de l'écran se vidait), pas de jeton (la bibliothèque restait sur son
+constat d'échec), et aucune porte de sortie (le bouton « Réessayer » ne pouvait
+rien donner). La version précédente savait le dire, mais seulement dans le
+diagnostic — pas dans ce que l'on voit.
+
+### Le lecteur est toujours là
+
+La barre de lecture était conditionnée à trois lectures d'état : une piste en
+cours, un lecteur prêt, ou « vu une fois depuis le chargement de la page ». Le
+troisième garde-fou (§42) ne survivait pas à un rechargement de page. Elle est
+donc maintenant **inconditionnelle** dans la coque : `sd-mini-on` est posé au
+premier repeint, et la coque se repeint **au défilement** (cadence douce), pour
+que rien de ce que Spotify démonte en défilant ne l'emporte.
+
+Quand la session est fermée, la barre le dit — « Non connecté · Appuyez pour vous
+connecter » — au lieu de rester vide, et l'appui mène à la connexion classique.
+
+### La bibliothèque, quatre voies au lieu d'une
+
+1. **`/me` d'abord.** C'est le seul appel qui dit à quel compte appartient le
+   jeton. Sans lui, une réponse validée par un jeton **anonyme** faisait écrire
+   « Aucune playlist… pour ce compte » — un mensonge. Le compte est maintenant
+   nommé en tête du résumé (« Compte X · Playlists 5 · Albums 2 »), et un jeton
+   sans compte donne l'état `guest` (« Le lecteur n'est pas connecté à Spotify »
+   ou « Je n'ai pas pu vérifier à quel compte… »), jamais « vide ».
+2. **La liste de Spotify, en repli.** La barre latérale du lecteur est déjà
+   remplie par Spotify, avec le compte de l'utilisateur, sans jeton ni requête de
+   notre part : `fromSpotifyList()` en lit les adresses (playlist, album,
+   artiste, podcast) et la page les affiche, en disant d'où elles viennent. Pour
+   cela, la barre latérale n'est plus retirée du flux quand notre page la
+   remplace : `opacity: 0` au lieu de `display: none` — en `display: none`,
+   Spotify ne la remplissait plus, et le repli aurait été vide.
+3. **Le jeton redemandé à la page.** La capture n'attrape que les requêtes que la
+   page a déjà faites. La page du lecteur sait donner son jeton
+   (`/get_access_token`, même origine, donc hors contrôle d'accès) : la coque le
+   redemande quand il manque, et une seconde fois si Spotify l'a refusé
+   (401/403/419) — puis relit. Un jeton **anonyme** est refusé comme jeton de
+   compte : c'est le lecteur qui n'est pas connecté, on le dit.
+4. **Le journal des essais.** Quand l'API a failli, la page écrit chaque appel et
+   son verdict (« /me → pont 401 · jeton refusé (401) »), l'âge du jeton, et ce
+   qu'a donné le renouvellement. Une seule capture suffit alors à savoir ce qui
+   manque — la règle posée depuis le §40.
+
+Enfin, « Réessayer » sans session ne pouvait rien donner : la page propose
+maintenant **« Se connecter à Spotify »** à côté, qui mène à la connexion
+classique (`?allow_password=1`), la même que l'écran d'accueil maison.
+
+### Mesures (CI, ce commit)
+
+* « Lecteur au défilement — page-fr » : `coque posée · avant=visible 412x192 ·
+  après=visible 412x192 · sd-mini-on · place réservée=calc(120px * 1)` ;
+* « Onglet Bibliothèque — accueil » : `bibliothèque=visible 412x731 lignes=0`
+  **`état=indisponible (réponse par navigateur (429))`** — la raison exacte est
+  désormais dans l'annotation, et la barre latérale de Spotify (`barre-laterale`)
+  n'est plus ce qu'on mesure : c'est **notre** page qui est à l'écran.
+
+### Vérifications
+
+* banc : si l'API ne répond pas, les trois lignes de la liste de Spotify
+  s'affichent à la place (adresses, dédoublonnage, note « lues dans la liste de
+  Spotify ») et le journal dit que `/me` a été refusé ;
+* banc : le jeton redemandé à la page (`/get_access_token`) permet de **relire**
+  la bibliothèque et de nommer le compte — sans lui, une bibliothèque sans jeton
+  n'avait aucune issue ;
+* banc : le lecteur reste affiché **sans session** (barre visible, texte dédié,
+  classe `sd-mini-signed-out`) et la bibliothèque propose la connexion ;
+* banc : le résumé nomme le compte lu (« Compte Moi · Playlists 2 ») ;
+* audit : voie asynchrone conservée, arrêt sur refus de jeton (401/403/419),
+  repli sur la liste de Spotify, jeton redemandé et **anonyme refusé**, journal
+  présent, lecteur affiché en permanence et repeint au défilement ; sonde :
+  barre de Spotify distinguée de la nôtre, lecteur relevé deux fois pendant le
+  défilement, raison et journal relevés.
