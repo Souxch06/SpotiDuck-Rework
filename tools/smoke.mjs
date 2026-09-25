@@ -1286,7 +1286,7 @@ await checkAsync("a tall, narrow page is not 'nothing displayed', and the diagno
     const width = isMain ? 29 : hasText ? 24 : 0;
     return { width, height, top: 0, left: 0, right: width, bottom: height, x: 0, y: 0 };
   };
-  w.AndBridge = { version: () => "2.11.3", session: () => false };
+  w.AndBridge = { version: () => "2.11.4", session: () => false };
   w.eval(await read("dist/spotiduck-ui.js"));
   await tick(250);
 
@@ -1304,7 +1304,7 @@ await checkAsync("a tall, narrow page is not 'nothing displayed', and the diagno
   );
   const diag = api.content.diagnose();
   assert(!/2\.9\.0/.test(diag), "le diagnostic annonce encore une version figée : " + diag);
-  assert(/SpotiDuck 2\.11\.3/.test(diag), "le diagnostic n'annonce pas la version de l'application : " + diag);
+  assert(/SpotiDuck 2\.11\.4/.test(diag), "le diagnostic n'annonce pas la version de l'application : " + diag);
   assert(/page \/intl-fr\//.test(diag), "le diagnostic ne dit pas sur quelle page il a été pris : " + diag);
   /* Le diagnostic doit porter **les mots de la page** (« Choisissez votre
      langue ») et l'état réel de la session : sans ça, une capture ne dit pas ce
@@ -1326,6 +1326,197 @@ await checkAsync("a tall, narrow page is not 'nothing displayed', and the diagno
   assert(api.content.alertIfBlank() === true, "un écran vraiment vide ne signale plus rien");
   page.window.close();
   return "29×2756 ⇒ affichée · version réelle au diagnostic · vide ⇒ alarme ✓";
+});
+
+await checkAsync("the library shows the account's playlists, albums, artists and podcasts", async () => {
+  /* « Sur l'onglet bibliothèque, je ne vois aucune de mes playlists. » L'onglet
+     ne faisait qu'afficher la barre latérale de Spotify : si son rendu ne suit
+     pas, il ne reste rien. Cette page lit la bibliothèque **à la source** (l'API
+     du lecteur, avec le jeton que la page utilise déjà) et l'affiche elle-même.
+     Le banc vérifie donc les deux : ce qu'on lit, et ce qui se voit. */
+  const dom = new JSDOM("<!doctype html><html><body><main></main></body></html>", {
+    url: "https://open.spotify.com/intl-fr/",
+    pretendToBeVisual: true,
+    runScripts: "dangerously",
+  });
+  const answers = {
+    "/me/playlists?limit=50": {
+      total: 2,
+      items: [
+        {
+          id: "p1",
+          name: "Mes tubes",
+          owner: { display_name: "Moi" },
+          tracks: { total: 42 },
+          images: [{ url: "https://i.scdn.co/image/small", width: 64 }, { url: "https://i.scdn.co/image/big", width: 640 }],
+        },
+        { id: "p2", name: "Découvertes", owner: { display_name: "Spotify" }, tracks: { total: 30 }, images: [] },
+      ],
+    },
+    "/me/albums?limit=50": {
+      total: 1,
+      items: [
+        { album: { id: "a1", name: "Album Un", artists: [{ name: "Artiste Un" }], images: [{ url: "https://i.scdn.co/image/alb", width: 300 }] } },
+      ],
+    },
+    "/me/artists?limit=50": {
+      total: 1,
+      items: [{ id: "ar1", name: "Artiste Suivi", genres: ["pop"], images: [{ url: "https://i.scdn.co/image/art", width: 320 }] }],
+    },
+    "/me/shows?limit=50": {
+      total: 1,
+      items: [{ show: { id: "sh1", name: "Podcast Un", publisher: "Radio Libre", images: [{ url: "https://i.scdn.co/image/sh", width: 300 }] } }],
+    },
+    "/me/tracks?limit=1": { total: 128 },
+  };
+  const asked = [];
+  dom.window.fetch = (url, init) => {
+    const key = String(url).replace("https://api.spotify.com/v1", "");
+    asked.push(key);
+    const body = answers[key];
+    void init;
+    return Promise.resolve({
+      ok: !!body,
+      status: body ? 200 : 401,
+      json: () => Promise.resolve(body || {}),
+    });
+  };
+  dom.window.AndBridge = new Proxy({}, { get: () => () => undefined });
+  dom.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(200);
+
+  const api = dom.window.SpotiDuckUI;
+  const page = dom.window.document;
+  assert(api.library, "la bibliothèque n'est pas exposée");
+  assert(typeof api.library.load === "function", "la bibliothèque ne sait pas se charger");
+
+  /* Le jeton : la page du lecteur le pose dans ses requêtes, et la coque le
+     capte (`Api.capture`). On reproduit exactement ce geste — c'est aussi ce qui
+     vérifie que la capture fonctionne. */
+  await dom.window.fetch("https://api.spotify.com/v1/me", { headers: { Authorization: "Bearer banc-de-test" } });
+  api.library.load(true);
+  const loaded = await (async () => {
+    for (let i = 0; i < 40; i++) {
+      if (api.library.items.length) return true;
+      await tick(25);
+    }
+    return false;
+  })();
+  assert(loaded, `la bibliothèque n'a rien lu (état ${api.library.state})`);
+  assert(api.library.state === "ready", `état attendu « ready », obtenu « ${api.library.state} »`);
+  assert(asked.length >= 5, `les cinq sources de la bibliothèque doivent être lues, ${asked.length} lue(s)`);
+
+  /* Ce qui est lu : 6 lignes (titres likés, 2 playlists, 1 album, 1 artiste,
+     1 podcast) et les **totaux annoncés par l'API**, pas la taille de la page. */
+  assert(api.library.items.length === 6, `6 lignes attendues, ${api.library.items.length} lue(s)`);
+  assert(api.library.counts.liked === 128, `128 titres likés attendus, ${api.library.counts.liked} comptés`);
+  assert(api.library.counts.playlist === 2, `2 playlists attendues, ${api.library.counts.playlist} comptées`);
+  const first = api.library.items[0];
+  assert(first.type === "liked" && first.href === "/collection/tracks", "les titres likés devraient ouvrir /collection/tracks");
+  const playlist = api.library.items[1];
+  assert(playlist.name === "Mes tubes" && playlist.href === "/playlist/p1", `playlist lue de travers : ${JSON.stringify(playlist)}`);
+  /* La plus grande pochette, pas l'icône 64 px. */
+  assert(playlist.img === "https://i.scdn.co/image/big", `pochette choisie : ${playlist.img}`);
+
+  /* Ce qui se voit : l'onglet bibliothèque ouverte, notre page remplace la barre
+     latérale (et donc la masque), les lignes portent de vraies adresses. */
+  api.state.tab = "library";
+  api.library.apply();
+  const panel = page.querySelector(".sd-lib");
+  assert(panel && panel.hidden === false, "la bibliothèque ne s'affiche pas sur son onglet");
+  assert(page.documentElement.className.includes("sd-lib-on"), "la barre latérale de Spotify n'est pas remplacée (classe sd-lib-on absente)");
+  const rows = [...page.querySelectorAll(".sd-lib-row")];
+  assert(rows.length === 6, `6 lignes attendues à l'écran, ${rows.length} affichée(s)`);
+  assert(rows.every((r) => r.getAttribute("href")), "une ligne n'a pas d'adresse : elle ne mènerait nulle part");
+  assert(
+    rows.map((r) => r.getAttribute("href")).includes("/playlist/p1"),
+    "aucune ligne ne mène à la playlist : " + rows.map((r) => r.getAttribute("href")).join(", ")
+  );
+  assert(page.querySelector(".sd-lib-row-playlist .sd-lib-art img"), "la pochette de la playlist n'est pas affichée");
+  assert(/Playlists 2/.test(page.querySelector(".sd-lib-sum").textContent), "le résumé ne compte pas les playlists : " + page.querySelector(".sd-lib-sum").textContent);
+  const chips = [...page.querySelectorAll(".sd-lib-chip")];
+  assert(chips.length === 5, `5 filtres attendus, ${chips.length} trouvé(s)`);
+  assert(
+    chips.map((c) => c.textContent).join("/") === "Tout/Playlists/Albums/Artistes/Podcasts",
+    "les filtres ne sont pas nommés : " + chips.map((c) => c.textContent).join("/")
+  );
+
+  /* Un filtre filtre — et dit quand il ne reste rien. */
+  chips[2].dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  const albums = [...page.querySelectorAll(".sd-lib-row")];
+  assert(albums.length === 1, `1 album attendu après le filtre, ${albums.length} affiché(s)`);
+  assert(albums[0].getAttribute("href") === "/album/a1", "le filtre Albums montre autre chose qu'un album");
+  chips[4].dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  assert(page.querySelectorAll(".sd-lib-row").length === 1, "le filtre Podcasts ne garde pas le podcast");
+  chips[1].dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  assert(page.querySelectorAll(".sd-lib-row").length === 2, "le filtre Playlists ne garde pas les deux playlists");
+  chips[0].dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  assert(page.querySelectorAll(".sd-lib-row").length === 6, "le filtre Tout ne restaure pas la bibliothèque");
+
+  /* Le diagnostic dit ce qu'il en est, pour une capture de téléphone. */
+  assert(/biblio 6 éléments/.test(api.content.diagnose()), "le diagnostic ne dit pas ce que contient la bibliothèque : " + api.content.diagnose());
+
+  /* Quitter la bibliothèque rend la main à Spotify. */
+  api.state.tab = "home";
+  api.library.enter();
+  assert(panel.hidden === true, "la bibliothèque reste affichée en dehors de son onglet");
+  assert(!page.documentElement.className.includes("sd-lib-on"), "la barre latérale reste masquée après avoir quitté la bibliothèque");
+  dom.window.close();
+  return "6 lignes lues à la source · filtres, compteurs, adresses, masquage ✓";
+});
+
+await checkAsync("without a token the library keeps Spotify's sidebar (never an empty screen)", async () => {
+  /* La prudence qui compte : si le jeton manque (session fermée, page qui n'a
+     rien demandé), notre page **ne s'affiche pas** et ne masque rien. Sinon un
+     utilisateur sans session perdrait le seul accès à sa bibliothèque. */
+  const dom = new JSDOM("<!doctype html><html><body><main></main></body></html>", {
+    url: "https://open.spotify.com/intl-fr/",
+    pretendToBeVisual: true,
+    runScripts: "dangerously",
+  });
+  /* Une seule fonction de réponse, décidée par `answers` : le bouchon doit être
+     posé **avant** l'exécution de la coque, parce que la coque enveloppe
+     `window.fetch` pour y capter le jeton. Remplacer `fetch` après coup
+     contournerait la capture — et le test ne mesurerait plus rien de réel. */
+  let answers = () => null;
+  dom.window.fetch = (url) => {
+    const body = answers(String(url).replace("https://api.spotify.com/v1", ""));
+    return Promise.resolve({ ok: !!body, status: body ? 200 : 401, json: () => Promise.resolve(body || {}) });
+  };
+  dom.window.AndBridge = new Proxy({}, { get: () => () => undefined });
+  dom.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(200);
+  const api = dom.window.SpotiDuckUI;
+  const page = dom.window.document;
+
+  api.state.tab = "library";
+  api.library.enter();
+  await tick(120);
+  assert(api.library.state === "no-token", `état attendu « no-token », obtenu « ${api.library.state} »`);
+  assert(page.querySelector(".sd-lib").hidden === true, "la bibliothèque s'affiche alors qu'elle n'a rien lu");
+  assert(!page.documentElement.className.includes("sd-lib-on"), "la barre latérale de Spotify est masquée alors qu'on n'a rien à mettre à la place");
+  assert(/biblio pas de jeton/.test(api.content.diagnose()), "le diagnostic ne dit pas pourquoi la bibliothèque est absente");
+
+  /* Une seule des cinq sources répond : on garde ce qui a répondu, et on ne
+     prétend pas que le reste est vide. */
+  answers = (key) =>
+    key === "/me/playlists?limit=50"
+      ? { total: 1, items: [{ id: "p9", name: "La seule", owner: { display_name: "Moi" }, images: [] }] }
+      : null;
+  await dom.window.fetch("https://api.spotify.com/v1/me", { headers: { Authorization: "Bearer banc" } });
+  api.library.load(true);
+  for (let i = 0; i < 40 && !api.library.items.length; i++) await tick(25);
+  api.library.apply();
+  assert(api.library.items.length === 1, `la seule playlist qui a répondu devrait suffire : ${api.library.items.length} ligne(s)`);
+  assert(page.querySelector(".sd-lib").hidden === false, "la bibliothèque ne s'affiche pas alors qu'elle a une playlist");
+  const chips2 = [...page.querySelectorAll(".sd-lib-chip")];
+  chips2[4].dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  assert(
+    /Rien dans cette catégorie/.test(page.querySelector(".sd-lib-note").textContent),
+    "un filtre vide ne dit rien : " + page.querySelector(".sd-lib-note").textContent
+  );
+  dom.window.close();
+  return "sans jeton : rien ne masque Spotify · une source en panne : les autres suffisent ✓";
 });
 
 await checkAsync("the interface unit follows the device, not a fixed guess", async () => {

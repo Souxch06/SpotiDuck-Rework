@@ -2430,3 +2430,65 @@ main 29×2756 block`. On distingue ainsi « la page n'est pas l'accueil du
 lecteur » (aucune ancre de contenu) de « **notre** feuille a écrasé la page »
 (ancre présente, taille absurde) — les deux hypothèses que `contenu 29×2756`
 laissait ouvertes.
+
+---
+
+## §39 — La bibliothèque du compte, affichée par nous (v2.11.4)
+
+Signalé le 25/09 : « sur l'onglet bibliothèque, je ne vois aucune de mes
+playlists enregistrées sur mon compte ».
+
+L'onglet ne faisait qu'**afficher la barre latérale de Spotify**
+(`#Desktop_LeftSidebar_Id`, `.YourLibraryX`) en plein écran, avec notre feuille
+posée dessus. Si son rendu ne suit pas — liste vide, conteneur replié, classe
+renommée par Spotify — il ne reste rien à voir, et on ne peut pas réparer depuis
+ici une liste qu'on ne lit pas. C'est la même erreur que l'accueil maison en
+2.10.0 : dépendre du rendu de quelqu'un d'autre pour notre propre écran.
+
+### Ce que fait la page maintenant
+
+Elle lit la bibliothèque **à la source** : l'API du lecteur, avec le jeton que la
+page utilise déjà (`Api.authToken` — celui que la coque capte sur ses requêtes,
+le même que les statistiques d'écoute).
+
+| Source | Ce qui est affiché |
+| --- | --- |
+| `/me/playlists` | vos playlists (créées et suivies), avec leur propriétaire |
+| `/me/tracks` | « Titres likés » et leur nombre, vers `/collection/tracks` |
+| `/me/albums` | albums enregistrés, avec l'artiste |
+| `/me/artists` | artistes suivis, avec un genre |
+| `/me/shows` | podcasts enregistrés, avec l'éditeur |
+
+Chaque ligne fait 64 px de haut, avec une pochette de 56 px (les artistes en
+rond), un titre et un sous-titre sur une ligne chacun, et une **adresse réelle**
+(`/playlist/…`, `/album/…`) que le routeur de Spotify ouvre comme n'importe quel
+lien. Cinq filtres (Tout · Playlists · Albums · Artistes · Podcasts), un résumé
+du compte en haut (« Playlists 12 · Albums 3 · … ») et une phrase quand un filtre
+ne montre rien. Un interrupteur **« Bibliothèque SpotiDuck »** rend la main à
+celle de Spotify.
+
+### La prudence qui compte
+
+**Rien ne s'affiche tant qu'il n'y a rien à montrer**, et la barre latérale de
+Spotify n'est masquée que lorsqu'on a de quoi la remplacer : sans jeton (session
+fermée), ou si l'API ne répond pas, la page d'avant reste visible — on ne peut
+pas perdre l'accès à sa musique en installant cette version. Le jeton arrivant
+parfois après la première lecture, la page retente cinq fois, espacées de 4 s (en
+`setTimeout` chaîné, jamais en `setInterval` : un intervalle qui survit à un
+changement de vue est exactement ce que l'ancienne couche faisait).
+
+### Vérifications
+
+* banc : « la bibliothèque montre les playlists, albums, artistes et podcasts du
+  compte » — 6 lignes lues à la source (dont les titres likés), totaux de l'API
+  (128 titres likés), plus grande pochette choisie plutôt que l'icône 64 px,
+  adresses réelles sur chaque ligne, résumé du compte, cinq filtres nommés qui
+  filtrent vraiment, `sd-lib-on` posée (barre latérale remplacée) puis retirée en
+  quittant l'onglet, et le diagnostic qui dit `biblio 6 éléments` ;
+* banc : « sans jeton, la bibliothèque laisse la barre latérale de Spotify » —
+  état `no-token`, page masquée, `sd-lib-on` **absente** (rien n'est perdu), et
+  une source en panne n'empêche pas les autres de s'afficher ;
+* audit : module et méthodes, les cinq sources de l'API, l'interrupteur, et
+  l'interdiction de masquer la barre latérale sans condition ;
+* sonde : `Bibliothèque` relève l'état, la zone, le nombre de lignes et de
+  filtres, et si la barre latérale de Spotify est remplacée ou laissée en place.

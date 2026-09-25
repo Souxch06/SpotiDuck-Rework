@@ -900,6 +900,32 @@ const probeTool = read("tools/probe-coop.mjs");
 if (!/label: "page-fr", url: "https:\/\/open\.spotify\.com\/intl-fr\/"/.test(probeTool)) {
   errors.push("la sonde ne mesure plus la page /intl-fr/ du téléphone (celle de la capture du 25/09)");
 }
+/* 2-ter-quinquies. La bibliothèque maison. Signalé le 25/09 : « sur l'onglet
+   bibliothèque, je ne vois aucune de mes playlists ». L'onglet ne faisait
+   qu'afficher la barre latérale de Spotify ; notre page lit la bibliothèque du
+   compte à la source et l'affiche elle-même. Quatre choses ne doivent pas
+   régresser : la lecture par l'API avec le jeton de la page, les cinq sources,
+   le repli (ne **jamais** masquer la barre latérale sans avoir de quoi la
+   remplacer) et l'interrupteur. */
+const libraryCode = stripComments(runtime);
+for (const method of ["load", "parse", "render", "apply", "enter", "describe", "watch"]) {
+  if (!new RegExp(method + ": function").test(libraryCode)) {
+    errors.push(`la bibliothèque maison a perdu « ${method}() »`);
+  }
+}
+for (const endpoint of ["/me/playlists", "/me/albums", "/me/artists", "/me/shows", "/me/tracks"]) {
+  if (!libraryCode.includes(endpoint)) {
+    errors.push(`la bibliothèque ne lit plus ${endpoint} : une partie du compte disparaîtrait de l'écran`);
+  }
+}
+if (!/classList\.toggle\("sd-lib-on", show\)/.test(libraryCode)) {
+  errors.push("la bibliothèque masque la barre latérale de Spotify sans condition : un compte sans jeton perdrait l'accès à sa musique");
+}
+if (!/libraryBoard/.test(libraryCode) || !/switchRow\("libraryBoard"/.test(runtime)) {
+  errors.push("l'interrupteur de la bibliothèque maison a disparu (on ne peut plus revenir à celle de Spotify)");
+}
+if (!/func|/.test("x") && false) errors.push(""); /* jamais exécuté : garde l'alignement des blocs */
+
 if (!/anchors: function \(\)/.test(stripComments(runtime))) {
   errors.push("le diagnostic ne mesure plus les ancres de contenu : impossible de distinguer une page écrasée d'une page absente");
 }

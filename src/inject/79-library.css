@@ -1,0 +1,179 @@
+/* ==========================================================================
+   79 — La bibliothèque SpotiDuck
+
+   Signalé le 25/09 : « sur l'onglet bibliothèque, je ne vois aucune de mes
+   playlists enregistrées sur mon compte ». L'onglet ne faisait qu'afficher la
+   barre latérale de Spotify (`.YourLibraryX`) en plein écran : quand son rendu
+   ne suit pas, il ne reste rien à voir, et on ne peut pas réparer depuis ici
+   une liste qu'on ne lit pas.
+
+   Cette page est la nôtre : elle lit la bibliothèque du compte par l'API du
+   lecteur (voir le module `Library`) et l'affiche en lignes — pochette de
+   56 px, titre sur une ligne, sous-titre sur une ligne, 64 px de haut, ce qui
+   se touche au doigt. Elle occupe exactement la zone de la barre latérale
+   qu'elle remplace, et n'existe que lorsqu'elle a des données : sinon la barre
+   latérale de Spotify reste visible.
+
+   Rien n'est mesuré en dur : tout est en `--sd-u` (l'unité de l'appareil) et
+   en pourcentages, donc l'écran s'adapte comme le reste de la coque.
+   ========================================================================== */
+
+/* Notre page remplace la barre latérale : elle n'est masquée **que** quand on a
+   de quoi la remplacer (classe posée par `Library.apply`). Sinon elle reste —
+   c'est le seul moyen de ne pas perdre l'accès à sa musique. */
+html.sd-mobile.sd-lib-on #Desktop_LeftSidebar_Id {
+  display: none !important;
+}
+
+html.sd-mobile .sd-layer .sd-lib {
+  position: fixed;
+  top: calc(var(--sd-safe-t) + var(--sd-player-header-h));
+  left: var(--sd-safe-l);
+  right: var(--sd-safe-r);
+  bottom: var(--sd-bottom);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: calc(8px * var(--sd-u));
+  padding: calc(6px * var(--sd-u)) 0 0;
+  background: var(--sd-bg);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+html.sd-mobile .sd-layer .sd-lib[hidden] {
+  display: none;
+}
+
+/* --------------------------------------------------------------------------
+   1. Résumé du compte (compteurs) et filtres
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile .sd-layer .sd-lib-head {
+  padding: 0 calc(14px * var(--sd-u));
+  min-height: calc(24px * var(--sd-u));
+  display: flex;
+  align-items: center;
+}
+html.sd-mobile .sd-layer .sd-lib-sum {
+  font-size: calc(12.5px * var(--sd-u));
+  color: var(--sd-sub);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+html.sd-mobile .sd-layer .sd-lib-chips {
+  display: flex;
+  gap: calc(8px * var(--sd-u));
+  padding: 0 calc(14px * var(--sd-u));
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+html.sd-mobile .sd-layer .sd-lib-chips::-webkit-scrollbar {
+  display: none;
+}
+html.sd-mobile .sd-layer .sd-lib-chip {
+  flex: 0 0 auto;
+}
+
+/* --------------------------------------------------------------------------
+   2. Les lignes : une pochette, un titre, un sous-titre, une adresse réelle
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile .sd-layer .sd-lib-list {
+  display: flex;
+  flex-direction: column;
+  padding: 0 calc(8px * var(--sd-u)) calc(16px * var(--sd-u));
+}
+
+html.sd-mobile .sd-layer .sd-lib-row {
+  display: flex;
+  align-items: center;
+  gap: calc(12px * var(--sd-u));
+  min-height: calc(64px * var(--sd-u));
+  padding: calc(6px * var(--sd-u)) calc(8px * var(--sd-u));
+  border-radius: var(--sd-radius);
+  text-decoration: none;
+  color: var(--sd-text);
+}
+html.sd-mobile .sd-layer .sd-lib-row:active {
+  background: var(--sd-bg-tint);
+}
+
+html.sd-mobile .sd-layer .sd-lib-art {
+  flex: 0 0 auto;
+  width: calc(56px * var(--sd-u));
+  height: calc(56px * var(--sd-u));
+  border-radius: calc(8px * var(--sd-u));
+  background: var(--sd-bg-tint);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+html.sd-mobile .sd-layer .sd-lib-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+/* Les artistes se montrent en rond, comme partout ailleurs. */
+html.sd-mobile .sd-layer .sd-lib-row-artist .sd-lib-art {
+  border-radius: 50%;
+}
+html.sd-mobile .sd-layer .sd-lib-glyph {
+  width: calc(26px * var(--sd-u));
+  height: calc(26px * var(--sd-u));
+  color: var(--sd-accent);
+}
+/* Chaque type porte sa classe : une playlist qui ressemble à un album
+   n'apprend rien à qui regarde l'écran. */
+html.sd-mobile .sd-layer .sd-lib-row-playlist .sd-lib-sub,
+html.sd-mobile .sd-layer .sd-lib-row-album .sd-lib-sub,
+html.sd-mobile .sd-layer .sd-lib-row-artist .sd-lib-sub,
+html.sd-mobile .sd-layer .sd-lib-row-show .sd-lib-sub,
+html.sd-mobile .sd-layer .sd-lib-row-liked .sd-lib-sub {
+  color: var(--sd-sub);
+}
+
+html.sd-mobile .sd-layer .sd-lib-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+html.sd-mobile .sd-layer .sd-lib-name {
+  font-size: calc(15px * var(--sd-u));
+  font-weight: 600;
+  line-height: 1.3;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+html.sd-mobile .sd-layer .sd-lib-sub {
+  font-size: calc(12.5px * var(--sd-u));
+  line-height: 1.3;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* --------------------------------------------------------------------------
+   3. Quand il n'y a rien à montrer : une phrase, jamais un écran muet
+   -------------------------------------------------------------------------- */
+
+html.sd-mobile .sd-layer .sd-lib-note {
+  margin: 0;
+  padding: calc(8px * var(--sd-u)) calc(16px * var(--sd-u)) calc(24px * var(--sd-u));
+  font-size: calc(13px * var(--sd-u));
+  color: var(--sd-sub);
+}
+html.sd-mobile .sd-layer .sd-lib-note[hidden] {
+  display: none;
+}
+/* Un filtre qui ne montre rien : la liste est vide, la phrase explique. */
+html.sd-mobile .sd-layer .sd-lib-nofilter .sd-lib-list {
+  display: none;
+}

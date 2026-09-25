@@ -418,6 +418,28 @@ const MEASURE = async () => {
     return out;
   })();
 
+  /* **La bibliothèque maison.** L'onglet bibliothèque affichait la barre
+     latérale de Spotify ; notre page lit la bibliothèque du compte par l'API.
+     Sur le banc, il n'y a pas de session : ce qui compte est donc l'état
+     (masquée faute de jeton = la barre latérale reste) et l'absence de
+     régression sur les lignes. */
+  out.library = (function () {
+    var panel = document.querySelector(".sd-lib");
+    var api = window.SpotiDuckUI;
+    var state = api && api.library && api.library.describe ? api.library.describe() : "?";
+    if (!panel) return "bibliothèque maison absente · état=" + state;
+    var r = panel.getBoundingClientRect();
+    return (
+      (panel.hidden ? "masquée" : "affichée") +
+      " zone=" + Math.round(r.width) + "x" + Math.round(r.height) +
+      " lignes=" + panel.querySelectorAll(".sd-lib-row").length +
+      " filtres=" + panel.querySelectorAll(".sd-lib-chip").length +
+      " état=" + state +
+      " barre-laterale=" +
+      (document.documentElement.classList.contains("sd-lib-on") ? "remplacee" : "laissee a Spotify")
+    );
+  })();
+
   out.tapTargets = (function () {
     var els = document.querySelectorAll(".sd-layer .sd-nav-item, .sd-layer .sd-iconbtn, .sd-layer .sd-tab");
     var min = 999;
@@ -898,6 +920,7 @@ async function main() {
       if (after && after.content) pageLines.push(`Contenu-te tailles - ${target.label} : ${after.content}`);
       if (after && after.rognes) pageLines.push(`Rognage - ${target.label} : ${after.rognes}`);
       if (after && after.home) pageLines.push(`Accueil maison - ${target.label} : ${after.home}`);
+      if (after && after.library) pageLines.push(`Bibliothèque - ${target.label} : ${after.library}`);
       lines.push(summary, ...pageLines);
       console.log(`[Sonde coque] ${summary}`);
       note(`Mesure — ${target.label}`, summary);

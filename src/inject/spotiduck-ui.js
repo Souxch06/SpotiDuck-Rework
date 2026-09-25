@@ -127,6 +127,10 @@
        de bureau ne tient pas sur un téléphone. Un interrupteur la remplace par
        l'accueil de Spotify. */
     homeBoard: true,
+    /* Bibliothèque maison : notre page (playlists, titres likés, albums,
+       artistes suivis, podcasts du compte) au lieu de la barre latérale de
+       Spotify, qui peut se retrouver vide sans qu'on puisse la réparer. */
+    libraryBoard: true,
     /* Densité d'affichage : le seul réglage qui change la taille de TOUTE
        l'interface (voir `applyDensity`) — compact | normal | large. */
     density: "normal",
@@ -167,6 +171,20 @@
       homeMore: "Tout afficher",
       homeEmptyCategory: "Rien dans cette catégorie pour l\'instant",
       homeBoard: "Accueil SpotiDuck",
+      /* Bibliothèque maison */
+      libraryBoard: "Bibliothèque SpotiDuck",
+      libraryAll: "Tout",
+      libraryPlaylists: "Playlists",
+      libraryAlbums: "Albums",
+      libraryArtists: "Artistes",
+      libraryShows: "Podcasts",
+      libraryLiked: "Titres likés",
+      libraryTracks: "%s titres",
+      librarySummary: "Votre bibliothèque",
+      libraryLoading: "Chargement de votre bibliothèque…",
+      libraryEmpty: "Aucune playlist, aucun album ni artiste enregistré pour ce compte.",
+      libraryNoToken: "Connectez-vous à Spotify pour retrouver votre bibliothèque.",
+      libraryError: "Votre bibliothèque n'a pas répondu — Spotify reste disponible ci-dessous.",
       /* Statistiques d'écoute */
       stats: "Statistiques d'écoute",
       statsTitle: "Vos statistiques",
@@ -1550,6 +1568,7 @@
         UI.lastRouteKey = key;
         Content.apply();
         Home.refresh("vue");
+        Library.enter();
       }
       e.navItems.forEach(function (item) {
         var name = item.getAttribute("data-tab");
@@ -2349,6 +2368,7 @@
            connecté (Spotify le fait), et l'utilisateur, lui, veut ses playlists. */
         " · session " + (Bridge.has("session") ? (Bridge.call("session") ? "oui" : "non") : "?") +
         " · accueil " + Home.describe() +
+        " · biblio " + Library.describe() +
         " · " + Content.describe() +
         " · page " + location.pathname +
         " · lecteur " + (Spotify.ready() ? "prêt" : "absent")
@@ -2506,6 +2526,7 @@
     stats: true,
     haptics: true,
     homeBoard: true,
+    libraryBoard: true,
     /* Densité d'affichage : les télémétries Android et la WebView ne rendent
        pas la même chose sur tous les appareils — c'est le seul réglage qui
        touche à la taille de toute l'interface. */
@@ -2787,6 +2808,7 @@
         self.group(Settings.labels.groupUi, [
           nativeRow,
           self.switchRow("homeBoard", Settings.labels.homeBoard),
+          self.switchRow("libraryBoard", Settings.labels.libraryBoard),
           self.switchRow("stats", Settings.labels.stats),
           self.actionRow("stats-clear", Settings.labels.statsClear, ICONS.refreshLine),
           self.switchRow("tabbar", Settings.labels.showTabbar),
@@ -3967,6 +3989,384 @@
   };
 
   /* ------------------------------------------------------------------ *
+   * 11e-quinquies. Library — **notre** bibliothèque
+   *
+   * Signalé le 25/09 : « sur l'onglet bibliothèque, je ne vois aucune de mes
+   * playlists enregistrées sur mon compte ».
+   *
+   * L'onglet ne faisait qu'afficher la barre latérale de Spotify
+   * (`#Desktop_LeftSidebar_Id`, `.YourLibraryX`) en plein écran, avec notre
+   * feuille par-dessus. Quand son rendu ne suit pas — liste vide, conteneur
+   * replié, classe renommée par Spotify — il ne reste rien à voir, et on ne
+   * peut pas réparer depuis ici une liste qu'on ne lit pas.
+   *
+   * Cette page lit donc la bibliothèque **à la source** : l'API du lecteur, avec
+   * le jeton que la page utilise déjà (`Api.authToken`, le même que les
+   * statistiques d'écoute). Playlists (créées et suivies), titres likés, albums
+   * enregistrés, artistes suivis, podcasts enregistrés — puis notre mise en
+   * page : lignes de 64 px, pochettes de 56 px, filtres par type, compteurs, et
+   * des adresses réelles (`/playlist/…`, `/album/…`) que le routeur de Spotify
+   * ouvre comme n'importe quel lien.
+   *
+   * Prudence : rien ne s'affiche tant qu'il n'y a rien à montrer. Si le jeton
+   * manque ou si l'API ne répond pas, la barre latérale de Spotify reste visible
+   * telle quelle (le comportement d'avant) — on ne peut pas perdre l'accès à sa
+   * musique en installant cette version.
+   * ------------------------------------------------------------------ */
+
+  var LIBRARY_API = "https://api.spotify.com/v1";
+  /** Combien de temps une lecture de la bibliothèque reste bonne. */
+  var LIBRARY_TTL = 10 * 60 * 1000;
+  var LIBRARY_PAGE = 50;
+
+  var Library = {
+    el: null,
+    built: false,
+    items: [],
+    counts: { playlist: 0, album: 0, artist: 0, show: 0, liked: 0 },
+    /* idle | loading | ready | empty | no-token | error */
+    state: "idle",
+    loading: false,
+    loadedAt: 0,
+    filter: "all",
+    timer: 0,
+    tries: 0,
+
+    /** Une requête de l'API du lecteur, avec le jeton déjà capté. */
+    get: function (path) {
+      if (!window.fetch || !Api.authToken) return Promise.resolve(null);
+      return window
+        .fetch(LIBRARY_API + path, { headers: { Authorization: Api.authToken } })
+        .then(
+          function (r) {
+            return r && r.ok ? r.json() : null;
+          },
+          function () {
+            return null;
+          }
+        );
+    },
+
+    /** Une pochette : la plus grande disponible, jamais l'icône 64 px. */
+    cover: function (obj) {
+      var list = (obj && obj.images) || [];
+      if (!list.length) return "";
+      var best = list[0];
+      for (var i = 1; i < list.length; i++) {
+        if ((list[i].width || 0) > (best.width || 0)) best = list[i];
+      }
+      return best.url || "";
+    },
+
+    /** Les lignes de la bibliothèque, à partir des cinq réponses de l'API. */
+    parse: function (res) {
+      var rows = [];
+      var liked = res[4];
+      if (liked && liked.total) {
+        rows.push({
+          type: "liked",
+          name: Settings.labels.libraryLiked,
+          sub: Settings.labels.libraryTracks.replace("%s", liked.total),
+          href: "/collection/tracks",
+          img: "",
+        });
+      }
+      ((res[0] && res[0].items) || []).forEach(function (pl) {
+        if (!pl || !pl.id) return;
+        rows.push({
+          type: "playlist",
+          name: pl.name || "",
+          sub: (pl.owner && pl.owner.display_name) || Settings.labels.libraryPlaylists,
+          href: "/playlist/" + pl.id,
+          img: Library.cover(pl),
+        });
+      });
+      ((res[1] && res[1].items) || []).forEach(function (entry) {
+        var al = entry && entry.album;
+        if (!al || !al.id) return;
+        rows.push({
+          type: "album",
+          name: al.name || "",
+          sub: ((al.artists || [])[0] || {}).name || "",
+          href: "/album/" + al.id,
+          img: Library.cover(al),
+        });
+      });
+      ((res[2] && res[2].items) || []).forEach(function (ar) {
+        if (!ar || !ar.id) return;
+        rows.push({
+          type: "artist",
+          name: ar.name || "",
+          sub: (ar.genres || [])[0] || Settings.labels.libraryArtists,
+          href: "/artist/" + ar.id,
+          img: Library.cover(ar),
+        });
+      });
+      ((res[3] && res[3].items) || []).forEach(function (entry) {
+        var sh = entry && entry.show;
+        if (!sh || !sh.id) return;
+        rows.push({
+          type: "show",
+          name: sh.name || "",
+          sub: sh.publisher || "",
+          href: "/show/" + sh.id,
+          img: Library.cover(sh),
+        });
+      });
+      return rows;
+    },
+
+    /** Les totaux annoncés par l'API (pas seulement la première page). */
+    tally: function (res) {
+      var n = { playlist: 0, album: 0, artist: 0, show: 0, liked: 0 };
+      var keys = ["playlist", "album", "artist", "show", "liked"];
+      for (var i = 0; i < 5; i++) {
+        var body = res[i];
+        if (body && typeof body.total === "number") n[keys[i]] = body.total;
+      }
+      return n;
+    },
+
+    /**
+     * Lit la bibliothèque. Silencieux quand il n'y a pas de jeton — c'est le cas
+     * d'une session fermée, et il n'y a alors rien à dire : la page de connexion
+     * ou l'écran d'accueil maison sont déjà là.
+     */
+    load: function (force) {
+      var self = this;
+      if (!Settings.libraryBoard) {
+        this.items = [];
+        this.state = "idle";
+        return false;
+      }
+      if (this.loading) return false;
+      if (!force && this.loadedAt && Date.now() - this.loadedAt < LIBRARY_TTL) return false;
+      if (!Api.authToken) {
+        this.state = "no-token";
+        this.items = [];
+        this.apply();
+        return false;
+      }
+      this.loading = true;
+      this.state = "loading";
+      this.apply();
+      Promise.all([
+        this.get("/me/playlists?limit=" + LIBRARY_PAGE),
+        this.get("/me/albums?limit=" + LIBRARY_PAGE),
+        this.get("/me/artists?limit=" + LIBRARY_PAGE),
+        this.get("/me/shows?limit=" + LIBRARY_PAGE),
+        this.get("/me/tracks?limit=1"),
+      ]).then(function (res) {
+        self.items = self.parse(res);
+        self.counts = self.tally(res);
+        self.loadedAt = Date.now();
+        self.loading = false;
+        /* Aucune des cinq réponses : l'API n'a rien voulu dire (jeton expiré,
+           hors ligne, refus). On ne prétend pas que la bibliothèque est vide —
+           on rend la main à Spotify. */
+        var answered = res.some(function (r) {
+          return !!r;
+        });
+        self.state = self.items.length ? "ready" : answered ? "empty" : "error";
+        self.apply();
+      });
+      return true;
+    },
+
+    build: function () {
+      if (this.built) return true;
+      var el = document.createElement("div");
+      el.className = "sd-lib";
+      el.setAttribute("role", "region");
+      el.setAttribute("aria-label", Settings.labels.library);
+      el.innerHTML =
+        '<div class="sd-lib-head"><span class="sd-lib-sum"></span></div>' +
+        '<div class="sd-lib-chips" role="tablist">' +
+        '<button class="sd-chip sd-lib-chip" type="button" role="tab" data-filter="all"></button>' +
+        '<button class="sd-chip sd-lib-chip" type="button" role="tab" data-filter="playlist"></button>' +
+        '<button class="sd-chip sd-lib-chip" type="button" role="tab" data-filter="album"></button>' +
+        '<button class="sd-chip sd-lib-chip" type="button" role="tab" data-filter="artist"></button>' +
+        '<button class="sd-chip sd-lib-chip" type="button" role="tab" data-filter="show"></button>' +
+        "</div>" +
+        '<div class="sd-lib-list"></div>' +
+        '<p class="sd-lib-note"></p>';
+      this.el = el;
+      UI.layer.appendChild(el);
+      var self = this;
+      $$(".sd-lib-chip", el).forEach(function (chip) {
+        chip.addEventListener("click", function () {
+          self.filter = chip.getAttribute("data-filter") || "all";
+          self.render();
+        });
+      });
+      this.built = true;
+      return true;
+    },
+
+    /** Le résumé en une ligne : ce que contient le compte, en clair. */
+    summary: function () {
+      var c = this.counts || {};
+      var parts = [];
+      if (c.playlist) parts.push(Settings.labels.libraryPlaylists + " " + c.playlist);
+      if (c.album) parts.push(Settings.labels.libraryAlbums + " " + c.album);
+      if (c.artist) parts.push(Settings.labels.libraryArtists + " " + c.artist);
+      if (c.show) parts.push(Settings.labels.libraryShows + " " + c.show);
+      if (c.liked) parts.push(Settings.labels.libraryLiked + " " + c.liked);
+      return parts.join(" · ") || Settings.labels.librarySummary;
+    },
+
+    /** Ce qu'il y a à dire quand la liste est vide (jamais un écran muet). */
+    note: function () {
+      if (this.state === "loading") return Settings.labels.libraryLoading;
+      if (this.state === "no-token") return Settings.labels.libraryNoToken;
+      if (this.state === "error") return Settings.labels.libraryError;
+      if (this.state === "empty") return Settings.labels.libraryEmpty;
+      if (this.items.length && !this.filtered().length) return Settings.labels.homeEmptyCategory;
+      return "";
+    },
+
+    /** Les lignes visibles avec le filtre courant. */
+    filtered: function () {
+      var want = this.filter;
+      return this.items.filter(function (row) {
+        return want === "all" || row.type === want;
+      });
+    },
+
+    render: function () {
+      if (!this.el) return 0;
+      $(".sd-lib-sum", this.el).textContent = this.summary();
+      var names = {
+        all: Settings.labels.libraryAll,
+        playlist: Settings.labels.libraryPlaylists,
+        album: Settings.labels.libraryAlbums,
+        artist: Settings.labels.libraryArtists,
+        show: Settings.labels.libraryShows,
+      };
+      $$(".sd-lib-chip", this.el).forEach(function (chip) {
+        var key = chip.getAttribute("data-filter");
+        chip.textContent = names[key] || key;
+        var active = key === Library.filter;
+        chip.classList.toggle("is-active", active);
+        chip.setAttribute("aria-selected", active ? "true" : "false");
+      });
+      var list = $(".sd-lib-list", this.el);
+      list.textContent = "";
+      var note = $(".sd-lib-note", this.el);
+      var message = this.note();
+      note.textContent = message;
+      note.hidden = !message;
+      this.filtered().forEach(function (row) {
+        var link = document.createElement("a");
+        link.className = "sd-lib-row sd-lib-row-" + row.type;
+        link.href = row.href;
+        var art = document.createElement("span");
+        art.className = "sd-lib-art";
+        if (row.img) {
+          var img = document.createElement("img");
+          img.src = row.img;
+          img.alt = "";
+          img.setAttribute("loading", "lazy");
+          art.appendChild(img);
+        } else {
+          art.innerHTML = svg(ICONS.heartSolid, "sd-lib-glyph");
+        }
+        var text = document.createElement("span");
+        text.className = "sd-lib-text";
+        var name = document.createElement("span");
+        name.className = "sd-lib-name";
+        name.textContent = row.name;
+        var sub = document.createElement("span");
+        sub.className = "sd-lib-sub";
+        sub.textContent = row.sub;
+        text.appendChild(name);
+        text.appendChild(sub);
+        link.appendChild(art);
+        link.appendChild(text);
+        list.appendChild(link);
+      });
+      return this.filtered().length;
+    },
+
+    shouldShow: function () {
+      if (!Settings.libraryBoard) return false;
+      if (!this.built) return false;
+      if (State.tab !== "library") return false;
+      if (this.state === "loading") return true;
+      return this.items.length > 0;
+    },
+
+    apply: function () {
+      if (!this.build()) return false;
+      this.render();
+      var show = this.shouldShow();
+      this.el.hidden = !show;
+      /* **Notre** page remplace la barre latérale de Spotify : on ne la masque
+         que lorsqu'on a de quoi la remplacer. Sinon elle reste telle quelle —
+         c'est le seul moyen de ne pas perdre l'accès à sa musique. */
+      document.documentElement.classList.toggle("sd-lib-on", show);
+      return show;
+    },
+
+    /** À chaque changement de vue : on entre dans la bibliothèque, ou on en sort. */
+    enter: function () {
+      if (State.tab !== "library") {
+        this.leave();
+        return false;
+      }
+      this.load();
+      if (!this.items.length) this.watch();
+      return this.apply();
+    },
+
+    leave: function () {
+      if (this.el) this.el.hidden = true;
+      if (this.timer) {
+        window.clearTimeout(this.timer);
+        this.timer = 0;
+      }
+      document.documentElement.classList.remove("sd-lib-on");
+      return true;
+    },
+
+    /**
+     * Le jeton de la page n'arrive pas toujours avant la première lecture (il
+     * est capté sur les requêtes du lecteur), et la bibliothèque peut être
+     * ouverte avant. On retente donc quelques fois, espacées, puis on s'arrête :
+     * pas de boucle qui tourne dans le vide.
+     */
+    watch: function () {
+      var self = this;
+      /* `setTimeout` en chaîne, jamais `setInterval` : un intervalle qui survit à
+         un changement de vue est exactement ce que l'ancienne couche faisait (et
+         que le banc interdit). Cinq essais au plus, puis on s'arrête. */
+      if (this.timer) return false;
+      this.tries = 0;
+      var again = function () {
+        if (self.tries++ >= 5 || self.items.length || State.tab !== "library") {
+          self.timer = 0;
+          return;
+        }
+        self.load(true);
+        self.timer = window.setTimeout(again, 4000);
+      };
+      this.timer = window.setTimeout(again, 4000);
+      return true;
+    },
+
+    /** Ce que le diagnostic dit de la bibliothèque, en trois mots. */
+    describe: function () {
+      if (!Settings.libraryBoard) return "désactivée (réglage)";
+      if (this.state === "loading") return "chargement";
+      if (this.state === "no-token") return "pas de jeton (session fermée ?)";
+      if (this.state === "error") return "indisponible (API muette)";
+      if (this.state === "empty") return "vide (0 élément)";
+      if (this.state === "idle") return "pas encore lue";
+      return this.items.length + " éléments";
+    },
+  };
+
+  /* ------------------------------------------------------------------ *
    * 11e-quater. Stats — vos statistiques d'écoute
    *
    * Demande de l'utilisateur (24/09) : « mets les différentes statistiques
@@ -5095,6 +5495,7 @@
         Welcome.apply();
         Content.apply();
         Home.refresh("resize");
+        Library.apply();
       }, 200)
     );
 
@@ -5158,6 +5559,8 @@
     content: Content,
     /** L'accueil maison : ses données (`home.data`), ses filtres, son état. */
     home: Home,
+    /** Votre bibliothèque : `load()`, ses éléments, son état. */
+    library: Library,
     /** Vos statistiques d'écoute : `summary()`, `record()`, `clear()`. */
     stats: Stats,
     /** Change one setting (`theme`, `haptics`, `accentFromArt`, `tabbar`,
