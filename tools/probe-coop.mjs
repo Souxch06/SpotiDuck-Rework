@@ -939,6 +939,16 @@ const TRANSPORT_PROBE = () => {
         ".sd-mini-queue",
       ];
       const out = {};
+      /* **Pourquoi « absent » n'est pas une panne** : sans piste, la barre prend
+         sa variante vide (ou « session fermée ») — les commandes de transport
+         existent quand même, mais un lecteur de poche sans session n'a rien à
+         zapper. On le dit avant la liste, pour que le relevé ne fasse pas
+         croire à un lecteur amputé. */
+      const mini = document.querySelector(".sd-mini");
+      out["mini"] = mini
+        ? (String(document.documentElement.className).match(/sd-mini-[a-z-]+/g) || []).join(",") +
+          " · " + mini.querySelectorAll(".sd-iconbtn").length + " commandes"
+        : "absente";
       sels.forEach((sel) => {
         const el = document.querySelector(sel);
         if (!el) {
@@ -995,6 +1005,32 @@ const TRANSPORT_CANARY = async () => {
   if (appuyeLike && apresLike !== avant.like) click(".sd-mini-like");
   await pause(300);
   return { avant, apresShuffle, apresLike, appuyeShuffle, appuyeLike };
+};
+
+/* **Le zap, mesuré pour de vrai — en navigateur, avec mise en page.** Sur le
+   banc, la page joue : on appuie sur notre « suivant » et on regarde le titre du
+   lecteur changer. C'est la seule mesure en Chrome de la chaîne complète
+   (repère → appui → lecteur), là où jsdom ne peut pas dire si un bouton est
+   recouvert, désactivé ou doublé. */
+const TRANSPORT_ZAP = async () => {
+  const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+  const titre = () => {
+    const el = document.querySelector('[data-testid="context-item-link"], [data-testid="now-playing-widget"] a');
+    return el ? (el.textContent || "").trim() : "";
+  };
+  /* **Faire jouer la page** (banc) : notre « lecture » sur le faux lecteur. Un
+     échec n'est pas une faute — sur la vraie page il n'y a rien à lancer. */
+  const play = document.querySelector(".sd-mini-play");
+  if (play) play.click();
+  await pause(900);
+  const avant = titre();
+  const bouton = document.querySelector(".sd-mini-next");
+  if (!bouton) return { avant, erreur: "notre bouton « suivant » est absent" };
+  if (!avant) return { avant, erreur: "rien ne joue : le zap n'est pas mesurable" };
+  bouton.click();
+  await pause(1100);
+  const apres = titre();
+  return { avant, apres, change: avant !== apres };
 };
 
 const CLICK = async (selector) => {
@@ -1338,13 +1374,39 @@ async function main() {
         await safely(() => page.evaluate(CLICK, '.sd-nav-item[data-tab="home"]'));
         await sleep(600);
 
+        /* **La coque doit être là** : l'appui « Accueil » juste au-dessus peut
+           avoir navigué (notre repli `location.assign`), ce qui l'emporte. Sans
+           elle, nos boutons seraient « absents » pour tout — un faux défaut. On
+           la repose comme l'application le fait à chaque chargement. */
+        const coqueAvant = await safely(() =>
+          page.evaluate(() => {
+            const l = document.querySelector(".sd-layer");
+            return l ? l.getAttribute("data-sd-version") || "sans version" : "";
+          })
+        );
+        let coqueReposee = false;
+        if (coqueAvant === "") {
+          await safely(() => page.evaluate(target.mode === "original" ? original : bundle));
+          await sleep(2200);
+          coqueReposee = true;
+        }
+        const coque = coqueReposee
+          ? await safely(() =>
+              page.evaluate(() => {
+                const l = document.querySelector(".sd-layer");
+                return l ? l.getAttribute("data-sd-version") || "sans version" : "absente";
+              })
+            )
+          : coqueAvant;
+
         /* **La lecture : nos appuis atteignent-ils Spotify ?** */
         const transport = await safely(() => page.evaluate(TRANSPORT_PROBE));
         const canary = await safely(() => page.evaluate(TRANSPORT_CANARY));
         if (transport) {
           const manquants = Object.keys(transport.cibles).filter((k) => transport.cibles[k] === "AUCUN");
           const line =
-            `cibles : ${Object.keys(transport.cibles).map((k) => k + "=" + transport.cibles[k]).join(" · ")}` +
+            `coque=${coque}${coqueReposee ? " (reposée après un chargement)" : ""}` +
+            ` · cibles : ${Object.keys(transport.cibles).map((k) => k + "=" + transport.cibles[k]).join(" · ")}` +
             ` · page : shuffle=${transport.page.shuffle} repeat=${transport.page.repeat} like=${transport.page.like} titre="${transport.page.titre}" utilisable=${transport.page.utilisable}` +
             ` · nos boutons : ${Object.keys(transport.nous).map((k) => k.replace(".sd-mini-", "") + "=" + transport.nous[k]).join(" · ")}` +
             (canary
@@ -1363,6 +1425,14 @@ async function main() {
             else warn(`Lecture — ${target.label}`, line);
           }
           else note(`Lecture — ${target.label}`, line);
+          /* **Et l'appui pour de vrai** : sur le banc, la piste doit changer. */
+          const zap = await safely(() => page.evaluate(TRANSPORT_ZAP));
+          if (zap) {
+            report.pages.push({ label: `${target.label} (zap)`, zap });
+            if (zap.erreur) note(`Zap — ${target.label}`, `${zap.erreur} (titre=${JSON.stringify(zap.avant || "")})`);
+            else if (zap.change) note(`Zap — ${target.label}`, `« ${zap.avant} » → « ${zap.apres} » — la piste change vraiment`);
+            else warn(`Zap — ${target.label}`, `« ${zap.avant} » reste affiché après l'appui sur « suivant » : le zap ne fait rien`);
+          }
           report.pages.push({ label: `${target.label} (lecture)`, transport, canary });
         } else {
           warn(`Lecture — ${target.label}`, "aucune mesure n'est remontée du lecteur");
