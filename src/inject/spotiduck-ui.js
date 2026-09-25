@@ -2342,6 +2342,7 @@
         " · vue " + vp.layout + "×" + viewH() + " px (écran " + (vp.device || "?") + ")" +
         " · unité " + Device.base.toFixed(2) +
         " · contenu " + s.why +
+        " · ancres " + this.anchors() +
         (extrait ? ' · extrait \"' + extrait + '\"' : "") +
         /* La session **réelle** (cookie du lecteur), qui ne se devine pas dans
            le DOM : la page peut afficher un accueil sans qu'un compte soit
@@ -2352,6 +2353,31 @@
         " · page " + location.pathname +
         " · lecteur " + (Spotify.ready() ? "prêt" : "absent")
       );
+    },
+
+    /**
+     * Toutes les ancres candidates, mesurées.
+     *
+     * L'ancre choisie ne suffit pas à comprendre : « contenu 29×2756 » a laissé
+     * deux hypothèses ouvertes — la page n'a pas de `#main-view` (donc ce n'est
+     * pas l'accueil du lecteur), ou elle en a un que **notre** feuille a écrasé.
+     * Les mesurer toutes les départage en une ligne.
+     */
+    anchors: function () {
+      var parts = [];
+      for (var i = 0; i < CONTENT_ANCHORS.length; i++) {
+        var sel = CONTENT_ANCHORS[i];
+        var name = sel.replace(/^\[data-testid="?|"?\]$/g, "").replace(/^#/, "");
+        var el = document.querySelector(sel);
+        if (!el) {
+          parts.push(name + " absent");
+          continue;
+        }
+        var r = el.getBoundingClientRect();
+        var cs = window.getComputedStyle(el);
+        parts.push(name + " " + Math.round(r.width) + "×" + Math.round(r.height) + " " + cs.display);
+      }
+      return parts.join(" · ");
     },
 
     /** Une ligne pour le diagnostic : ce qui a dû être rétabli, et pourquoi. */
@@ -2531,12 +2557,19 @@
       var layout = document.documentElement.clientWidth || 0;
       var screenW = Math.round((window.screen && window.screen.width) || 0);
       var dpr = window.devicePixelRatio || 1;
-      var device = screenW ? Math.round(screenW / dpr) : 0;
+      /* `screen.width` est en **pixels CSS** sur les WebView récentes (385 sur
+         le téléphone) et en pixels **physiques** sur d'anciennes (1080). On ne
+         devine pas : on ne divise par la densité que si la valeur est
+         manifestement physique. Le téléphone annonçait « écran 137 » à côté de
+         « vue 384 » — parce que 385 était déjà en pixels CSS — et le
+         avertissement « mise en page 384px pour un écran de 137px » se
+         déclenchait donc pour rien. */
+      var device = screenW ? (screenW > 1000 && dpr > 1 ? Math.round(screenW / dpr) : screenW) : 0;
       return {
         layout: layout,
         screen: screenW,
         device: device, // pixels CSS : c'est ce que devrait valoir `layout`
-        ok: !device || layout <= device * 1.25,
+        ok: !device || (layout >= device * 0.8 && layout <= device * 1.25),
       };
     },
   };

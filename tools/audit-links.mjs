@@ -900,6 +900,14 @@ const probeTool = read("tools/probe-coop.mjs");
 if (!/label: "page-fr", url: "https:\/\/open\.spotify\.com\/intl-fr\/"/.test(probeTool)) {
   errors.push("la sonde ne mesure plus la page /intl-fr/ du téléphone (celle de la capture du 25/09)");
 }
+if (!/anchors: function \(\)/.test(stripComments(runtime))) {
+  errors.push("le diagnostic ne mesure plus les ancres de contenu : impossible de distinguer une page écrasée d'une page absente");
+}
+/* « écran 137 » pour un écran de 385 : la densité n'est divisée que si la
+   valeur de `screen.width` est manifestement physique. */
+if (!/screenW > 1000 && dpr > 1/.test(stripComments(runtime))) {
+  errors.push("la mesure de l'écran divise de nouveau par la densité sans vérifier : le diagnostic annoncera un écran faux");
+}
 if (!/excerpt: function \(\)/.test(stripComments(runtime)) || !/describe: function \(\)/.test(stripComments(runtime))) {
   errors.push("le diagnostic ne peut plus dire ce que la page raconte ni pourquoi l'accueil est absent");
 }

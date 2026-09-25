@@ -2415,3 +2415,18 @@ contient désormais, en plus de l'état du contenu :
 
 La sonde Android (`CONTENT_PROBE_JS`) joint le même extrait à son verdict, pour
 que les journaux d'un téléphone disent aussi ce que la page racontait.
+
+### Deux mesures fausses de plus, corrigées
+
+Le diagnostic du 25/09 annonçait `vue 384×832 px (écran 137)` : `screen.width`
+vaut 385 sur ce téléphone, déjà en **pixels CSS**, et le calcul le divisait quand
+même par la densité (2,81). L'avertissement « mise en page 384px pour un écran
+de 137px » se déclenchait donc pour rien. La division n'a lieu que si la valeur
+est manifestement physique (au-delà de 1 000 px).
+
+Et comme une ancre unique ne permet pas de trancher, le diagnostic mesure
+**toutes** les ancres candidates : `ancres home-page absent · main-view absent ·
+main 29×2756 block`. On distingue ainsi « la page n'est pas l'accueil du
+lecteur » (aucune ancre de contenu) de « **notre** feuille a écrasé la page »
+(ancre présente, taille absurde) — les deux hypothèses que `contenu 29×2756`
+laissait ouvertes.
