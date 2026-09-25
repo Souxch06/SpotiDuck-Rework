@@ -1978,7 +1978,10 @@
       });
       e.miniQueue.addEventListener("click", function (ev) {
         ev.stopPropagation();
-        Queue.openSheet();
+        /* **Ouvrir *et* fermer** : ce bouton n'appelait qu'`openSheet`, donc un
+           second appui ne faisait rien (mesuré au banc : `sd-queue-open` restait
+           après deux appuis). La feuille du lecteur, elle, basculait déjà. */
+        Queue.toggle();
       });
       e.miniDevices.addEventListener("click", function (ev) {
         ev.stopPropagation();
@@ -5612,6 +5615,13 @@
       var retry = $(".sd-lib-retry", el);
       if (retry) {
         retry.addEventListener("click", function () {
+          /* **Un nouvel essai, vraiment.** `Api.refreshState` garde la trace du
+             dernier essai de jeton ; la laisser en place faisait de
+             « Réessayer » un bouton muet — aucun appel, aucun changement, juste
+             l'air de rien (mesuré au banc, sans session). On efface donc la
+             trace, pour que l'essai ait lieu pour de bon. */
+          Api.refreshState = "";
+          Net.reason = "";
           self.state = "loading";
           self.loadedAt = 0;
           self.apply();
@@ -5808,7 +5818,13 @@
         var login = $(".sd-lib-login", this.el);
         if (login) {
           login.textContent = Settings.labels.librarySignIn;
-          login.hidden = this.accountState() !== "out";
+          /* **La porte de connexion suit le message, pas l'opinion de la
+             page.** Elle apparaît exactement quand la bibliothèque explique
+             qu'il manque quelque chose (« Connectez-vous… ») — sinon elle est
+             rangée. Chercher à deviner l'état de session la cachait justement
+             quand on ne savait rien : l'instruction « connectez-vous » était
+             affichée sans bouton pour le faire. */
+          login.hidden = !nothing;
         }
         actions.hidden = !nothing && (!login || login.hidden);
         if (nothing && retry) retry.setAttribute("aria-label", Settings.labels.libraryRetry + " — " + Settings.labels.libraryHint);
@@ -6847,7 +6863,13 @@
       if (route === "other" && Spotify.isSubPagePath()) route = "page";
       var patch = { route: route };
       if (route === "home" && State.tab !== "library" && State.tab !== "search") patch.tab = "home";
-      if (route === "search") patch.tab = "search";
+      /* **Le choix de l'utilisateur prime sur la route.** « Bibliothèque » n'est
+         pas une page de Spotify : c'est notre vue posée sur l'accueil **ou** sur
+         la recherche. La réécrire dès que l'adresse est celle de la recherche,
+         c'est un onglet qui ne répond pas (mesuré au banc : appui
+         « Bibliothèque » depuis la recherche → l'onglet revenait à « Recherche »
+         au relevé suivant, et la page ne s'affichait jamais). */
+      if (route === "search" && State.tab !== "library") patch.tab = "search";
       emit(patch, "route-sync");
     },
   };

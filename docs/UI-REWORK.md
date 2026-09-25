@@ -3232,3 +3232,89 @@ le dialogue ne le recouvre pas.
   puis ce que le contenu mesure, **ce qui se trouve au-dessus** au centre et sous
   le lecteur, quels écrans à nous sont visibles, l'état de la barre latérale et
   celui du lecteur, relevés deux fois (à l'ouverture puis 2 s après).
+
+## §49 — Chaque commande fait quelque chose, et chaque affichage dit vrai (v2.11.14)
+
+Retour du 25/09, après la 2.11.13 :
+
+> « Fais en sorte que tous les trucs dans l'onglet bibliothèque fonctionne corrige
+> tous les affichages, actions etc. Fais pareil pour le lecteur »
+
+La demande ne cite aucun bug précis : elle demande que **tout** marche. Un audit
+à l'œil ne prouve rien — il fallait le rendre **exécutable**.
+
+### 1. Deux inventaires : chaque commande visible doit avoir un effet
+
+Le banc (`tools/smoke.mjs`) énumère désormais les commandes réellement visibles
+de chaque surface et exige, pour chacune, un effet mesurable :
+
+* `onglet bibliothèque : chaque commande fait quelque chose` — les 5 filtres,
+  les lignes (leur adresse), « Réessayer », la connexion ;
+* `lecteur : chaque commande fait quelque chose` — mini-lecteur (transport,
+  j'aime, aléatoire, répétition, paroles, karaoké, file, appareils, curseurs),
+  feuille du lecteur, ses feuilles « … » et « réglages », navigation, onglets.
+
+Deux pièges ont dû être corrigés dans le banc lui-même, sans quoi il **mentait** :
+
+1. **Le bruit de fond.** La coque repeint en continu ; un compteur global de
+   mutations du DOM déclarait donc « vivante » une commande morte (vérifié : un
+   bouton factice injecté dans la feuille passait le test). L'empreinte est
+   devenue **sémantique** : état de la coque, réglages, bibliothèque, feuilles
+   ouvertes, faux lecteur, appuis transmis à Spotify, appels au pont, états ARIA
+   et **message affiché** (vidé avant chaque appui, pour qu'un message ne serve
+   pas deux fois).
+2. **Le point de départ.** Une commande qui *ouvre* une feuille ne peut pas être
+   jugée si la feuille est déjà ouverte : chaque appui repart d'un état neutre
+   (feuille fermée — sauf pour le mini-lecteur, dont l'action est justement de
+   l'ouvrir).
+3. **Les contrôles inertes par conception** (onglet actif, puce active, radio
+   cochée) ne sont pas « morts » : ils sont écartés explicitement.
+
+Avec un banc honnête, quatre pannes réelles sont apparues — chacune corrigée :
+
+| Commande | Ce qu'elle faisait | Correction |
+| --- | --- | --- |
+| Onglet Bibliothèque, appuyé depuis la recherche | l'adresse réécrivait l'onglet (`Router.sync` → `search`), la page ne s'affichait jamais | le choix de l'utilisateur prime sur la route : `route === "search" && State.tab !== "library"` |
+| « Se connecter » (bibliothèque) | caché dès que l'état de session était *inconnu* — l'instruction « connectez-vous » restait sans bouton | la porte suit le message : `login.hidden = !nothing` |
+| « Réessayer » | muet après un premier échec de jeton (`Api.refreshState` gardait « refusé »), aucun appel ne repartait | la trace est effacée avant de relancer : `Api.refreshState = ""` |
+| File d'attente (mini-lecteur) | ne faisait qu'**ouvrir** (`Queue.openSheet`) : un second appui ne fermait rien | elle bascule (`Queue.toggle`), comme dans la feuille du lecteur |
+
+### 2. Un banc d'effets **exacts**, et des affichages vérifiés
+
+« Un effet quelconque » ne suffit pas : une commande peut agir *à côté*. Le
+nouvel essai « lecteur : les commandes font exactement ce qu'elles disent »
+compare chaque appui à **l'état du lecteur** (`demo/mock/spotify.js` sert de
+témoin) :
+
+* lecture/pause change l'état, dans les deux sens, et le bouton dit « pause »
+  quand ça joue ; suivant/précédent changent de piste **et** le titre affiché ;
+* j'aime, aléatoire (avec `aria-checked`), répétition (off → contexte → piste)
+  suivent l'état réel ;
+* la barre de progression déplace **vraiment** la lecture (position mesurée en
+  secondes) et le temps affiché suit ; le pourcentage `aria-valuenow` est
+  cohérent avec la position ;
+* le curseur de volume pilote celui de Spotify (valeur réelle, mise en sourdine
+  à zéro) ; paroles, appareils appuient sur ceux de Spotify ; la file d'attente
+  ouvre **et** ferme le panneau de Spotify ;
+* les affichages disent vrai : titre, artiste, durée, position, volume, état vide
+  nommé, aucun libellé laissé à trou (`%s`).
+
+Côté bibliothèque, les filtres filtrent **réellement** : pour chaque puce, les
+lignes affichées sont exactement celles du filtre (ni une de plus, ni une de
+moins), une seule puce active, `library.filter` suit ; le résumé annonce les
+comptes réels et le compte connecté ; le journal s'ouvre avec des lignes non
+vides quand quelque chose a échoué et dit pourquoi ; la connexion mène bien à
+`accounts.spotify.com` ; « Réessayer » relance un appel et **retombe sur ses
+pieds** (jamais de chargement sans fin).
+
+### Vérifications
+
+* banc : **135/135** (les deux inventaires, le banc d'effets exacts, les
+  essais de la 2.11.13) ;
+* banc : quatre régressions volontaires (une par panne corrigée) sont détectées
+  par l'audit ;
+* audit : garde-fous ajoutés pour les quatre corrections — onglet non écrasé par
+  l'adresse, porte de connexion liée au message, « Réessayer » qui relance la
+  demande de jeton, file d'attente du mini-lecteur qui bascule ;
+* la sonde CI et ses relevés restent ceux de la 2.11.13 (« une seule capture
+  suffit »), la 2.11.14 ne changeant pas la mesure.

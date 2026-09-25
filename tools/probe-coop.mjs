@@ -708,24 +708,19 @@ const SCROLLPROBE = async () => {
    le contenu mesure, **ce qui se trouve au-dessus** au centre et sous le
    lecteur, quels écrans à nous sont visibles, et l'état du lecteur. Une seule
    annotation doit suffire à savoir si l'écran est noir à cause de nous. */
-const CLICKPLAYLIST = () => {
-  const row = document.querySelector(".sd-lib-row[href*='/playlist/'], .sd-lib-row[href*='/collection/']");
-  const link = document.querySelector("#main-view a[href^='/playlist/'], #Desktop_LeftSidebar_Id a[href^='/playlist/']");
+const CHECKPLAYLIST = (sel) => {
+  const found = Array.from(document.querySelectorAll(sel));
+  return found.length;
+};
+
+const CLICKPLAYLIST = (sel) => {
+  const found = Array.from(document.querySelectorAll(sel));
   const before = location.pathname;
-  if (row) {
-    row.click();
-    return { via: "ligne de la bibliothèque", before, apres: location.pathname };
+  if (found.length) {
+    found[0].click();
+    return { via: "appui sur " + found[0].tagName.toLowerCase() + "." + String(found[0].className || "").split(" ")[0], before, apres: location.pathname };
   }
-  if (link) {
-    link.click();
-    return { via: "lien de la page", before, apres: location.pathname };
-  }
-  /* Aucun lien : on ouvre une playlist connue, comme le ferait l'application en
-     suivant une adresse. La navigation peut être **complète** (hors SPA) : elle
-     emporte alors le contexte — c'est pourquoi l'attente et la mesure se font
-     côté sonde, pas ici. */
-  location.href = "/playlist/37i9dQZF1DXcBWIGoYBM5M";
-  return { via: "adresse de playlist", before, apres: "chargement" };
+  return { via: "aucun lien", before, apres: before };
 };
 
 const SUBPAGE_PROBE = () => {
@@ -1140,19 +1135,37 @@ async function main() {
 
       /* **Une playlist ouverte : écran noir ? lecteur disparu ?** Le parcours
          de l'utilisateur — bibliothèque, puis une playlist — mesuré de bout en
-         bout : on ouvre, on relève tout de suite, puis deux secondes plus tard
-         (le contenu d'une playlist arrive après la barre de titre). */
+         bout. Un **appui** garde la coque (navigation interne à Spotify) ; à
+         défaut de lien (page sans session), on suit une adresse de playlist
+         comme le ferait l'application : là, la page est **rechargée** et la
+         coque doit être reposée comme le fait `injectAtDocumentEnd`. */
       if (hasNav === true) {
         const before = await safely(() => page.evaluate(SUBPAGE_PROBE));
-        const opened = await safely(() => page.evaluate(CLICKPLAYLIST));
-        await sleep(3500);
-        /* **Une navigation complète emporte la coque** — et l'application, elle,
-           la réinjecte à chaque chargement (`injectAtDocumentEnd`). On fait donc
-           pareil : sans cela la mesure porterait sur une page de Spotify **sans
-           coque**, et ne dirait rien de « l'écran noir » (qui est justement une
-           page de Spotify sous notre coque). */
-        const sansCoque = await safely(() => page.evaluate(() => !document.querySelector(".sd-layer")));
+        const PLAY_SEL =
+          ".sd-lib-row[href*='/playlist/'], .sd-lib-row[href*='/collection/'], " +
+          "#main-view a[href^='/playlist/'], #Desktop_LeftSidebar_Id a[href^='/playlist/']";
+        const links = await safely(() => page.evaluate(CHECKPLAYLIST, PLAY_SEL));
+        let opened = null;
         let reinjectee = false;
+        if (links && links > 0) {
+          opened = await safely(() => page.evaluate(CLICKPLAYLIST, PLAY_SEL));
+          await sleep(3500);
+        } else {
+          opened = { via: "adresse de playlist (aucun lien sur la page)", before: before && before.chemin, apres: "/playlist/…" };
+          try {
+            await page.goto("https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M", {
+              waitUntil: "domcontentloaded",
+              timeout: 45000,
+            });
+            await sleep(2500);
+          } catch (e) {
+            /* page irrécupérable : la mesure le dira */
+          }
+        }
+        /* Une navigation complète emporte la coque : on la repose, sinon la
+           mesure porterait sur une page de Spotify **sans coque** et ne dirait
+           rien de « l'écran noir ». */
+        const sansCoque = await safely(() => page.evaluate(() => !document.querySelector(".sd-layer")));
         if (sansCoque === true) {
           await safely(() => page.evaluate(target.mode === "original" ? original : bundle));
           await sleep(2500);
@@ -1161,31 +1174,32 @@ async function main() {
         const at = await safely(() => page.evaluate(SUBPAGE_PROBE));
         await sleep(2000);
         const after = await safely(() => page.evaluate(SUBPAGE_PROBE));
-        if (at && opened) {
+        if (at) {
           const lecture = (m) =>
             m
               ? `chemin=${m.chemin} contenu=${m.contenu} dessus=${m.dessus} calques=${m.calques} ` +
                 `lecteur=${m.lecteur} barre-laterale=${m.barreLaterale} dialogues=${m.dialogues} classes="${m.classes}"`
               : "?";
           const line =
-            `ouvert par ${opened.via} (${opened.before} → ${opened.apres})` +
+            `ouvert par ${opened ? opened.via : "?"} (${opened ? opened.before : "?"} → ${opened ? opened.apres : "?"})` +
             (reinjectee ? " · coque réinjectée après un chargement complet" : "") +
             ` · ${lecture(at)}` +
             ` · +2 s : chemin=${after ? after.chemin : "?"} contenu=${after ? after.contenu : "?"} ` +
-            `dessus=${after ? after.dessus : "?"} lecteur=${after ? after.lecteur : "?"} ` +
+            `dessus=${after ? after.dessus : "?"} lecteur=${after ? after.lecteur : "?"} calques=${after ? after.calques : "?"} ` +
             `classes="${after ? after.classes : "?"}"`;
           /* Un écran noir se reconnaît à trois signes : le contenu est vide, un
              de **nos** calques est posé dessus, ou le lecteur a disparu (il
              était visible avant l'appui). */
           const noir =
             at.vide === true ||
-            /(^| )centre=[^ ]+\[nous\]/.test(at.dessus) ||
+            /centre=[^ ]*\[nous\]/.test(at.dessus) ||
+            (at.chemin.indexOf("/playlist") !== 0 && at.chemin.indexOf("/album") !== 0) ||
             (before && before.lecteur.indexOf("visible") === 0 && at.lecteur.indexOf("visible") !== 0);
           if (noir) warn(`Sous-page playlist — ${target.label}`, line);
           else note(`Sous-page playlist — ${target.label}`, line);
           report.pages.push({ label: `${target.label} (playlist)`, sub: at, after });
         } else {
-          warn(`Sous-page playlist — ${target.label}`, "la playlist n'a pas pu être ouverte (aucune mesure)");
+          warn(`Sous-page playlist — ${target.label}`, "aucune mesure n'est remontée après l'ouverture");
         }
         /* Et on revient : les mesures suivantes (défilement, captures) ont
            besoin de la page de départ, pas d'une playlist ouverte. */

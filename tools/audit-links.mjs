@@ -1098,6 +1098,25 @@ if (!/isMineCard/.test(libraryCode) || !/fromLibrary/.test(libraryCode)) {
 if (!/mineShelves: function/.test(libraryCode) || !/data-sd-mine/.test(libraryCode)) {
   errors.push("les rangées « Vos playlists » de l'accueil ne sont plus reconnues : vos playlists hors barre latérale disparaîtraient");
 }
+
+/* ---- Pass 49 : quatre pannes trouvées en éprouvant **chaque** commande ----
+   Toutes les quatre étaient des commandes qui ne faisaient rien (onglet qui
+   répond à côté, porte de connexion cachée, « Réessayer » muet, file d'attente
+   qu'on ne pouvait pas refermer) : on garde la trace de leur correction. */
+if (!/route === "search" && State\.tab !== "library"/.test(libraryCode)) {
+  errors.push("l'onglet Bibliothèque peut de nouveau être écrasé par l'adresse : appuyé depuis la recherche, il ne ferait plus rien");
+}
+if (!/login\.hidden = !nothing;/.test(libraryCode)) {
+  errors.push("la porte de connexion peut de nouveau se cacher quand l'état de session est inconnu : l'instruction « connectez-vous » resterait sans bouton");
+}
+if (!/Api\.refreshState = "";/.test(libraryCode)) {
+  errors.push("« Réessayer » peut redevenir un bouton muet quand le dernier essai de jeton a échoué");
+}
+var miniQueueCode = libraryCode.slice(libraryCode.indexOf("e.miniQueue.addEventListener"));
+miniQueueCode = miniQueueCode.slice(0, miniQueueCode.indexOf("});") + 3);
+if (!/Queue\.toggle\(\)/.test(miniQueueCode) || /Queue\.openSheet\(\)/.test(miniQueueCode)) {
+  errors.push("la file d'attente du mini-lecteur ne s'ouvre plus que dans un sens : un second appui ne la fermerait pas");
+}
 if (!/watchList: function/.test(libraryCode) || !/obsList/.test(libraryCode)) {
   errors.push("la bibliothèque ne surveille plus l'arrivée tardive de la liste de Spotify : « aucune playlist » alors que les vôtres arrivent une seconde plus tard");
 }

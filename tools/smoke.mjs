@@ -1665,7 +1665,7 @@ await checkAsync("a tall, narrow page is not 'nothing displayed', and the diagno
     const width = isMain ? 29 : hasText ? 24 : 0;
     return { width, height, top: 0, left: 0, right: width, bottom: height, x: 0, y: 0 };
   };
-  w.AndBridge = { version: () => "2.11.13", session: () => false };
+  w.AndBridge = { version: () => "2.11.14", session: () => false };
   w.eval(await read("dist/spotiduck-ui.js"));
   await tick(250);
 
@@ -1934,6 +1934,709 @@ await checkAsync("la bibliothèque s'affiche sans attendre le réseau", async ()
   );
   dom.window.close();
   return "2 lignes affichées sans le moindre appel réseau ✓";
+});
+
+/* ------------------------------------------------------------------ *
+ * Inventaire : **chaque commande fait quelque chose**
+ *
+ * « Fais en sorte que tous les trucs dans l'onglet bibliothèque fonctionne […]
+ * fais pareil pour le lecteur » (25/09). Plutôt que de vérifier une commande
+ * après l'autre à la main, on énumère **tout** ce qui est cliquable dans la
+ * surface, et on exige un effet pour chacun : un état qui change, un appel au
+ * pont, un changement de DOM ou une adresse réelle. Une commande qui ne fait
+ * rien est un défaut, et le banc le dit laquelle.
+ * ------------------------------------------------------------------ */
+
+/* Une commande **déjà dans son état** ne fait rien, par définition : l'onglet
+   courant, le filtre actif, la case déjà cochée. On ne l'exige pas. */
+const inertByDesign = (el) =>
+  (el.getAttribute("role") === "tab" && el.classList.contains("is-active")) ||
+  (el.getAttribute("role") === "radio" && el.getAttribute("aria-checked") === "true") ||
+  (el.classList.contains("sd-nav-item") && el.classList.contains("is-active"));
+
+const reachable = (root) =>
+  [...root.querySelectorAll("button, a[href], input, [role='tab'], [role='button'], [role='slider']")].filter(
+    (el) => !el.hidden && !el.closest("[hidden]") && !el.disabled && el.ownerDocument.defaultView.getComputedStyle(el).display !== "none"
+  );
+
+const describeControl = (el) =>
+  (el.className || el.tagName).toString().split(" ").filter((c) => c.startsWith("sd-")).join(".") +
+  (el.getAttribute("aria-label") ? `[${el.getAttribute("aria-label")}]` : "") +
+  (el.textContent && el.textContent.trim() ? `«${el.textContent.trim().slice(0, 24)}»` : "");
+
+/* L'effet d'un appui, en une empreinte **sans bruit** : on ne compte pas les
+   mutations de la couche (le rendu périodique en produit tout le temps, et un
+   compteur global déclarerait vivante une commande morte), mais ce qui compte
+   vraiment : l'état de la coque, les réglages, la bibliothèque, les feuilles
+   ouvertes, le faux lecteur, les appuis transmis à Spotify, les appels au pont,
+   les états ARIA et le **message** affiché. Le message est vidé avant chaque
+   appui : un « Indisponible » répété reste donc une réponse. */
+const clearToast = (dom) => {
+  const toast = dom.window.document.querySelector(".sd-layer .sd-toast");
+  if (!toast) return;
+  toast.classList.remove("is-visible");
+  toast.textContent = "";
+};
+
+const effect = (dom, SD) => {
+  const w = dom.window;
+  const d = w.document;
+  const mock = w.MockSpotify ? w.MockSpotify.state : {};
+  const sheets = [...d.querySelectorAll(".sd-layer .sd-sheet, .sd-layer .sd-player, .sd-layer .sd-queue")]
+    .filter((el) => !el.hidden && !el.closest("[hidden]"))
+    .map((el) => el.className)
+    .join("|");
+  const chips = [...d.querySelectorAll(".sd-layer .sd-lib-chip")]
+    .map((el) => (el.classList.contains("is-active") ? "1" : "0"))
+    .join("");
+  const aria = [...d.querySelectorAll(".sd-layer [aria-checked], .sd-layer [aria-valuenow], .sd-layer [aria-selected]")]
+    .map((el) => String(el.className).slice(0, 24) + "=" + el.getAttribute("aria-checked") + el.getAttribute("aria-valuenow") + el.getAttribute("aria-selected"))
+    .join("|");
+  const toast = d.querySelector(".sd-layer .sd-toast");
+  return JSON.stringify({
+    path: w.location.pathname,
+    classes: d.documentElement.className,
+    tab: SD.state.tab,
+    route: SD.state.route,
+    playing: !!SD.state.playing,
+    title: SD.state.title,
+    filter: SD.library ? SD.library.filter : "",
+    libState: SD.library ? SD.library.state : "",
+    rows: d.querySelectorAll(".sd-layer .sd-lib-row").length,
+    chips: chips,
+    settings: JSON.stringify(SD.settings || {}),
+    sheets: sheets,
+    aria: aria,
+    message: toast && toast.classList.contains("is-visible") ? (toast.textContent || "").slice(0, 40) : "",
+    bridge: (w.__bridgeCalls || []).length,
+    spotify: JSON.stringify(w.__targetClicks || {}),
+    mockPlaying: !!mock.playing,
+    mockTrack: mock.trackIndex,
+    mockPos: mock.position ? Math.round(mock.position / 5) : 0,
+    mockShuffle: !!mock.shuffle,
+    mockRepeat: mock.repeat,
+    mockLiked: !!mock.liked,
+    mockVolume: mock.volume,
+  });
+};
+
+const pressAndWait = async (dom, el, before) => {
+  const w = dom.window;
+  el.click();
+  for (let i = 0; i < 12; i++) {
+    await tick(40);
+    if (effect(dom, w.SpotiDuckUI) !== before) return true;
+  }
+  return false;
+};
+
+await checkAsync("onglet bibliothèque : chaque commande fait quelque chose", async () => {
+  /* **La bibliothèque d'un compte qui a des playlists.** Sans données, aucune
+     ligne à éprouver : l'inventaire doit tourner sur une vraie bibliothèque
+     (l'API du lecteur répond), sinon il ne prouve rien. Pas de barre latérale
+     ici : c'est le chemin de l'API que l'on veut éprouver. */
+  const dom = new JSDOM(
+    "<!doctype html><html><body>" +
+      "<main id='main-view'><section data-testid='home-page'></section></main>" +
+      "</body></html>",
+    { url: "https://open.spotify.com/intl-fr/", pretendToBeVisual: true, runScripts: "dangerously" }
+  );
+  const answers = {
+    "/me": { id: "moi", display_name: "Moi" },
+    "/me/playlists?limit=50": {
+      total: 2,
+      items: [
+        { id: "p1", name: "Mes tubes", owner: { display_name: "Moi" }, tracks: { total: 42 }, images: [{ url: "https://i.scdn.co/image/small", width: 64 }] },
+        { id: "p2", name: "Découvertes", owner: { display_name: "Spotify" }, tracks: { total: 30 }, images: [] },
+      ],
+    },
+    "/me/albums?limit=50": {
+      total: 1,
+      items: [{ album: { id: "a1", name: "Album Un", artists: [{ name: "Artiste Un" }], images: [{ url: "https://i.scdn.co/image/alb", width: 300 }] } }],
+    },
+    "/me/artists?limit=50": {
+      total: 1,
+      items: [{ id: "ar1", name: "Artiste Suivi", genres: ["pop"], images: [{ url: "https://i.scdn.co/image/art", width: 320 }] }],
+    },
+    "/me/shows?limit=50": {
+      total: 1,
+      items: [{ show: { id: "sh1", name: "Podcast Un", publisher: "Radio Libre", images: [{ url: "https://i.scdn.co/image/sh", width: 300 }] } }],
+    },
+    "/me/tracks?limit=1": { total: 128 },
+  };
+  const asked = [];
+  dom.window.fetch = (url, init) => {
+    const key = String(url).replace("https://api.spotify.com/v1", "");
+    asked.push(key);
+    void init;
+    const body = answers[key];
+    return Promise.resolve({ ok: !!body, status: body ? 200 : 401, json: () => Promise.resolve(body || {}) });
+  };
+  /* Le pont d'essai ne sait pas lire en asynchrone : la bibliothèque passe
+     donc par la voie du navigateur — c'est ce chemin-là qu'on éprouve ici (le
+     pont a ses propres essais plus bas). */
+  dom.window.eval("window.__bridgeCalls = []; window.AndBridge = new Proxy({}, { get: (t, p) => String(p) === 'nFetchAsync' ? undefined : (...a) => { window.__bridgeCalls.push([String(p), a]); if (String(p) === 'isWoke') return false; return undefined; } });");
+  dom.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(200);
+  const api = dom.window.SpotiDuckUI;
+  const doc = dom.window.document;
+  const lib = doc.querySelector(".sd-layer .sd-lib");
+  api.state.tab = "library";
+  await dom.window.fetch("https://api.spotify.com/v1/me", { headers: { Authorization: "Bearer banc-de-test" } });
+  api.library.load(true);
+  for (let i = 0; i < 60 && !api.library.items.length; i++) await tick(25);
+  assert(api.library.items.length >= 5, `la bibliothèque du banc est vide (${api.library.state})`);
+
+  const controls = reachable(lib);
+  /* 5 filtres + une ligne par élément : les boutons « Réessayer » et « Se
+     connecter » sont **rangés** tant que la liste est là (il n'y a rien à
+     réparer) — leur tour vient dans l'essai suivant, sans session. */
+  assert(controls.length >= 10, `l'inventaire est incomplet : ${controls.length} commandes trouvées`);
+  const dead = [];
+  const liens = [];
+  /* Chaque commande part d'un état neutre : le filtre « Tout » et la position
+     de départ, sinon un appui « ne change rien » parce que c'était déjà fait. */
+  const neutral = async () => {
+    const tout = lib.querySelector('.sd-lib-chip[data-filter="all"]');
+    if (tout && !tout.classList.contains("is-active")) {
+      tout.click();
+      await tick(60);
+    }
+  };
+  for (const el of controls) {
+    if (inertByDesign(el)) continue;
+    if (el.tagName === "A") {
+      /* Une ligne : son action est son adresse (l'appui ouvre la page). */
+      const href = el.getAttribute("href") || "";
+      const ok = /^\//.test(href) || /^https:\/\/accounts\.spotify\.com\//.test(href);
+      if (ok) liens.push(describeControl(el) + "→" + href);
+      else dead.push(describeControl(el) + " (adresse invalide : " + href + ")");
+      continue;
+    }
+    await neutral();
+    clearToast(dom);
+    const before = effect(dom, api);
+    if (!(await pressAndWait(dom, el, before))) dead.push(describeControl(el));
+  }
+  assert(dead.length === 0, "commandes sans effet : " + dead.join(" · "));
+
+  /* **Les filtres filtrent vraiment.** Pour chacun : la puce devient la seule
+     active, `library.filter` la suit, et les lignes affichées sont exactement
+     celles du filtre — ni une de plus, ni une de moins. */
+  const chips = [...lib.querySelectorAll(".sd-lib-chip")];
+  assert(chips.length === 5, `5 filtres attendus, ${chips.length} trouvés`);
+  assert(
+    chips.every((c) => (c.textContent || "").trim().length > 0),
+    "un filtre n'a pas de libellé : " + chips.map((c) => JSON.stringify(c.textContent)).join(",")
+  );
+  for (const chip of chips) {
+    const want = chip.getAttribute("data-filter");
+    chip.click();
+    await tick(80);
+    const rows = [...lib.querySelectorAll(".sd-lib-list .sd-lib-row")];
+    assert(chip.classList.contains("is-active"), "le filtre « " + want + " » ne se marque pas actif");
+    assert(api.library.filter === want, "le filtre choisi n'est pas appliqué : " + api.library.filter + " ≠ " + want);
+    assert(
+      chips.filter((c) => c.classList.contains("is-active")).length === 1,
+      "plusieurs filtres sont actifs à la fois"
+    );
+    assert(
+      rows.length === api.library.filtered().length,
+      `« ${want} » : ${rows.length} lignes affichées pour ${api.library.filtered().length} attendues`
+    );
+    if (want !== "all") {
+      const wrong = rows.filter((r) => !r.classList.contains("sd-lib-row-" + want));
+      assert(wrong.length === 0, `« ${want} » affiche ${wrong.length} ligne(s) d'un autre genre`);
+      assert(rows.length > 0, `« ${want} » ne montre rien alors que le compte en a`);
+    }
+  }
+
+  /* **Les affichages disent vrai.** Chaque ligne nommée, chaque compteur égal
+     au contenu réel, aucun libellé à trou (« %s » non rempli). */
+  const tout = chips[0];
+  tout.click();
+  await tick(80);
+  const rows = [...lib.querySelectorAll(".sd-lib-list .sd-lib-row")];
+  assert(rows.length === api.library.items.length, `${api.library.items.length} lignes attendues, ${rows.length} affichées`);
+  for (const row of rows) {
+    assert((row.querySelector(".sd-lib-name") || {}).textContent, "une ligne sans nom");
+    assert(row.querySelector(".sd-lib-art"), "une ligne sans pochette");
+  }
+  const titre = lib.querySelector(".sd-lib-title").textContent.trim();
+  assert(titre.length > 0, "le titre de la page est vide");
+  const resume = lib.querySelector(".sd-lib-sum").textContent;
+  assert(resume.indexOf("Moi") >= 0, "le résumé ne dit pas à quel compte appartient la bibliothèque : " + resume);
+  for (const [type, cle] of [["playlist", "playlist"], ["album", "album"], ["artist", "artist"], ["show", "show"]]) {
+    const n = api.library.counts[cle];
+    if (!n) continue;
+    const reel = api.library.items.filter((r) => r.type === type).length;
+    assert(n >= reel, `le compte annoncé (${n} ${type}) est inférieur aux lignes listées (${reel})`);
+    assert(resume.indexOf(String(n)) >= 0, `le résumé ne dit pas « ${n} ${type} » : ${resume}`);
+  }
+  const note = lib.querySelector(".sd-lib-note");
+  const texteNote = (note.textContent || "").trim();
+  assert(note.hidden ? texteNote === "" : texteNote.length > 0, "la note est affichée sans texte");
+  /* Rien d'affiché ne doit garder un trou de traduction. */
+  const trous = [...lib.querySelectorAll("*")].filter((el) => !el.children.length && /%s/.test(el.textContent || ""));
+  assert(trous.length === 0, "libellé non rempli : " + trous.map((el) => JSON.stringify(el.textContent)).join(","));
+
+  dom.window.close();
+  return `${controls.length} commandes, toutes actives · ${chips.length} filtres qui filtrent · ${liens.length} adresses réelles · compteurs vérifiés ✓`;
+});
+
+await checkAsync("bibliothèque sans session : rien n'est muet, tout explique", async () => {
+  /* **Le cas où la bibliothèque n'a rien à montrer** — pas de session, pas de
+     liste de Spotify. C'est là que se jouent les affichages : une note qui dit
+     pourquoi, un journal qui dit où, « Réessayer » qui relance vraiment, et la
+     porte de connexion de Spotify. Rien ne doit rester muet ni sans fin. */
+  const dom = new JSDOM(
+    "<!doctype html><html><body><main id='main-view'></main></body></html>",
+    { url: "https://open.spotify.com/intl-fr/", pretendToBeVisual: true, runScripts: "dangerously" }
+  );
+  const asked = [];
+  dom.window.fetch = (url, init) => {
+    asked.push(String(url).replace("https://api.spotify.com/v1", ""));
+    void init;
+    return Promise.resolve({ ok: false, status: 401, json: () => Promise.resolve({}) });
+  };
+  dom.window.eval("window.AndBridge = new Proxy({}, { get: (t, p) => String(p) === 'nFetchAsync' ? undefined : () => undefined });");
+  dom.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(200);
+  const api = dom.window.SpotiDuckUI;
+  const doc = dom.window.document;
+  const lib = doc.querySelector(".sd-layer .sd-lib");
+  api.state.tab = "library";
+  api.library.load(true);
+  for (let i = 0; i < 60 && api.library.state === "loading"; i++) await tick(50);
+  assert(api.library.state !== "loading", "la bibliothèque reste en chargement sans fin");
+  assert(api.library.items.length === 0, `aucune ligne attendue sans session, ${api.library.items.length} trouvée(s)`);
+
+  const visible = reachable(lib).filter((el) => !inertByDesign(el));
+  const retry = lib.querySelector(".sd-lib-retry");
+  const login = lib.querySelector(".sd-lib-login");
+  assert(retry && reachable(lib).indexOf(retry) >= 0, "« Réessayer » n'est pas proposé quand rien ne s'affiche");
+  assert(login && reachable(lib).indexOf(login) >= 0, "la connexion n'est pas proposée sans session");
+  assert(visible.length >= 3, `l'inventaire des actions est incomplet : ${visible.length}`);
+
+  /* Les affichages disent pourquoi, et où c'est écrit. */
+  const note = lib.querySelector(".sd-lib-note");
+  const texte = (note.textContent || "").trim();
+  assert(!note.hidden && texte.length > 0, "aucune note n'explique la bibliothèque vide");
+  assert(
+    /connect|session|jeton|répondu|compte/i.test(texte),
+    "la note n'explique pas la cause : " + texte
+  );
+  const logBox = lib.querySelector(".sd-lib-log");
+  assert(!logBox.hidden, "le journal reste caché alors que rien ne s'affiche");
+  const lignes = [...logBox.querySelectorAll("li")].map((li) => (li.textContent || "").trim());
+  assert(lignes.length >= 1, "le journal est ouvert mais vide");
+  assert(lignes.every((l) => l.length > 0), "une ligne du journal est vide");
+  assert(lignes.some((l) => /jeton|token|401|en-têtes/i.test(l)), "le journal ne dit rien du jeton : " + lignes.join(" | "));
+  assert((lib.querySelector(".sd-lib-title").textContent || "").trim().length > 0, "le titre de la page est vide");
+  const resume = lib.querySelector(".sd-lib-sum").textContent;
+  assert((resume || "").trim().length > 0, "le résumé est vide alors que rien ne s'affiche");
+
+  /* « Réessayer » relance vraiment, et retombe sur ses pieds. On attend que le
+     premier essai de jeton **soit terminé** : pendant qu'il est en vol, la coque
+     le réutilise (une requête à la fois, c'est voulu) et un nouvel essai serait
+     donc un doublon — pas ce qu'on mesure ici. */
+  await tick(400);
+  const avant = asked.length;
+  retry.click();
+  await tick(120);
+  assert(asked.length > avant, "« Réessayer » ne relance aucune lecture");
+  let fini = false;
+  for (let i = 0; i < 80 && !fini; i++) {
+    fini = api.library.state !== "loading";
+    if (!fini) await tick(50);
+  }
+  assert(fini, "« Réessayer » laisse la bibliothèque en chargement perpétuel");
+  assert(
+    ["no-token", "guest", "error"].indexOf(api.library.state) >= 0,
+    `état inattendu après un essai : ${api.library.state}`
+  );
+
+  /* La connexion mène **chez Spotify**, jamais nulle part. */
+  const href = login.getAttribute("href") || "";
+  assert(/^https:\/\/accounts\.spotify\.com\//.test(href), "l'adresse de connexion n'est pas celle de Spotify : " + href);
+  assert(/allow_password=1|login|signin/.test(href), "l'adresse de connexion n'ouvre pas la page de connexion : " + href);
+  assert((login.textContent || "").trim().length > 0, "le bouton de connexion n'a pas de libellé");
+  assert(login.hidden === false, "la connexion est cachée alors qu'il n'y a pas de session");
+  dom.window.close();
+  return `note et journal remplis · « Réessayer » relance (${asked.length} appels) · connexion → ${href.replace(/^https:\/\//, "").slice(0, 44)} ✓`;
+});
+
+await checkAsync("lecteur : chaque commande fait quelque chose", async () => {
+  const dom = new JSDOM("<!doctype html><html><head></head><body></body></html>", {
+    url: "https://open.spotify.com/",
+    pretendToBeVisual: true,
+    runScripts: "dangerously",
+  });
+await checkAsync("lecteur : les commandes font exactement ce qu'elles disent", async () => {
+  /* Chaque commande du lecteur est reliée à **la** commande de Spotify, et
+     chaque affichage doit dire la vérité sur ce que joue le lecteur : titre,
+     artiste, durée, position, volume, états « aléatoire / répétition / j'aime ».
+     Le faux lecteur (`demo/mock/spotify.js`) sert de témoin : on lit son état
+     après chaque appui. */
+  const dom = new JSDOM("<!doctype html><html><head></head><body></body></html>", {
+    url: "https://open.spotify.com/",
+    pretendToBeVisual: true,
+    runScripts: "dangerously",
+  });
+  dom.window.eval("window.__bridgeCalls = []; window.AndBridge = new Proxy({}, { get: (t, p) => (...a) => { window.__bridgeCalls.push([String(p), a]); if (String(p) === 'isWoke') return false; return undefined; } });");
+  dom.window.eval(await read("demo/mock/spotify.js"));
+  /* Le faux lecteur n'a pas de curseur de volume : on lui en donne un, branché
+     sur son état, comme celui de la vraie page (« div[data-testid=volume-bar]
+     input », le repère que la coque cherche). */
+  dom.window.eval(
+    "var bar = document.createElement('div');" +
+      "bar.setAttribute('data-testid', 'volume-bar');" +
+      "bar.innerHTML = '<input type=\"range\" min=\"0\" max=\"100\" step=\"1\" value=\"75\" aria-label=\"Volume\">';" +
+      "document.querySelector('aside[data-testid=\"now-playing-bar\"]').appendChild(bar);" +
+      "var vin = bar.querySelector('input');" +
+      "vin.addEventListener('input', function () { window.MockSpotify.state.volume = Number(vin.value) / 100; });" +
+      "window.__volPage = vin;"
+  );
+  /* Les commandes qui doivent **appuyer sur celles de Spotify** : on compte ces
+     appuis, c'est leur action réelle (paroles, file d'attente, appareils…). */
+  const TARGETS = [
+    'button[data-testid="lyrics-button"]',
+    'button[data-testid="control-button-connect"]',
+    'button[aria-label^="File"]',
+    '[data-testid="queue-button"]',
+    '#Desktop_PanelContainer_Id button',
+  ];
+  dom.window.eval("window.__targetClicks = {};");
+  dom.window.eval(
+    "(" + function (selectors) {
+      selectors.forEach(function (sel) {
+        document.querySelectorAll(sel).forEach(function (el) {
+          el.addEventListener("click", function () {
+            window.__targetClicks[sel] = (window.__targetClicks[sel] || 0) + 1;
+          });
+        });
+      });
+    }.toString() + ")(" + JSON.stringify(TARGETS) + ")"
+  );
+  dom.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(250);
+  const api = dom.window.SpotiDuckUI;
+  const doc = dom.window.document;
+  const mock = dom.window.MockSpotify;
+  const tracks = mock.tracks;
+  const fmt = (s) => Math.floor(s / 60) + ":" + String(Math.floor(s % 60)).padStart(2, "0");
+  const $1 = (sel) => doc.querySelector(sel);
+  const press = async (sel) => {
+    const el = $1(sel);
+    assert(el, sel + " est absent du lecteur");
+    el.click();
+    await tick(160);
+  };
+
+  /* Un morceau joue : le lecteur doit l'afficher tel quel. */
+  mock.play(1);
+  await tick(250);
+  const t = tracks[1];
+  assert($1(".sd-mini-title").textContent === t.title, `titre du mini-lecteur « ${$1(".sd-mini-title").textContent} » au lieu de « ${t.title} »`);
+  assert($1(".sd-mini-artist").textContent === t.artist, `artiste du mini-lecteur « ${$1(".sd-mini-artist").textContent} » au lieu de « ${t.artist} »`);
+  assert($1(".sd-mini-dur").textContent === fmt(t.duration), `durée affichée « ${$1(".sd-mini-dur").textContent} » au lieu de « ${fmt(t.duration)} »`);
+  const volPage = () => dom.window.__volPage;
+  assert(volPage(), "le volume du lecteur n'est pas exposé par la page");
+  await tick(200);
+  assert(!$1(".sd-mini-volume").hidden, "le curseur de volume reste caché alors que la page en a un");
+  const volShown = Number($1(".sd-mini-vol").value);
+  const volReal = Math.round(Number(volPage().value) || 0);
+  assert(volShown === volReal, `le volume affiché (${volShown}) ne dit pas le volume réel (${volReal})`);
+
+  /* Lecture / pause : l'état du lecteur doit suivre, dans les deux sens. */
+  const etait = mock.state.playing;
+  await press(".sd-mini-play");
+  assert(mock.state.playing !== etait, "« lecture/pause » du mini-lecteur ne change pas la lecture");
+  await press(".sd-mini-play");
+  assert(mock.state.playing === etait, "« lecture/pause » ne revient pas à son état");
+  const labelPlay = $1(".sd-mini-play").getAttribute("aria-label") || "";
+  assert(
+    mock.state.playing ? /pause/i.test(labelPlay) : /lecture|play/i.test(labelPlay),
+    `le bouton dit « ${labelPlay} » alors que la lecture est ${mock.state.playing ? "en cours" : "arrêtée"}`
+  );
+
+  /* Suivant / précédent : la piste change, et l'affichage suit. */
+  const i0 = mock.state.trackIndex;
+  await press(".sd-mini-next");
+  assert(mock.state.trackIndex === (i0 + 1) % tracks.length, "« suivant » ne change pas de piste");
+  assert($1(".sd-mini-title").textContent === tracks[(i0 + 1) % tracks.length].title, "« suivant » ne met pas le titre à jour");
+  await press(".sd-mini-prev");
+  assert(mock.state.trackIndex === i0, "« précédent » ne revient pas à la piste d'avant");
+  assert($1(".sd-mini-title").textContent === tracks[i0].title, "« précédent » ne met pas le titre à jour");
+
+  /* J'aime. */
+  const aimeAvant = !!mock.state.liked[i0];
+  await press(".sd-mini-like");
+  assert(!!mock.state.liked[i0] !== aimeAvant, "« j'aime » ne change pas le titre liké");
+  assert(
+    $1(".sd-mini-like").classList.contains("is-active") === !!mock.state.liked[i0],
+    "le cœur ne montre pas l'état réel du titre"
+  );
+  await press(".sd-mini-like");
+  assert(!!mock.state.liked[i0] === aimeAvant, "« j'aime » ne revient pas en arrière");
+
+  /* Aléatoire et répétition : chaque appui change l'état, et l'affichage le dit. */
+  const aleaAvant = !!mock.state.shuffle;
+  await press(".sd-mini-shuffle");
+  assert(!!mock.state.shuffle !== aleaAvant, "« aléatoire » ne change pas l'état");
+  assert($1(".sd-mini-shuffle").getAttribute("aria-checked") === (mock.state.shuffle ? "true" : "false"), "« aléatoire » ne dit pas son état");
+  await press(".sd-mini-shuffle");
+  const modes = ["off", "context", "track", "off"];
+  let courant = mock.state.repeat;
+  for (const attendu of modes.slice(1)) {
+    await press(".sd-mini-repeat");
+    courant = mock.state.repeat;
+    assert(courant === attendu, `« répétition » donne « ${courant} » au lieu de « ${attendu} »`);
+    assert(
+      $1(".sd-mini-repeat").getAttribute("aria-checked") === (courant === "off" ? "false" : courant === "track" ? "mixed" : "true"),
+      "« répétition » ne dit pas son état"
+    );
+  }
+
+  /* Volume : le curseur du mini-lecteur pilote celui du lecteur. */
+  const vol = $1(".sd-mini-vol");
+  vol.value = "30";
+  vol.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  vol.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  await tick(200);
+  const volApres = Math.round(Number(volPage().value) || 0);
+  assert(Math.abs(volApres - 30) <= 1, `le volume réel est ${volApres} après avoir demandé 30`);
+  assert(Math.abs(mock.state.volume - 0.3) <= 0.02, `le lecteur est à ${mock.state.volume} alors qu'on a demandé 0,30`);
+  vol.value = "0";
+  vol.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  vol.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  let muet = false;
+  for (let i = 0; i < 20 && !muet; i++) {
+    await tick(60);
+    muet = $1(".sd-mini-volume").classList.contains("is-muted");
+  }
+  assert(muet, "volume à zéro : le mini-lecteur ne le montre pas");
+  assert(Number($1(".sd-mini-vol").value) === 0, "le curseur du mini-lecteur n'affiche pas le volume réel (0)");
+  vol.value = "75";
+  vol.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  await tick(150);
+
+  /* Position : glisser la barre doit déplacer **vraiment** la lecture. */
+  const rail = $1(".sd-mini-seek");
+  assert(rail, "la barre de progression du mini-lecteur est absente");
+  const box = { left: 0, top: 0, width: 200, height: 20, right: 200, bottom: 20 };
+  rail.getBoundingClientRect = () => box;
+  const at = (type, x) => {
+    const ev = new dom.window.MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: 10, buttons: 1 });
+    try {
+      Object.defineProperty(ev, "pointerId", { value: 1 });
+    } catch (e) {
+      /* la coque tolère l'absence d'identifiant de pointeur */
+    }
+    return ev;
+  };
+  const duree = tracks[mock.state.trackIndex].duration;
+  rail.dispatchEvent(at("pointerdown", 20));
+  rail.dispatchEvent(at("pointermove", 120));
+  rail.dispatchEvent(at("pointerup", 120));
+  await tick(250);
+  const attendu = 0.5 * duree;
+  assert(
+    Math.abs(mock.state.position - attendu) <= Math.max(8, duree * 0.12),
+    `après un glissement à mi-course, la lecture est à ${Math.round(mock.state.position)} s au lieu d'environ ${Math.round(attendu)} s`
+  );
+  assert(
+    $1(".sd-mini-cur").textContent === fmt(mock.state.position),
+    `le temps affiché « ${$1(".sd-mini-cur").textContent} » ne dit pas la position réelle (${fmt(mock.state.position)})`
+  );
+  const pourcent = Number(rail.getAttribute("aria-valuenow"));
+  assert(
+    Math.abs(pourcent - (mock.state.position / duree) * 100) <= 6,
+    `la barre affiche ${pourcent} % pour une position de ${Math.round((mock.state.position / duree) * 100)} %`
+  );
+
+  /* Paroles · file d'attente · appareils : chacune appuie sur celle de Spotify. */
+  const appuis = () => dom.window.__targetClicks;
+  const avant = JSON.stringify(appuis());
+  await press(".sd-mini-lyrics");
+  assert(JSON.stringify(appuis()) !== avant, "« paroles » n'appuie pas sur les paroles de Spotify");
+  /* La file d'attente est **celle de Spotify** (son panneau), montrée dans notre
+     feuille : l'appui doit l'ouvrir, puis la refermer. */
+  const fileOuverte = doc.documentElement.classList.contains("sd-queue-open");
+  await press(".sd-mini-queue");
+  assert(
+    doc.documentElement.classList.contains("sd-queue-open") !== fileOuverte,
+    "« file d'attente » n'ouvre pas la file de Spotify"
+  );
+  await press(".sd-mini-queue");
+  assert(
+    doc.documentElement.classList.contains("sd-queue-open") === fileOuverte,
+    "« file d'attente » ne se referme pas"
+  );
+  const avantApp = JSON.stringify(appuis());
+  await press(".sd-mini-devices");
+  assert(JSON.stringify(appuis()) !== avantApp, "« appareils » n'appuie pas sur ceux de Spotify");
+
+  /* La feuille du lecteur : mêmes commandes, mêmes effets, et elle se ferme. */
+  await press(".sd-mini");
+  assert(doc.documentElement.classList.contains("sd-player-open"), "l'appui sur le mini-lecteur n'ouvre pas la feuille");
+  assert($1(".sd-player-track").textContent === tracks[mock.state.trackIndex].title, "la feuille n'affiche pas le bon titre");
+  assert($1(".sd-t-dur").textContent === fmt(duree), "la feuille n'affiche pas la bonne durée");
+  const jouait = mock.state.playing;
+  await press(".sd-ctrl-play");
+  assert(mock.state.playing !== jouait, "« lecture/pause » de la feuille ne change pas la lecture");
+  await press(".sd-ctrl-next");
+  assert($1(".sd-player-track").textContent === tracks[mock.state.trackIndex].title, "« suivant » dans la feuille ne met pas le titre à jour");
+  await press(".sd-player-close");
+  assert(!doc.documentElement.classList.contains("sd-player-open"), "la feuille du lecteur ne se ferme pas");
+  assert(!$1(".sd-mini").hidden, "le mini-lecteur a disparu après la fermeture de la feuille");
+  dom.window.close();
+  return "transport, j'aime, aléatoire, répétition, volume, position, paroles, file, appareils, fermeture — tous vérifiés ✓";
+});
+
+
+  dom.window.eval("window.__bridgeCalls = []; window.AndBridge = new Proxy({}, { get: (t, p) => (...a) => { window.__bridgeCalls.push([String(p), a]); if (String(p) === 'isWoke') return false; return undefined; } });");
+  dom.window.eval(await read("demo/mock/spotify.js"));
+  /* **Ce que chaque commande doit finir par faire** : appuyer sur le bouton de
+     Spotify correspondant. On compte donc ces appuis — c'est l'action réelle
+     des commandes « Paroles », « Appareils », « File d'attente », « Profil »… */
+  const SPOTIFY_TARGETS = [
+    'button[data-testid="lyrics-button"]',
+    'button[data-testid="control-button-connect"]',
+    'button[data-testid="control-button-repeat"]',
+    'button[data-testid="control-button-shuffle"]',
+    'button[data-testid="add-button"]',
+    'button[data-testid="control-button-skip-forward"]',
+    'button[data-testid="control-button-skip-back"]',
+    'button[data-testid="control-button-playpause"]',
+    'button[data-testid="user-widget-link"]',
+    "[data-testid='queue-button']",
+    "[data-testid='control-button-queue']",
+  ];
+  dom.window.eval("window.__targetClicks = {};");
+  dom.window.eval(
+    "(" + function (selectors) {
+      selectors.forEach(function (sel) {
+        document.querySelectorAll(sel).forEach(function (el) {
+          el.addEventListener("click", function () {
+            window.__targetClicks[sel] = (window.__targetClicks[sel] || 0) + 1;
+          });
+        });
+      });
+    }.toString() + ")(" + JSON.stringify(SPOTIFY_TARGETS) + ")"
+  );
+  dom.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(200);
+  const api = dom.window.SpotiDuckUI;
+  const doc = dom.window.document;
+  const layer = doc.querySelector(".sd-layer");
+  dom.window.MockSpotify.play(1);
+  await tick(200);
+  api.openPlayer();
+  await tick(200);
+
+  const dead = [];
+  const liens = [];
+  /* **Chaque commande part du même état.** Une commande qui consiste à ouvrir
+     une feuille ne peut pas être jugée si la feuille est déjà ouverte (l'appui
+     ne changerait rien) : on referme, puis on appuie. Le mini-lecteur, lui, doit
+     être mesuré feuille fermée — son action est justement de l'ouvrir. */
+  const neutral = async (el) => {
+    api.close();
+    api.closePlayer();
+    await tick(80);
+    if (el && el.closest(".sd-player")) {
+      api.openPlayer();
+      await tick(150);
+    }
+  };
+  const pressOne = async (el) => {
+    if (el.tagName === "A") {
+      liens.push(describeControl(el));
+      return;
+    }
+    clearToast(dom);
+    const before = effect(dom, api);
+    el.click();
+    let changed = false;
+    for (let i = 0; i < 14 && !changed; i++) {
+      await tick(40);
+      changed = effect(dom, api) !== before;
+    }
+    if (!changed) dead.push(describeControl(el));
+  };
+  const isSlider = (el) => el.getAttribute("role") === "slider";
+  const dragSlider = async (el) => {
+    const rail = el.querySelector(".sd-seek-rail") || el;
+    /* jsdom n'a pas de mise en page : on donne une largeur au rail pour que le
+       geste ait un sens, et l'unité de la position est celle de la coque. */
+    const box = { left: 0, top: 0, width: 200, height: 20, right: 200, bottom: 20 };
+    rail.getBoundingClientRect = () => box;
+    const at = (type, x) => {
+      const ev = new dom.window.MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: 10, buttons: 1 });
+      try {
+        Object.defineProperty(ev, "pointerId", { value: 1 });
+      } catch (e) {
+        /* sans identifiant de pointeur, la capture échoue — la coque le tolère */
+      }
+      return ev;
+    };
+    clearToast(dom);
+    const before = effect(dom, api);
+    rail.dispatchEvent(at("pointerdown", 40));
+    rail.dispatchEvent(at("pointermove", 120));
+    rail.dispatchEvent(at("pointerup", 120));
+    let moved = false;
+    for (let i = 0; i < 14 && !moved; i++) {
+      await tick(40);
+      moved = effect(dom, api) !== before;
+    }
+    if (!moved) dead.push(describeControl(el) + " (curseur)");
+  };
+
+  /* 1. Tout ce qui n'est pas dans une feuille : le mini-lecteur, la feuille du
+     lecteur, la navigation, la barre d'onglets. */
+  const outer = reachable(layer).filter((el) => !el.closest(".sd-sheet"));
+  assert(outer.length >= 20, `l'inventaire du lecteur est incomplet : ${outer.length} commandes`);
+  for (const el of outer) {
+    if (inertByDesign(el)) continue;
+    await neutral(el);
+    if (isSlider(el)) await dragSlider(el);
+    else await pressOne(el);
+  }
+
+  /* 2. Les feuilles : chacune est **rouverte** avant chaque appui, sinon la
+     deuxième ligne d'un menu ne serait mesurée qu'à moitié. */
+  const sheets = [
+    ["menu (…)", () => api.openMenu()],
+    ["réglages", () => api.openSettings()],
+  ];
+  let sheetControls = 0;
+  for (const [, opener] of sheets) {
+    opener();
+    await tick(200);
+    const sheet = doc.querySelector(".sd-layer .sd-sheet:not([hidden])");
+    assert(sheet, "la feuille ne s'est pas ouverte");
+    const rows = reachable(sheet);
+    assert(rows.length >= 5, `la feuille n'a que ${rows.length} commandes`);
+    for (const el of rows) {
+      sheetControls++;
+      if (inertByDesign(el)) continue;
+      opener();
+      await tick(180);
+      await pressOne(el);
+    }
+  }
+
+  assert(dead.length === 0, "commandes sans effet : " + dead.join(" · "));
+  /* Les commandes du transport doivent toutes être dans l'inventaire. */
+  const transport = [".sd-mini-play", ".sd-mini-next", ".sd-mini-prev", ".sd-mini-shuffle", ".sd-mini-repeat", ".sd-mini-like"];
+  for (const sel of transport) {
+    assert(doc.querySelector(sel), sel + " absent de l'inventaire");
+    assert(outer.some((el) => el.matches(sel)), sel + " n'a pas été éprouvé");
+  }
+  dom.window.close();
+  return `${outer.length} commandes du lecteur + ${sheetControls} dans les feuilles, toutes actives · ${liens.length} adresses ✓`;
 });
 
 await checkAsync("une playlist ouverte n'est jamais recouverte par nos écrans", async () => {
