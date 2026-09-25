@@ -799,57 +799,53 @@ const SUBPAGE_PROBE = () => {
    `disabled`), et on éprouve la chaîne complète là où c'est mesurable sans
    lecture : un appui sur notre « aléatoire » ou notre « j'aime » doit changer
    l'état du bouton de Spotify (`aria-checked`). */
-const TRANSPORT_SELS = {
-  playPause: ['aside button[data-testid="control-button-playpause"]', 'button[data-testid="control-button-playpause"]'],
-  next: ['aside button[data-testid="control-button-skip-forward"]', 'button[data-testid="control-button-skip-forward"]'],
-  prev: ['aside button[data-testid="control-button-skip-back"]', 'button[data-testid="control-button-skip-back"]'],
-  shuffle: ['aside button[data-testid="control-button-shuffle"]', 'button[data-testid="control-button-shuffle"]'],
-  repeat: ['aside button[data-testid="control-button-repeat"]', 'button[data-testid="control-button-repeat"]'],
-  like: ['aside button[data-testid="add-button"]', 'button[data-testid="add-button"]', 'button[data-testid="now-playing-widget-add-button"]'],
-};
-
-const TRANSPORT_TARGET = (nom) => {
-  const list = TRANSPORT_SELS[nom] || [];
-  for (let i = 0; i < list.length; i++) {
-    const el = document.querySelector(list[i]);
-    if (!el) continue;
-    const r = el.getBoundingClientRect();
-    return {
-      sel: list[i],
-      taille: Math.round(r.width) + "x" + Math.round(r.height),
-      disabled: el.disabled === true,
-      testid: el.getAttribute("data-testid") || "",
-      label: el.getAttribute("aria-label") || "",
-    };
-  }
-  return null;
-};
-
 const TRANSPORT_PROBE = () => {
+  const SELS = {
+    playPause: ['aside button[data-testid="control-button-playpause"]', 'button[data-testid="control-button-playpause"]'],
+    next: ['aside button[data-testid="control-button-skip-forward"]', 'button[data-testid="control-button-skip-forward"]'],
+    prev: ['aside button[data-testid="control-button-skip-back"]', 'button[data-testid="control-button-skip-back"]'],
+    shuffle: ['aside button[data-testid="control-button-shuffle"]', 'button[data-testid="control-button-shuffle"]'],
+    repeat: ['aside button[data-testid="control-button-repeat"]', 'button[data-testid="control-button-repeat"]'],
+    like: ['aside button[data-testid="add-button"]', 'button[data-testid="add-button"]', 'button[data-testid="now-playing-widget-add-button"]'],
+  };
+  const target = (nom) => {
+    const list = SELS[nom] || [];
+    for (let i = 0; i < list.length; i++) {
+      const el = document.querySelector(list[i]);
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      return {
+        sel: list[i],
+        taille: Math.round(r.width) + "x" + Math.round(r.height),
+        disabled: el.disabled === true,
+        label: el.getAttribute("aria-label") || "",
+      };
+    }
+    return null;
+  };
   const out = {};
-  Object.keys(TRANSPORT_SELS).forEach((k) => {
-    const t = TRANSPORT_TARGET(k);
+  Object.keys(SELS).forEach((k) => {
+    const t = target(k);
     out[k] = t ? `${t.sel.replace("aside ", "")} ${t.taille}${t.disabled ? " DÉSACTIVÉ" : ""}` : "AUCUN";
   });
   const etat = (sel) => {
     const el = document.querySelector(sel);
     return el ? el.getAttribute("aria-checked") : "?";
   };
+  const titre = document.querySelector('[data-testid="context-item-link"], [data-testid="now-playing-widget"] a');
   return {
     cibles: out,
     page: {
       shuffle: etat('button[data-testid="control-button-shuffle"]'),
       repeat: etat('button[data-testid="control-button-repeat"]'),
       like: etat('button[data-testid="add-button"]'),
-      titre: (() => {
-        const el = document.querySelector('[data-testid="context-item-link"], [data-testid="now-playing-widget"] a');
-        return el ? (el.textContent || "").trim().slice(0, 40) : "(aucun)";
-      })(),
+      titre: titre ? (titre.textContent || "").trim().slice(0, 40) : "(aucun)",
     },
     nous: {
       shuffle: !!document.querySelector(".sd-mini-shuffle"),
       like: !!document.querySelector(".sd-mini-like"),
       next: !!document.querySelector(".sd-mini-next"),
+      play: !!document.querySelector(".sd-mini-play"),
     },
   };
 };
@@ -1240,6 +1236,8 @@ async function main() {
           if (manquants.length || muet) warn(`Lecture — ${target.label}`, line);
           else note(`Lecture — ${target.label}`, line);
           report.pages.push({ label: `${target.label} (lecture)`, transport, canary });
+        } else {
+          warn(`Lecture — ${target.label}`, "aucune mesure n'est remontée du lecteur");
         }
       }
 
