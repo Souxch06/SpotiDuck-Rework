@@ -1838,10 +1838,17 @@ await checkAsync("the library shows the account's playlists, albums, artists and
   assert(/Compte Moi/.test(page.querySelector(".sd-lib-sum").textContent), "le résumé ne nomme pas le compte lu : " + page.querySelector(".sd-lib-sum").textContent);
   const chips = [...page.querySelectorAll(".sd-lib-chip")];
   assert(chips.length === 5, `5 filtres attendus, ${chips.length} trouvé(s)`);
+  /* Chaque filtre est nommé **et** porte son compte (le libellé reste le
+     premier mot : « Playlists 2 »). */
+  const etiquettes = chips.map((c) => (c.textContent || "").replace(/\s*\d+\s*$/, "").trim());
   assert(
-    chips.map((c) => c.textContent).join("/") === "Tout/Playlists/Albums/Artistes/Podcasts",
-    "les filtres ne sont pas nommés : " + chips.map((c) => c.textContent).join("/")
+    etiquettes.join("/") === "Tout/Playlists/Albums/Artistes/Podcasts",
+    "les filtres ne sont pas nommés : " + etiquettes.join("/")
   );
+  const comptes = chips.map((c) => Number(((c.textContent || "").match(/(\d+)\s*$/) || [])[1]));
+  assert(comptes[0] === api.library.items.length, `le filtre « Tout » annonce ${comptes[0]} au lieu de ${api.library.items.length}`);
+  assert(comptes[1] === 2, `le filtre « Playlists » annonce ${comptes[1]} au lieu de 2`);
+  assert(comptes[2] === 1, `le filtre « Albums » annonce ${comptes[2]} au lieu de 1`);
 
   /* Un filtre filtre — et dit quand il ne reste rien. */
   chips[2].dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));

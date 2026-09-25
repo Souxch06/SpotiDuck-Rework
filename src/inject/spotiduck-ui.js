@@ -5724,14 +5724,33 @@
         artist: Settings.labels.libraryArtists,
         show: Settings.labels.libraryShows,
       };
+      var total = this.items.length;
+      var parType = {};
+      this.items.forEach(function (row) {
+        parType[row.type] = (parType[row.type] || 0) + 1;
+      });
       $$(".sd-lib-chip", this.el).forEach(function (chip) {
         var key = chip.getAttribute("data-filter");
-        chip.textContent = names[key] || key;
+        var label = names[key] || key;
+        var n = key === "all" ? total : parType[key] || 0;
+        /* **Le compteur, dans la puce** : il dit ce qu'on va trouver avant
+           d'appuyer, et il évite de croire à une bibliothèque vide quand un
+           filtre ne montre rien. */
+        chip.textContent = "";
+        chip.appendChild(document.createTextNode(label + " "));
+        var compte = document.createElement("span");
+        compte.className = "sd-lib-chip-n";
+        compte.textContent = n ? String(n) : "0";
+        chip.appendChild(compte);
         var active = key === Library.filter;
         chip.classList.toggle("is-active", active);
         chip.setAttribute("aria-selected", active ? "true" : "false");
       });
       var list = $(".sd-lib-list", this.el);
+      /* **Un filtre qui ne montre rien n'est pas un écran vide** : la liste se
+         range et la phrase dit pourquoi (la classe existait dans la feuille,
+         personne ne la posait). */
+      this.el.classList.toggle("sd-lib-nofilter", !!this.items.length && !this.filtered().length);
       /* **Ne pas reconstruire 82 lignes à chaque repeint.** `render` est appelé
          à chaque changement de vue et à chaque relevé de la bibliothèque :
          recréer toutes les lignes (et redemander toutes les pochettes) à chaque

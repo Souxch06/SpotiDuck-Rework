@@ -841,12 +841,50 @@ const TRANSPORT_PROBE = () => {
       like: etat('button[data-testid="add-button"]'),
       titre: titre ? (titre.textContent || "").trim().slice(0, 40) : "(aucun)",
     },
-    nous: {
-      shuffle: !!document.querySelector(".sd-mini-shuffle"),
-      like: !!document.querySelector(".sd-mini-like"),
-      next: !!document.querySelector(".sd-mini-next"),
-      play: !!document.querySelector(".sd-mini-play"),
-    },
+    /* **Nos boutons, et ce qui se trouve réellement à leur place.** Un bouton
+       couvert par autre chose ne reçoit aucun appui : c'est « le bouton ne fait
+       rien », alors qu'il est bien là et bien branché. On demande donc à la page
+       quel élément se trouve au centre de chacun. */
+    nous: (() => {
+      const sels = [
+        ".sd-mini-play",
+        ".sd-mini-next",
+        ".sd-mini-prev",
+        ".sd-mini-shuffle",
+        ".sd-mini-repeat",
+        ".sd-mini-like",
+        ".sd-mini-lyrics",
+        ".sd-mini-queue",
+      ];
+      const out = {};
+      sels.forEach((sel) => {
+        const el = document.querySelector(sel);
+        if (!el) {
+          out[sel] = "absent";
+          return;
+        }
+        const r = el.getBoundingClientRect();
+        if (r.width < 2 || r.height < 2) {
+          out[sel] = "sans taille";
+          return;
+        }
+        let dessus = "hors écran";
+        try {
+          const hit = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+          if (hit) {
+            if (hit === el || (el.contains && el.contains(hit))) dessus = "lui-même";
+            else {
+              const cls = String(hit.className || "").split(" ")[0];
+              dessus = hit.tagName.toLowerCase() + (cls ? "." + cls : "");
+            }
+          }
+        } catch (e) {
+          dessus = "non mesurable";
+        }
+        out[sel] = Math.round(r.width) + "x" + Math.round(r.height) + " dessus=" + dessus;
+      });
+      return out;
+    })(),
   };
 };
 
@@ -1226,6 +1264,7 @@ async function main() {
           const line =
             `cibles : ${Object.keys(transport.cibles).map((k) => k + "=" + transport.cibles[k]).join(" · ")}` +
             ` · page : shuffle=${transport.page.shuffle} repeat=${transport.page.repeat} like=${transport.page.like} titre="${transport.page.titre}"` +
+            ` · nos boutons : ${Object.keys(transport.nous).map((k) => k.replace(".sd-mini-", "") + "=" + transport.nous[k]).join(" · ")}` +
             (canary
               ? ` · nos appuis : aléatoire ${canary.avant.shuffle}→${canary.apresShuffle}${canary.appuyeShuffle ? "" : " (bouton absent)"}` +
                 `, j'aime ${canary.avant.like}→${canary.apresLike}${canary.appuyeLike ? "" : " (bouton absent)"}`

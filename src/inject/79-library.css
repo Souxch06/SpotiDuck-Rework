@@ -268,3 +268,75 @@ html.sd-mobile.sd-tab-library .sd-layer .sd-home,
 html.sd-mobile.sd-tab-search .sd-layer .sd-home {
   display: none !important;
 }
+
+/* --------------------------------------------------------------------------
+   4. Plus propre : un en-tête qui reste, des compteurs lisibles, des lignes
+      séparées franchement, et des actions qui ressemblent à des boutons
+   -------------------------------------------------------------------------- */
+
+/* L'en-tête et les filtres **restent** pendant que la liste défile : on sait
+   toujours où on est, et on peut changer de filtre sans remonter. */
+html.sd-mobile .sd-layer .sd-lib-head,
+html.sd-mobile .sd-layer .sd-lib-chips {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--sd-bg);
+}
+html.sd-mobile .sd-layer .sd-lib-head {
+  padding-top: calc(4px * var(--sd-u));
+  padding-bottom: calc(2px * var(--sd-u));
+}
+html.sd-mobile .sd-layer .sd-lib-chips {
+  padding-top: calc(4px * var(--sd-u));
+  padding-bottom: calc(8px * var(--sd-u));
+}
+
+/* Le compteur d'une puce : discret, jamais coupé. */
+html.sd-mobile .sd-layer .sd-lib-chip-n {
+  opacity: 0.62;
+  font-variant-numeric: tabular-nums;
+  margin-left: calc(2px * var(--sd-u));
+}
+html.sd-mobile .sd-layer .sd-lib-chip.is-active .sd-lib-chip-n {
+  opacity: 0.85;
+}
+
+/* Les lignes : un filet discret entre elles (sauf la dernière), pas de cadre. */
+html.sd-mobile .sd-layer .sd-lib-row + .sd-lib-row {
+  box-shadow: inset 0 1px 0 0 var(--sd-bg-tint);
+}
+
+/* « Titres likés » : la première ligne se reconnaît (cœur sur fond dégradé). */
+html.sd-mobile .sd-layer .sd-lib-row-liked .sd-lib-art {
+  background: linear-gradient(135deg, var(--sd-accent), var(--sd-bg-tint));
+}
+html.sd-mobile .sd-layer .sd-lib-row-liked .sd-lib-glyph {
+  color: #fff;
+}
+
+/* Rien dans ce filtre : la phrase est au centre, la liste est rangée. */
+html.sd-mobile .sd-layer .sd-lib-nofilter .sd-lib-note {
+  text-align: center;
+  padding-top: calc(28px * var(--sd-u));
+}
+html.sd-mobile .sd-layer .sd-lib-nofilter .sd-lib-list {
+  display: none;
+}
+
+/* Le journal : lisible, borné, et il ne pousse pas les actions hors de l'écran. */
+html.sd-mobile .sd-layer .sd-lib-log-list {
+  max-height: calc(132px * var(--sd-u));
+  overflow-y: auto;
+}
+
+/* Les actions : deux boutons nets, la connexion en avant. */
+html.sd-mobile .sd-layer .sd-lib-actions:has(.sd-lib-login:not([hidden])) .sd-lib-retry {
+  flex: 1 1 auto;
+}
+html.sd-mobile .sd-layer .sd-lib-actions:has(.sd-lib-login:not([hidden])) .sd-lib-login {
+  flex: 1 1 auto;
+  background: var(--sd-accent);
+  color: var(--sd-on-accent, #000);
+  border-color: transparent;
+}
