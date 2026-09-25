@@ -338,6 +338,35 @@ html.sd-mobile .sd-layer .sd-stat-label {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Les tuiles portent maintenant leur unité et ce qu'elles comptent : la
+   troisième ligne est là pour lever l'ambiguïté, pas pour décorer. */
+html.sd-mobile .sd-layer .sd-stat-hint {
+  font-size: calc(10px * var(--sd-u));
+  line-height: 1.35;
+  color: var(--sd-muted, var(--sd-sub));
+  opacity: 0.72;
+}
+html.sd-mobile .sd-layer .sd-stat-value {
+  font-variant-numeric: tabular-nums;
+}
+/* La phrase de tête : le temps écouté, en clair, avant les cartes. */
+html.sd-mobile .sd-layer .sd-stat-lead {
+  margin: 0 0 calc(10px * var(--sd-u));
+  font-size: calc(13px * var(--sd-u));
+  line-height: 1.45;
+  color: var(--sd-text);
+  font-weight: 600;
+}
+/* Une note dit toujours d'où vient le chiffre — mesuré ou annoncé. */
+html.sd-mobile .sd-layer .sd-stat-note {
+  margin: calc(8px * var(--sd-u)) 0 0;
+  font-size: calc(11px * var(--sd-u));
+  line-height: 1.4;
+  color: var(--sd-sub);
+}
+html.sd-mobile .sd-layer .sd-stat-note-est {
+  opacity: 0.85;
+}
 
 /* Cartes de statistiques. */
 html.sd-mobile .sd-layer .sd-stat-card {

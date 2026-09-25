@@ -926,8 +926,83 @@ if (!/plausible: function/.test(libraryCode) || !/MAX_SECONDS: 12 \* 3600/.test(
 if (!/d: this\.plausible\(durationSec\)/.test(libraryCode)) {
   errors.push("l'enregistrement d'une écoute ne contrôle plus la durée");
 }
-if (!/Math\.round\(\(s\.duration \|\| 0\) \/ 1000\)/.test(libraryCode)) {
-  errors.push("l'écoute est enregistrée sans convertir les millisecondes de la page");
+/* **L'écoute se mesure, elle ne se déduit pas.** Signalé le 25/09 : « Les
+   statistiques sont pas bonne il me semble. Rends les statistiques plus
+   compréhensible ». Avant, dès qu'un titre apparaissait, on inscrivait la durée
+   annoncée par la page : un titre survolé dix secondes comptait quatre minutes.
+   Ce qui doit rester : le suivi de l'avancement du lecteur, le seuil des dix
+   secondes, la distinction mesuré/estimé, et **aucune** durée inventée. */
+if (!/tick: function \(state, nowMs\)/.test(libraryCode) || !/flush: function \(nowMs\)/.test(libraryCode)) {
+  errors.push("les statistiques ne mesurent plus l'écoute (ni `tick` ni `flush`) : les durées redeviendraient celles annoncées par la page");
+}
+if (!/Stats\.tick\(State, Date\.now\(\)\)/.test(libraryCode) || !/Stats\.tick\(s\)/.test(libraryCode)) {
+  errors.push("la mesure de l'écoute n'est plus alimentée par le lecteur : les statistiques ne bougeraient plus");
+}
+if (/Math\.round\(\(s\.duration \|\| 0\) \/ 1000\)/.test(libraryCode)) {
+  errors.push("l'écoute est de nouveau enregistrée à partir de la durée annoncée du titre (un titre survolé compterait sa durée entière)");
+}
+if (!/STATS_MIN_SEC = 10/.test(libraryCode) || !/s\.sec >= STATS_MIN_SEC/.test(libraryCode)) {
+  errors.push("le seuil des dix secondes a disparu : un survol compterait comme une écoute");
+}
+if (!/sec = e\.d > 0 \? e\.d : 0;/.test(libraryCode) || /STATS_DEFAULT_SEC/.test(libraryCode)) {
+  errors.push("une durée est de nouveau inventée quand la page ne l'annonce pas (c'est ce qui produisait « 56095 h »)");
+}
+if (!/m: 1,/.test(libraryCode) || !/sum\.measured \+= sec/.test(libraryCode) || !/sum\.estimated \+= sec/.test(libraryCode)) {
+  errors.push("le temps mesuré et le temps estimé ne sont plus distingués : la page ne peut plus dire d'où vient son chiffre");
+}
+if (/sum\.bands\.morning\+\+/.test(libraryCode)) {
+  errors.push("les moments de la journée se comptent de nouveau en écoutes alors que le reste de la page est en temps : les chiffres ne sont plus comparables");
+}
+/* La page de statistiques doit rester lisible : des durées en tête, chaque
+   nombre expliqué, et une note qui dit comment le temps est obtenu. */
+for (const needle of ["sd-stat-lead", "sd-stat-hint", "sd-stat-note", "statsNoteMeasure", "statsNoteEstimate"]) {
+  if (!libraryCode.includes(needle)) {
+    errors.push(`la page de statistiques a perdu « ${needle} » : elle redeviendrait une liste de nombres sans unité`);
+  }
+}
+if (!/plays: function \(n\)/.test(libraryCode) || !/statTile: function/.test(libraryCode) || !/statBars: function/.test(libraryCode)) {
+  errors.push("les statistiques ne savent plus écrire « N écoutes », ni expliquer une tuile, ni comparer des barres");
+}
+if (!/dayLabel: function/.test(libraryCode)) {
+  errors.push("la date de départ des statistiques n'est plus lisible");
+}
+for (const needle of ["sd-stat-lead", "sd-stat-hint", "sd-stat-note"]) {
+  if (!css.includes(needle)) {
+    errors.push(`la feuille de l'accueil n'habille plus « ${needle} » : l'élément serait invisible`);
+  }
+}
+
+/* **Le lecteur ne disparaît pas.** Signalé le 25/09 : « le lecteur disparaît
+   quand on scroll vers le bas ». La barre de lecture de Spotify quitte l'arbre
+   pendant un défilement ; la présence du mini-lecteur ne doit donc plus dépendre
+   d'une lecture instantanée. */
+if (!/seen: false/.test(libraryCode) || !/Spotify\.seen = true/.test(libraryCode)) {
+  errors.push("le lecteur n'est plus « vu une fois pour toutes » : il s'effacerait de nouveau pendant un défilement");
+}
+if (!/html\.classList\.toggle\("sd-mini-on", !!s\.hasTrack \|\| Spotify\.ready\(\) \|\| Spotify\.seen\)/.test(libraryCode)) {
+  errors.push("l'affichage du mini-lecteur ne tient plus compte du lecteur déjà vu");
+}
+
+/* **L'API est atteinte.** La capture du 25/09 : la page de bibliothèque
+   affichait « Votre bibliothèque n'a pas répondu pour l'instant » alors que le
+   jeton était là — le `fetch` du navigateur vers `api.spotify.com` est refusé
+   par le contrôle d'accès (CORS). La voie native (`AndBridge.nFetch`) est celle
+   de l'application d'origine pour ses appels de lecture : hors navigateur, donc
+   sans contrôle d'accès. */
+if (!/throughBridge: function/.test(libraryCode) || !/Bridge\.call\(\s*"nFetch"/.test(libraryCode)) {
+  errors.push("les appels à l'API ne passent plus par le pont natif : la bibliothèque resterait vide sur le téléphone");
+}
+if (!/return Net\.get\(path\);/.test(libraryCode)) {
+  errors.push("la bibliothèque n'utilise plus la voie d'accès aux API (pont natif, puis navigateur)");
+}
+if (!/Net\.get\("\/me\/player\/recently-played\?limit=50"\)/.test(libraryCode)) {
+  errors.push("l'historique d'écoute ne passe plus par la voie d'accès aux API");
+}
+if (!/hasBridge: function/.test(libraryCode) || !/throughFetch: function/.test(libraryCode)) {
+  errors.push("la voie de repli (navigateur) a disparu : plus rien ne fonctionnerait sans pont");
+}
+if (!/libraryWhy: "Raison : %s\."/.test(runtime) || !/Settings\.labels\.libraryError \+ " " \+ Settings\.labels\.libraryWhy/.test(libraryCode)) {
+  errors.push("une panne de la bibliothèque ne dit plus sa raison : il faudrait deviner au lieu de lire une capture");
 }
 const baseCss = read("src/inject/10-base.css");
 if (!/--sd-mini-h-current: 0px/.test(baseCss)) {
@@ -1019,7 +1094,13 @@ if (!/excerpt: function \(\)/.test(stripComments(runtime)) || !/describe: functi
 if (!/@JavascriptInterface\s+fun session\(\): Boolean/.test(bridgeKt) || !/fun sessionPresent\(\): Boolean/.test(activity)) {
   errors.push("le diagnostic ne peut plus dire si un compte est réellement connecté (session du lecteur)");
 }
-if (!/Onglet Bibliothèque — /.test(probeTool) || !/const TABMEASURE = /.test(probeTool) || !/onglet-actif=/.test(probeTool)) {
+if (
+  !/Onglet Bibliothèque — /.test(probeTool) ||
+  !/const TABMEASURE = /.test(probeTool) ||
+  !/onglet-actif=/.test(probeTool) ||
+  !/const SCROLLPROBE = /.test(probeTool) ||
+  !/Lecteur au défilement — /.test(probeTool)
+) {
   errors.push("la sonde ne mesure plus l'appui sur l'onglet Bibliothèque : le « rien ne s'affiche » du 25/09 ne serait plus vu en CI");
 }
 if (!/out\.verdict/.test(probeTool) || !/homePath/.test(probeTool)) {

@@ -2624,3 +2624,107 @@ sous-page.
   la barre de titre est réservée aux sous-pages, la bibliothèque ne peut plus se
   taire faute de données, `isLibraryPath`, le titre et le bouton de la page, et
   son départ sous la barre de navigation.
+
+## §42 — La bibliothèque lit pour de vrai, le lecteur reste, les statistiques se lisent (v2.11.7)
+
+Trois retours du 25/09 (08:45), capture à l'appui :
+
+1. la page de bibliothèque s'affiche enfin (correctif §41 tenu), mais elle annonce
+   **« Votre bibliothèque n'a pas répondu pour l'instant »** — donc rien du compte ;
+2. « **le lecteur disparaît quand on scroll vers le bas** » ;
+3. « **Les statistiques sont pas bonne il me semble. Rends les statistiques plus
+   compréhensible etc** ».
+
+### 1. L'API ne répondait pas parce que le navigateur la refusait
+
+La capture montrait l'état `error` de la page : le jeton était bien capté (sinon le
+message aurait été « Connectez-vous… »), mais la requête n'aboutissait pas. La
+console de la vraie page le dit mot pour mot :
+
+> `Access to fetch at 'https://api.spotify.com/v1/me/artists?limit=50' from origin
+>  'https://open.spotify.com' has been blocked by CORS policy: Response to preflight
+>  request doesn't pass access control check`
+
+Autrement dit : `fetch` depuis `open.spotify.com` vers `api.spotify.com` est refusé
+par le contrôle d'accès du navigateur (le contrôle préalable ne reçoit pas
+d'en-tête `Access-Control-Allow-Origin`). Aucune bibliothèque possible par cette
+voie, quel que soit le jeton.
+
+L'application sait déjà faire ces requêtes **elle-même** : le pont Android expose
+`nFetch` (la voie dont se sert l'interface d'origine pour ses appels de lecture —
+mêmes en-têtes, mêmes cookies, hors navigateur). Le module `Net` l'utilise
+désormais **en premier** :
+
+* `Net.get(path)` → `AndBridge.nFetch` (natif, sans CORS) ;
+* à défaut de pont (banc, navigateur), repli sur `fetch` ;
+* et, dans tous les cas, une **raison** (`Net.reason`) : jeton refusé (401),
+  accès refusé (403), trop de requêtes (429), Spotify a répondu N, requête bloquée
+  par le navigateur, jeton absent, pont indisponible.
+
+La bibliothèque, l'historique d'écoute (`/me/player/recently-played`) et le
+diagnostic (Réglages → Diagnostic, champ `api`) passent par là. La page annonce
+maintenant la raison quand elle échoue : *« Votre bibliothèque n'a pas répondu
+pour l'instant. Raison : … »* — une capture suffit à savoir ce qui manque.
+
+### 2. Le lecteur ne s'efface plus sous le doigt
+
+`sd-mini-on` était recalculé à chaque repeint à partir d'une **lecture
+instantanée** : `Spotify.ready()` cherche la barre de lecture de Spotify dans le
+DOM, or cette barre quitte l'arbre pendant un défilement (rendu différé) — la
+classe tombait, et le mini-lecteur disparaissait. **Vu une fois, il reste** :
+`Spotify.seen` retient qu'un lecteur a existé, et l'affichage ne dépend plus de
+l'instant. C'est la seule façon dont il pouvait disparaître (il est `fixed`, dans
+notre couche, et ne bouge pas au défilement).
+
+### 3. Les statistiques : mesurées, et lisibles
+
+**Elles étaient déduites, pas mesurées.** Dès qu'un titre apparaissait, on
+inscrivait la durée **annoncée** par la page ; un titre survolé dix secondes
+comptait quatre minutes, le même titre relancé n'était compté qu'une fois, et le
+total ne correspondait à aucune écoute réelle. Désormais :
+
+* `Stats.tick(état)` suit **l'avancement du lecteur** (dix fois par seconde, plus
+  à chaque changement d'état) : chaque seconde dont la position progresse est une
+  seconde écoutée, attribuée au titre en cours ;
+* le pas est borné par le temps réellement écoulé depuis le dernier relevé — un
+  saut de position ne fabrique jamais d'écoute, et un retour en arrière (ou le
+  même titre relancé) **ferme** l'écoute en cours et en ouvre une nouvelle ;
+* `Stats.flush()` enregistre l'écoute au changement de titre, à la pause, quand
+  plus rien ne joue, et quand l'application passe en arrière-plan ;
+* moins de **dix secondes** (`STATS_MIN_SEC`), ce n'est pas une écoute : un survol
+  ne compte pas ;
+* les écoutes ainsi mesurées portent `m: 1`. L'historique importé de Spotify
+  (durée des titres) et les écoutes enregistrées avant cette version **ne sont pas
+  mélangés** avec elles : la page dit « dont X venant de l'historique Spotify » ;
+* plus aucune durée inventée : une écoute sans durée compte comme une écoute et
+  zéro seconde (`STATS_DEFAULT_SEC` a disparu).
+
+**La page, elle, se lit maintenant de haut en bas** :
+
+* une phrase de tête : « Temps écouté : 12 h 05 · 42 écoutes · Aujourd'hui 1 h 12 » ;
+* **Temps écouté** — trois durées (aujourd'hui, sept derniers jours, depuis le
+  début), chacune avec le nombre d'écoutes dessous, puis la note qui dit comment
+  le temps est obtenu ;
+* **Ce que vous écoutez** — les nombres, chacun expliqué (titres passés, titres
+  différents, artistes, jours d'affilée) ;
+* **Ces sept derniers jours** et **Quand vous écoutez** en **temps écouté** (la
+  même unité que les durées du haut, donc comparables), chaque barre portant sa
+  valeur ; le moment préféré est celui où le plus de temps a été passé ;
+* les classements disent « N écoutes · temps » et non un nombre nu.
+
+### Vérifications
+
+* banc : la bibliothèque lue **par le pont natif** avec `fetch` en panne (le cas
+  du téléphone) — quatre lignes, dont la playlist du compte ; et une panne du pont
+  (401) affiche la **raison** avec le bouton « Réessayer » ;
+* banc : les durées sont **mesurées** — 20 s + 20 s bornées = 42 s pour une écoute,
+  un saut de position de 180 s en 1 s ne compte pas, un titre survolé ne compte
+  pas, le même titre relancé compte deux écoutes (15 s + 25 s = 40 s) ;
+* banc : le mini-lecteur **reste affiché** quand la barre de lecture de Spotify est
+  retirée de l'arbre, et quand elle revient ;
+* banc : la page de statistiques montre sept tuiles (trois durées + quatre
+  nombres), chacune avec son explication ;
+* audit : la mesure alimentée par le lecteur, l'absence de notation « durée
+  annoncée », le seuil des dix secondes, la distinction mesuré/estimé, les
+  moments de la journée en temps, les notes et explications de la page, le verrou
+  du lecteur (`Spotify.seen`), l'appel par le pont natif et sa raison.

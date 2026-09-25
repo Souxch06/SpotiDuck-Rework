@@ -564,6 +564,37 @@ const TABMEASURE = () => {
   };
 };
 
+/* **Le lecteur au défilement.** Signalé le 25/09 : « le lecteur disparaît quand
+   on scroll vers le bas ». On descend la page (le lecteur de Spotify quitte
+   alors l'arbre par moments), on regarde le mini-lecteur, puis on revient en
+   haut. */
+const SCROLLPROBE = async () => {
+  const size = (sel) => {
+    const el = document.querySelector(sel);
+    if (!el) return "absent";
+    const r = el.getBoundingClientRect();
+    const c = window.getComputedStyle(el);
+    const gone = el.hidden === true || c.display === "none" || r.width < 2 || r.height < 2;
+    return (gone ? "caché" : "visible") + " " + Math.round(r.width) + "x" + Math.round(r.height);
+  };
+  const before = size(".sd-mini");
+  const node = document.querySelector(".main-view-container__scroll-node, #main-view");
+  const start = node ? node.scrollTop : window.scrollY;
+  if (node) node.scrollTop = start + 900;
+  window.scrollTo(0, window.scrollY + 900);
+  await new Promise((r) => setTimeout(r, 700));
+  const after = size(".sd-mini");
+  if (node) node.scrollTop = start;
+  window.scrollTo(0, window.scrollY - 900);
+  await new Promise((r) => setTimeout(r, 400));
+  return {
+    before: before,
+    after: after,
+    classe: document.documentElement.classList.contains("sd-mini-on") ? "sd-mini-on" : "sans sd-mini-on",
+    bas: window.getComputedStyle(document.documentElement).getPropertyValue("--sd-mini-h-current").trim(),
+  };
+};
+
 const CLICK = async (selector) => {
   const el = document.querySelector(selector);
   if (!el) return { clicked: false, reason: `${selector} absent` };
@@ -902,6 +933,18 @@ async function main() {
         await sleep(600);
       }
 
+      /* **Le lecteur pendant le défilement** : il ne doit pas s'effacer. */
+      if (hasNav === true) {
+        const scroll = await safely(() => page.evaluate(SCROLLPROBE));
+        if (scroll) {
+          note(
+            `Lecteur au défilement — ${target.label}`,
+            `avant=${scroll.before} · après=${scroll.after} · ${scroll.classe} · place réservée=${scroll.bas}`
+          );
+          report.pages.push({ label: `${target.label} (défilement)`, scroll });
+        }
+      }
+
       /* Un résumé court par page : le détail complet va dans le rapport et
          dans la console, l'annotation ne portant que ce qui décide. */
       if (target.mode === "notre") {
@@ -1016,6 +1059,17 @@ async function main() {
       if (after && after.home) pageLines.push(`Accueil maison - ${target.label} : ${after.home}`);
       if (after && after.library) pageLines.push(`Bibliothèque - ${target.label} : ${after.library}`);
       if (after && after.bottom) pageLines.push(`Bas de page - ${target.label} : ${after.bottom}`);
+      if (after && after.library && target.label === "page-fr") {
+        /* La raison d'une bibliothèque muette doit tenir dans la ligne : c'est
+           ce qu'une capture de l'utilisateur ne peut pas dire autrement. */
+        const note = await safely(() =>
+          page.evaluate(() => {
+            const el = document.querySelector(".sd-lib-note");
+            return el ? (el.textContent || "").trim().slice(0, 90) : "";
+          })
+        );
+        pageLines.push(`Bibliothèque, ce qu'elle dit - ${target.label} : ${note || "(rien)"}`);
+      }
       lines.push(summary, ...pageLines);
       console.log(`[Sonde coque] ${summary}`);
       note(`Mesure — ${target.label}`, summary);

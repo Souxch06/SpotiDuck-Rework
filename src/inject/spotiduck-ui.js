@@ -185,6 +185,7 @@
       libraryEmpty: "Aucune playlist, aucun album ni artiste enregistré pour ce compte.",
       libraryNoToken: "Connectez-vous à Spotify pour retrouver votre bibliothèque.",
       libraryError: "Votre bibliothèque n'a pas répondu pour l'instant.",
+      libraryWhy: "Raison : %s.",
       libraryRetry: "Réessayer",
       libraryHint: "Vous pouvez aussi retrouver celle de Spotify : Réglages → Bibliothèque SpotiDuck.",
       /* Statistiques d'écoute */
@@ -203,6 +204,26 @@
       statsStreak: "Jours d'affilée",
       statsFavBand: "Moment préféré",
       statsFavDay: "Jour préféré",
+      /* La page refaite : durées d'abord, nombres expliqués. */
+      statsTimeSection: "Temps écouté",
+      statsNumbersSection: "Ce que vous écoutez",
+      statsTotal: "Depuis le début",
+      statsPlayed: "Titres écoutés",
+      statsHintListen: "%s écoutées",
+      statsHintOneListen: "1 écoute",
+      statsHintTrack: "titres passés, reprises comprises",
+      statsHintDifferent: "au moins un titre chacun",
+      statsHintArtist: "au moins un titre écouté",
+      statsHintStreak: "jours de suite avec une écoute",
+      statsSince: "Depuis le %s",
+      statsLead: "Temps écouté : %s · %s",
+      statsNoteMeasure:
+        "Le temps est mesuré pendant l'écoute dans SpotiDuck, seconde par seconde ; un titre survolé moins de dix secondes ne compte pas.",
+      statsNoteEstimate:
+        "Dont %s venant de l'historique Spotify : la durée annoncée des titres, pas le temps réellement écouté.",
+      statsMinute: "%s min",
+      statsBandShare: "%s · %s %",
+      statsAt: "à %s",
       statsEmpty: "Écoutez un titre : vos statistiques commenceront ici",
       statsClear: "Effacer mes statistiques",
       statsCleared: "Statistiques effacées",
@@ -409,6 +430,11 @@
      * ------------------------------------------------------------------ */
     unit: 0,
     sample: null,
+    /* **Le lecteur a déjà été vu.** Une seule lecture réussie suffit : la barre
+       de lecture de Spotify quitte parfois l'arbre (défilement, rendu différé)
+       et le mini-lecteur disparaissait alors sous le doigt — signalé le 25/09 :
+       « le lecteur disparaît quand on scroll vers le bas ». */
+    seen: false,
     /* Unité mesurée, ou repli : 1000 au-delà de 10 000 de course (un titre de
        trois minutes fait 180 en secondes, 180 000 en millisecondes). */
     unitFactor: function () {
@@ -899,6 +925,10 @@
         self.raf = requestAnimationFrame(tick);
         if (now - self.last < 100) return; // 10 fps is plenty for a progress bar
         self.last = now;
+        /* Les statistiques se nourrissent de l'avancement du lecteur : chaque
+           seconde dont la position progresse est une seconde écoutée, et le
+           relevé a lieu même en pause (pour fermer l'écoute en cours). */
+        Stats.tick(State, Date.now());
         if (!State.playing || State.seeking) return;
         Spotify.calibrate();
         UI.paintProgress();
@@ -1432,16 +1462,13 @@
       var e = this.el;
 
 
-      /* **Vos statistiques s'alimentent ici** : un titre détecté pendant la
-         lecture est une écoute. L'horodatage est celui du moment, la durée
-         celle que la page annonce (sinon une durée moyenne). */
-      if (s.hasTrack && s.title && s.title !== UI.lastStatTitle) {
-        UI.lastStatTitle = s.title;
-        /* `s.duration` est en **millisecondes** : on convertit ici. Le module
-           des statistiques contrôle de toute façon la plausibilité (voir
-           `Stats.plausible`) — une durée ne se devine pas, elle se vérifie. */
-        Stats.record(s.title, s.artist, Math.round((s.duration || 0) / 1000));
-      }
+      /* **Vos statistiques s'alimentent ici** — mais sur ce qui est
+         réellement écouté : `Stats.tick` suit l'avancement du lecteur et
+         attribue au titre en cours le temps passé. Noter la durée annoncée à
+         l'apparition du titre (ce qui se faisait avant) comptait quatre minutes
+         pour un titre survolé dix secondes : « les statistiques sont pas
+         bonne ». Le relevé a aussi lieu dans `Ticker`, pour la seconde près. */
+      Stats.tick(s);
 
       /* titles — sans titre, le mini-lecteur dit où il en est plutôt que de
          rester vide (il reste affiché, c'est le lecteur de l'application). */
@@ -1577,12 +1604,18 @@
 
       html.classList.toggle("sd-subpage", isSubPage && !isLibrary);
       html.classList.toggle("sd-has-track", !!s.hasTrack);
+      /* **Le lecteur ne disparaît plus.** `sd-mini-on` dépendait d'une lecture
+         instantanée de l'état : la barre de lecture de Spotify quitte l'arbre
+         pendant un défilement (rendu différé) et, à ce moment-là, la classe
+         tombait — le lecteur s'effaçait sous le doigt. Vu une fois, il reste
+         donc affiché (voir `Spotify.seen`). */
       /* Le mini-lecteur suit le **lecteur**, pas la piste : dès qu'un lecteur
          existe, il est là — avec l'état vide « Aucun titre en lecture ». Avant,
          il n'existait qu'avec une piste : sur un compte qui n'a rien lancé,
          l'écran restait vide en bas (le fameux « des trucs n'apparaissent
          pas »). */
-      html.classList.toggle("sd-mini-on", !!s.hasTrack || Spotify.ready());
+      if (s.hasTrack || Spotify.ready()) Spotify.seen = true;
+      html.classList.toggle("sd-mini-on", !!s.hasTrack || Spotify.ready() || Spotify.seen);
       html.classList.toggle("sd-mini-empty", !s.hasTrack);
       /* The stylesheet keys the whole layout off these three classes
          (`html.sd-tab-search` restyles the desktop top bar into a mobile
@@ -2435,7 +2468,11 @@
         " · biblio " + Library.describe() +
         " · " + Content.describe() +
         " · page " + location.pathname +
-        " · lecteur " + (Spotify.ready() ? "prêt" : "absent")
+        " · lecteur " + (Spotify.ready() ? "prêt" : "absent") +
+        /* Par où passent nos appels d'API, et ce qui a manqué : sans ça, une
+           bibliothèque vide ne dit pas si c'est le jeton, le réseau ou le
+           contrôle d'accès du navigateur. */
+        " · api " + Net.describe()
       );
     },
 
@@ -3724,28 +3761,41 @@
 
     /* ---------------- statistiques ---------------- */
 
-    /** Le bloc « Vos statistiques » : tuiles, classements, sept derniers jours,
-        moments de la journée, découvertes. Tout vient de `Stats.summary()`. */
+    /**
+     * Le bloc « Vos statistiques », refait le 25/09 : « les statistiques sont
+     * pas bonne il me semble. Rends les statistiques plus compréhensible ».
+     *
+     * Trois principes :
+     *  1. **le temps d'abord** — trois durées (aujourd'hui, sept jours, depuis
+     *     le début), dans la même unité, avec le nombre d'écoutes en dessous ;
+     *  2. **les nombres expliqués** — chaque compteur dit ce qu'il compte
+     *     (« jours de suite avec une écoute »), dans une section à part ;
+     *  3. **une seule unité par graphique** — les sept derniers jours et les
+     *     moments de la journée sont en temps écouté, comme les durées du
+     *     haut, et chaque barre porte sa valeur.
+     */
     renderStats: function () {
       var box = $(".sd-home-stats", this.el);
       if (!box) return false;
+      var L = Settings.labels;
       var sum = Stats.summary();
       box.textContent = "";
       box.hidden = false;
 
+      /* En-tête : le titre, et le bouton d'effacement à droite. */
       var head = document.createElement("div");
       head.className = "sd-home-head";
       var h = document.createElement("h2");
       h.className = "sd-home-section-title";
-      h.textContent = Settings.labels.statsTitle;
+      h.textContent = L.statsTitle;
       head.appendChild(h);
       var reset = document.createElement("button");
       reset.type = "button";
       reset.className = "sd-stat-reset";
-      reset.textContent = Settings.labels.statsClear;
+      reset.textContent = L.statsClear;
       reset.addEventListener("click", function () {
         Stats.clear();
-        Toast.show(Settings.labels.statsCleared, 1600);
+        Toast.show(L.statsCleared, 1600);
       });
       head.appendChild(reset);
       box.appendChild(head);
@@ -3753,43 +3803,76 @@
       if (!sum.total) {
         var empty = document.createElement("p");
         empty.className = "sd-stat-empty";
-        empty.textContent = Settings.labels.statsEmpty;
+        empty.textContent = L.statsEmpty;
         box.appendChild(empty);
         return true;
       }
 
-      /* Tuiles : temps d'écoute total, cette semaine, aujourd'hui, volumes. */
+      var plays = this.plays(sum.plays);
+
+      /* La ligne de tête : le temps écouté, en clair, et la période couverte. */
+      var lead = document.createElement("p");
+      lead.className = "sd-stat-lead";
+      lead.textContent =
+        L.statsLead.replace("%s", Stats.human(sum.seconds)).replace("%s", plays) +
+        (sum.playsToday ? " · " + L.statsToday + " " + Stats.human(sum.secondsToday) : "");
+      box.appendChild(lead);
+
+      /* 1. Le temps écouté — la question que l'on se pose d'abord. */
+      var timeCard = document.createElement("div");
+      timeCard.className = "sd-stat-card";
+      timeCard.appendChild(this.statTitle(L.statsTimeSection));
       var tiles = document.createElement("div");
       tiles.className = "sd-stat-tiles";
       [
-        [Settings.labels.statsListened, Stats.human(sum.seconds)],
-        [Settings.labels.statsWeek, Stats.human(sum.secondsWeek)],
-        [Settings.labels.statsToday, String(sum.playsToday)],
-        [Settings.labels.statsTracks, String(sum.trackCount)],
-        [Settings.labels.statsArtists, String(sum.artistCount)],
-        [Settings.labels.statsStreak, String(sum.streak)],
-      ].forEach(function (pair) {
-        var tile = document.createElement("div");
-        tile.className = "sd-stat-tile";
-        var value = document.createElement("span");
-        value.className = "sd-stat-value";
-        value.textContent = pair[1];
-        var label = document.createElement("span");
-        label.className = "sd-stat-label";
-        label.textContent = pair[0];
-        tile.appendChild(value);
-        tile.appendChild(label);
-        tiles.appendChild(tile);
+        [Stats.human(sum.secondsToday), L.statsToday, this.plays(sum.playsToday)],
+        [Stats.human(sum.secondsWeek), L.statsDays.replace(/^(Ces|ces) /, ""), this.plays(sum.playsWeek)],
+        [
+          Stats.human(sum.seconds),
+          L.statsTotal,
+          sum.first ? L.statsSince.replace("%s", Stats.dayLabel(sum.first)) : plays,
+        ],
+      ].forEach(function (triple) {
+        tiles.appendChild(Home.statTile(triple[0], triple[1], triple[2]));
       });
-      box.appendChild(tiles);
+      timeCard.appendChild(tiles);
+      var measureNote = document.createElement("p");
+      measureNote.className = "sd-stat-note";
+      measureNote.textContent = L.statsNoteMeasure;
+      timeCard.appendChild(measureNote);
+      if (sum.estimatedPlays) {
+        var estNote = document.createElement("p");
+        estNote.className = "sd-stat-note sd-stat-note-est";
+        estNote.textContent = L.statsNoteEstimate.replace("%s", Stats.human(sum.estimated));
+        timeCard.appendChild(estNote);
+      }
+      box.appendChild(timeCard);
 
-      /* Sept derniers jours : barres proportionnelles, jour du jour marqué. */
+      /* 2. Les nombres : chacun dit ce qu'il compte. */
+      var numbersCard = document.createElement("div");
+      numbersCard.className = "sd-stat-card";
+      numbersCard.appendChild(this.statTitle(L.statsNumbersSection));
+      var numbers = document.createElement("div");
+      numbers.className = "sd-stat-tiles";
+      [
+        [String(sum.plays), L.statsPlayed, L.statsHintTrack],
+        [String(sum.trackCount), L.statsTracks, L.statsHintDifferent],
+        [String(sum.artistCount), L.statsArtists, L.statsHintArtist],
+        [String(sum.streak), L.statsStreak, L.statsHintStreak],
+      ].forEach(function (triple) {
+        numbers.appendChild(Home.statTile(triple[0], triple[1], triple[2]));
+      });
+      numbersCard.appendChild(numbers);
+      box.appendChild(numbersCard);
+
+      /* 3. Les sept derniers jours, en temps écouté : hauteur = minutes. */
       var week = document.createElement("div");
       week.className = "sd-stat-card";
-      week.appendChild(this.statTitle(Settings.labels.statsDays));
-      var max = 1;
+      week.appendChild(this.statTitle(L.statsDays));
+      var weekSum = sum.secondsWeek || 0;
+      var maxSec = 1;
       sum.byDay.forEach(function (d) {
-        if (d.n > max) max = d.n;
+        if (d.sec > maxSec) maxSec = d.sec;
       });
       var chart = document.createElement("div");
       chart.className = "sd-stat-chart";
@@ -3797,13 +3880,16 @@
       sum.byDay.forEach(function (d, index) {
         var col = document.createElement("div");
         col.className = "sd-stat-col" + (index === todayIndex ? " is-today" : "");
-        var bar = document.createElement("span");
-        bar.className = "sd-stat-bar";
-        bar.style.height = Math.round((d.n / max) * 100) + "%";
-        bar.setAttribute("title", d.n + " × " + Stats.weekdayLabel(d.day));
         var count = document.createElement("span");
         count.className = "sd-stat-count";
-        count.textContent = d.n ? String(d.n) : "";
+        count.textContent = d.sec ? Stats.human(d.sec) : "";
+        count.setAttribute(
+          "title",
+          Stats.weekdayLabel(d.day) + " · " + Stats.human(d.sec) + " · " + Home.plays(d.n)
+        );
+        var bar = document.createElement("span");
+        bar.className = "sd-stat-bar";
+        bar.style.height = Math.max(d.sec ? 6 : 2, Math.round((d.sec / maxSec) * 100)) + "%";
         var label = document.createElement("span");
         label.className = "sd-stat-day";
         label.textContent = Stats.weekdayLabel(d.day);
@@ -3813,74 +3899,16 @@
         chart.appendChild(col);
       });
       week.appendChild(chart);
+      var weekNote = document.createElement("p");
+      weekNote.className = "sd-stat-note";
+      weekNote.textContent = L.statsLead.replace("%s", Stats.human(weekSum)).replace("%s", this.plays(sum.playsWeek));
+      week.appendChild(weekNote);
       box.appendChild(week);
 
-      /* Vos artistes du moment : le classement, avec la part de chaque artiste. */
-      if (sum.topArtists.length) {
-        var artists = document.createElement("div");
-        artists.className = "sd-stat-card";
-        artists.appendChild(this.statTitle(Settings.labels.statsTopArtists));
-        var list = document.createElement("div");
-        list.className = "sd-stat-bars";
-        var top = sum.topArtists[0].n || 1;
-        sum.topArtists.forEach(function (artist) {
-          var row = document.createElement("div");
-          row.className = "sd-stat-bar-row";
-          var name = document.createElement("span");
-          name.className = "sd-stat-bar-label";
-          name.textContent = artist.name;
-          var track = document.createElement("span");
-          track.className = "sd-stat-bar-track";
-          var fill = document.createElement("i");
-          fill.style.width = Math.max(4, Math.round((artist.n / top) * 100)) + "%";
-          track.appendChild(fill);
-          var value = document.createElement("span");
-          value.className = "sd-stat-bar-value";
-          value.textContent = artist.n + " × · " + artist.share + " %";
-          row.appendChild(name);
-          row.appendChild(track);
-          row.appendChild(value);
-          list.appendChild(row);
-        });
-        artists.appendChild(list);
-        box.appendChild(artists);
-      }
-
-      /* Titres les plus écoutés, quand l'information existe. */
-      if (sum.topTracks.length) {
-        var tracks = document.createElement("div");
-        tracks.className = "sd-stat-card";
-        tracks.appendChild(this.statTitle(Settings.labels.statsTopTracks));
-        var tlist = document.createElement("div");
-        tlist.className = "sd-stat-bars";
-        var topTrack = sum.topTracks[0].n || 1;
-        sum.topTracks.forEach(function (item) {
-          var row = document.createElement("div");
-          row.className = "sd-stat-bar-row";
-          var name = document.createElement("span");
-          name.className = "sd-stat-bar-label";
-          name.textContent = item.title;
-          var track = document.createElement("span");
-          track.className = "sd-stat-bar-track";
-          var fill = document.createElement("i");
-          fill.style.width = Math.max(4, Math.round((item.n / topTrack) * 100)) + "%";
-          track.appendChild(fill);
-          var value = document.createElement("span");
-          value.className = "sd-stat-bar-value";
-          value.textContent = item.n + " ×";
-          row.appendChild(name);
-          row.appendChild(track);
-          row.appendChild(value);
-          tlist.appendChild(row);
-        });
-        tracks.appendChild(tlist);
-        box.appendChild(tracks);
-      }
-
-      /* Quand vous écoutez : les quatre moments, et les préférences. */
+      /* 4. Quand vous écoutez : temps écouté, part, et le moment préféré. */
       var bands = document.createElement("div");
       bands.className = "sd-stat-card";
-      bands.appendChild(this.statTitle(Settings.labels.statsBands));
+      bands.appendChild(this.statTitle(L.statsBands));
       var bandBox = document.createElement("div");
       bandBox.className = "sd-stat-bands";
       var bandMax = 1;
@@ -3900,7 +3928,12 @@
         track.appendChild(fill);
         var value = document.createElement("span");
         value.className = "sd-stat-bar-value";
-        value.textContent = String(sum.bands[key]);
+        value.textContent = sum.seconds
+          ? L.statsBandShare.replace("%s", Stats.human(sum.bands[key])).replace(
+              "%s",
+              String(Math.round((sum.bands[key] / sum.seconds) * 100))
+            )
+          : Home.plays(sum.bandPlays[key]);
         row.appendChild(name);
         row.appendChild(track);
         row.appendChild(value);
@@ -3910,26 +3943,61 @@
       var facts = document.createElement("div");
       facts.className = "sd-stat-facts";
       [
-        [Settings.labels.statsFavBand, sum.favBand],
-        [Settings.labels.statsFavDay, sum.favDay],
-        [Settings.labels.statsToday, Stats.human(sum.secondsToday)],
+        [L.statsFavBand, sum.favBand],
+        [L.statsFavDay, sum.favDay],
       ].forEach(function (pair) {
         if (!pair[1]) return;
         var fact = document.createElement("span");
         fact.className = "sd-stat-fact";
-        fact.innerHTML = '<b></b><span></span>';
+        fact.innerHTML = "<b></b><span></span>";
         $("b", fact).textContent = pair[1];
         $("span", fact).textContent = pair[0];
         facts.appendChild(fact);
       });
-      bands.appendChild(facts);
+      if (facts.childNodes.length) bands.appendChild(facts);
       box.appendChild(bands);
 
-      /* Découvertes de la semaine : les artistes entendus pour la première fois. */
+      /* 5. Les classements : « N écoutes · temps », jamais un nombre nu. */
+      if (sum.topTracks.length) {
+        var tracks = document.createElement("div");
+        tracks.className = "sd-stat-card";
+        tracks.appendChild(this.statTitle(L.statsTopTracks));
+        tracks.appendChild(
+          this.statBars(
+            sum.topTracks.map(function (item) {
+              return {
+                name: item.title,
+                ratio: item.n,
+                value: Home.plays(item.n) + " · " + Stats.human(item.sec),
+              };
+            })
+          )
+        );
+        box.appendChild(tracks);
+      }
+      if (sum.topArtists.length) {
+        var artists = document.createElement("div");
+        artists.className = "sd-stat-card";
+        artists.appendChild(this.statTitle(L.statsTopArtists));
+        artists.appendChild(
+          this.statBars(
+            sum.topArtists.map(function (artist) {
+              return {
+                name: artist.name,
+                ratio: artist.n,
+                value: Home.plays(artist.n) + " · " + Stats.human(artist.sec),
+              };
+            })
+          )
+        );
+        box.appendChild(artists);
+      }
+
+      /* 6. Découvertes de la semaine. */
       if (sum.discovery.length) {
         var disc = document.createElement("div");
         disc.className = "sd-stat-card";
-        disc.appendChild(this.statTitle(Settings.labels.statsDiscovery));
+        disc.appendChild(this.statTitle(L.statsDiscovery));
         var chips = document.createElement("div");
         chips.className = "sd-stat-chips";
         sum.discovery.forEach(function (artist) {
@@ -3942,6 +4010,64 @@
         box.appendChild(disc);
       }
       return true;
+    },
+
+    /** « 1 écoute », « 12 écoutes » — jamais « 1 écoutes ». */
+    plays: function (n) {
+      var L = Settings.labels;
+      var count = Math.max(0, Math.round(Number(n) || 0));
+      return count === 1 ? L.statsHintOneListen : L.statsHintListen.replace("%s", String(count));
+    },
+
+    /** Une tuile : la valeur, ce qu'elle est, et ce qu'elle compte. */
+    statTile: function (value, label, hint) {
+      var tile = document.createElement("div");
+      tile.className = "sd-stat-tile";
+      var v = document.createElement("span");
+      v.className = "sd-stat-value";
+      v.textContent = value;
+      var l = document.createElement("span");
+      l.className = "sd-stat-label";
+      l.textContent = label;
+      tile.appendChild(v);
+      tile.appendChild(l);
+      if (hint) {
+        var hintEl = document.createElement("span");
+        hintEl.className = "sd-stat-hint";
+        hintEl.textContent = hint;
+        tile.appendChild(hintEl);
+      }
+      return tile;
+    },
+
+    /** Des barres comparables : la plus longue vaut 100 %. */
+    statBars: function (rows) {
+      var list = document.createElement("div");
+      list.className = "sd-stat-bars";
+      var top = 1;
+      rows.forEach(function (row) {
+        if (row.ratio > top) top = row.ratio;
+      });
+      rows.forEach(function (row) {
+        var el = document.createElement("div");
+        el.className = "sd-stat-bar-row";
+        var name = document.createElement("span");
+        name.className = "sd-stat-bar-label";
+        name.textContent = row.name;
+        var track = document.createElement("span");
+        track.className = "sd-stat-bar-track";
+        var fill = document.createElement("i");
+        fill.style.width = Math.max(4, Math.round((row.ratio / top) * 100)) + "%";
+        track.appendChild(fill);
+        var value = document.createElement("span");
+        value.className = "sd-stat-bar-value";
+        value.textContent = row.value;
+        el.appendChild(name);
+        el.appendChild(track);
+        el.appendChild(value);
+        list.appendChild(el);
+      });
+      return list;
     },
 
     statTitle: function (text) {
@@ -4085,7 +4211,159 @@
    * musique en installant cette version.
    * ------------------------------------------------------------------ */
 
-  var LIBRARY_API = "https://api.spotify.com/v1";
+  /* ------------------------------------------------------------------ *
+   * 11e-quinquies-bis. Net — les appels à l'API du lecteur
+   *
+   * Constaté le 25/09 sur le téléphone : la page de bibliothèque s'affichait
+   * mais annonçait « Votre bibliothèque n'a pas répondu pour l'instant »,
+   * avec un jeton pourtant bien capté. La cause est dans la console de la
+   * vraie page : le `fetch` du navigateur vers `api.spotify.com` **depuis**
+   * `open.spotify.com` est refusé par le contrôle d'accès (l'API répond au
+   * contrôle préalable sans en-tête `Access-Control-Allow-Origin`), donc la
+   * requête n'aboutit jamais.
+   *
+   * L'application sait déjà faire ces requêtes **elle-même** : `AndBridge.nFetch`
+   * est la voie que l'interface d'origine utilise pour ses appels de lecture
+   * (mêmes en-têtes, mêmes cookies, hors navigateur). Un appel natif ne connaît
+   * pas le CORS : la bibliothèque et l'historique d'écoute passent par là
+   * d'abord, et retombent sur `fetch` quand il n'y a pas de pont (banc de test,
+   * navigateur de bureau).
+   *
+   * Rien n'échoue en silence : la raison exacte (code HTTP, jeton refusé,
+   * requête bloquée, pont indisponible) est gardée dans `Net.reason` et
+   * affichée sur la page — une capture suffit alors à savoir ce qui manque.
+   * ------------------------------------------------------------------ */
+  var API_ROOT = "https://api.spotify.com/v1";
+  var Net = {
+    /* « pont » (natif) ou « navigateur » — d'où a répondu la dernière requête. */
+    via: "",
+    status: 0,
+    reason: "",
+    at: 0,
+
+    hasBridge: function () {
+      return Bridge.has("nFetch");
+    },
+
+    /**
+     * Une réponse JSON de l'API, ou `null`. Jamais d'exception : l'appelant
+     * décide de ce qu'il montre, et `Net.reason` dit pourquoi c'est vide.
+     */
+    get: function (path) {
+      var self = this;
+      var url = /^https?:\/\//.test(path) ? path : API_ROOT + path;
+      var token = Api.authToken;
+      this.at = Date.now();
+      this.via = "";
+      this.status = 0;
+      this.reason = "";
+      if (!token) {
+        this.reason = "jeton absent";
+        return Promise.resolve(null);
+      }
+      if (this.hasBridge()) {
+        var native = this.throughBridge(url, token);
+        if (native && native.data) {
+          self.via = "pont";
+          self.status = native.status;
+          return Promise.resolve(native.data);
+        }
+        self.reason = native ? native.why : "pont indisponible";
+        self.status = native ? native.status : 0;
+      }
+      return this.throughFetch(url, token).then(function (r) {
+        if (r && r.data) {
+          self.via = "navigateur";
+          self.status = r.status;
+          self.reason = "";
+          return r.data;
+        }
+        if (r && r.why) self.reason = self.reason ? self.reason + " · " + r.why : r.why;
+        if (r && r.status) self.status = r.status;
+        return null;
+      });
+    },
+
+    /** La voie native : hors navigateur, donc sans contrôle d'accès. */
+    throughBridge: function (url, token) {
+      var raw = Bridge.call(
+        "nFetch",
+        url,
+        JSON.stringify({ method: "GET", headers: { Authorization: token } })
+      );
+      if (typeof raw !== "string" || !raw) return null;
+      var answer = null;
+      try {
+        answer = JSON.parse(raw);
+      } catch (e) {
+        return { status: 0, data: null, why: "réponse du pont illisible" };
+      }
+      if (!answer || typeof answer !== "object") {
+        return { status: 0, data: null, why: "réponse du pont vide" };
+      }
+      var status = Number(answer.status) || 0;
+      if (status !== 200) {
+        return { status: status, data: null, why: Net.statusWhy(status) };
+      }
+      var data = null;
+      try {
+        data = JSON.parse(answer.body || "null");
+      } catch (e) {
+        data = null;
+      }
+      if (!data || typeof data !== "object") {
+        return { status: status, data: null, why: "réponse illisible (JSON)" };
+      }
+      return { status: status, data: data, why: "" };
+    },
+
+    /** La voie du navigateur : celle du banc, et le repli sans pont. */
+    throughFetch: function (url, token) {
+      if (!window.fetch) return Promise.resolve({ status: 0, data: null, why: "navigateur sans fetch" });
+      return window.fetch(url, { headers: { Authorization: token } }).then(
+        function (r) {
+          if (!r) return { status: 0, data: null, why: "aucune réponse" };
+          if (!r.ok) return { status: r.status, data: null, why: Net.statusWhy(r.status) };
+          return r.json().then(
+            function (data) {
+              return { status: r.status, data: data, why: "" };
+            },
+            function () {
+              return { status: r.status, data: null, why: "réponse illisible (JSON)" };
+            }
+          );
+        },
+        function (e) {
+          var msg = String((e && e.message) || e || "");
+          var blocked = /failed to fetch|networkerror|load failed|network request failed/i.test(msg);
+          return {
+            status: 0,
+            data: null,
+            why: blocked ? "requête bloquée par le navigateur (contrôle d'accès)" : "échec réseau",
+          };
+        }
+      );
+    },
+
+    statusWhy: function (status) {
+      if (status === 419) return "jeton expiré (419)";
+      if (status === 401) return "jeton refusé (401)";
+      if (status === 403) return "accès refusé (403)";
+      if (status === 429) return "trop de requêtes (429)";
+      if (status >= 500) return "Spotify a répondu " + status;
+      if (status > 0) return "Spotify a répondu " + status;
+      return "pas de réponse (réseau)";
+    },
+
+    /** En une ligne : par où on est passé, et ce qui a manqué. */
+    describe: function () {
+      if (this.reason) return "aucune réponse : " + this.reason;
+      if (!this.via) return "aucun appel encore";
+      return "réponse par " + this.via + (this.status ? " (" + this.status + ")" : "");
+    },
+  };
+
+  var LIBRARY_API = API_ROOT;
   /** Combien de temps une lecture de la bibliothèque reste bonne. */
   var LIBRARY_TTL = 10 * 60 * 1000;
   var LIBRARY_PAGE = 50;
@@ -4103,19 +4381,10 @@
     timer: 0,
     tries: 0,
 
-    /** Une requête de l'API du lecteur, avec le jeton déjà capté. */
+    /** Une requête de l'API du lecteur — par le pont natif quand il existe
+        (hors navigateur, donc sans contrôle d'accès), `fetch` sinon. */
     get: function (path) {
-      if (!window.fetch || !Api.authToken) return Promise.resolve(null);
-      return window
-        .fetch(LIBRARY_API + path, { headers: { Authorization: Api.authToken } })
-        .then(
-          function (r) {
-            return r && r.ok ? r.json() : null;
-          },
-          function () {
-            return null;
-          }
-        );
+      return Net.get(path);
     },
 
     /** Une pochette : la plus grande disponible, jamais l'icône 64 px. */
@@ -4300,7 +4569,13 @@
     note: function () {
       if (this.state === "loading") return Settings.labels.libraryLoading;
       if (this.state === "no-token") return Settings.labels.libraryNoToken;
-      if (this.state === "error") return Settings.labels.libraryError;
+      /* Jamais un « ça n'a pas marché » muet : la raison exacte est dans le
+         message, pour qu'une seule capture suffise à savoir ce qui manque. */
+      if (this.state === "error") {
+        return Net.reason
+          ? Settings.labels.libraryError + " " + Settings.labels.libraryWhy.replace("%s", Net.reason)
+          : Settings.labels.libraryError;
+      }
       if (this.state === "empty") return Settings.labels.libraryEmpty;
       if (this.items.length && !this.filtered().length) return Settings.labels.homeEmptyCategory;
       return "";
@@ -4476,7 +4751,7 @@
       if (!Settings.libraryBoard) return "désactivée (réglage)";
       if (this.state === "loading") return "chargement";
       if (this.state === "no-token") return "pas de jeton (session fermée ?)";
-      if (this.state === "error") return "indisponible (API muette)";
+      if (this.state === "error") return "indisponible (" + Net.describe() + ")";
       if (this.state === "empty") return "vide (0 élément)";
       if (this.state === "idle") return "pas encore lue";
       return this.items.length + " éléments";
@@ -4509,12 +4784,15 @@
 
   var STATS_KEY = "sd.stats.v1";
   var STATS_MAX = 1500;
-  var STATS_DEFAULT_SEC = 210; /* durée moyenne, quand la page ne l'annonce pas */
+  /* En dessous, ce n'est pas une écoute mais un survol : dix secondes. */
+  var STATS_MIN_SEC = 10;
 
   var Stats = {
     entries: [],
     loaded: false,
     lastSync: 0,
+    /* L'écoute en cours de mesure : `{k,t,a,ts,sec,pos,at}`. */
+    session: null,
 
     enabled: function () {
       return !!Settings.stats;
@@ -4569,6 +4847,110 @@
       return this.load().length > 0;
     },
 
+    /* ------------------------------------------------------------------ *
+     * Mesurer l'écoute, au lieu de la déduire
+     *
+     * Avant : dès qu'un titre **apparaissait**, on notait la durée du titre
+     * annoncée par la page. Trois défauts visibles sur le téléphone — un titre
+     * survolé dix secondes comptait quatre minutes, le même titre écouté deux
+     * fois d'affilée n'était compté qu'une fois, et le total ne correspondait à
+     * aucune écoute réelle (« les statistiques sont pas bonne »).
+     *
+     * Maintenant : on suit **l'avancement du lecteur**. Chaque seconde dont la
+     * position progresse est une seconde écoutée, attribuée au titre en cours ;
+     * on s'arrête quand la position recule (retour/seek), quand on change de
+     * titre, ou quand plus rien ne joue. Une écoute de moins de dix secondes
+     * n'est pas comptée. Le temps annoncé est alors le temps réellement passé.
+     * ------------------------------------------------------------------ */
+
+    /** La clé d'un titre : le même couple titre + artiste. */
+    keyOf: function (title, artist) {
+      return ((title || "") + "\u0000" + (artist || "")).toLowerCase();
+    },
+
+    /** Nourrit la mesure : appelé à chaque rafraîchissement de la position. */
+    tick: function (state, nowMs) {
+      if (!this.enabled()) return false;
+      var s = state || State;
+      var now = nowMs || Date.now();
+      var title = (s && s.title ? String(s.title) : "").trim();
+      if (!s || !s.hasTrack || title.length < 2) {
+        this.flush(now);
+        return false;
+      }
+      /* Le stockage n'est lu qu'au premier titre : `tick` tourne dix fois par
+         seconde, `load()` n'a rien à y faire. */
+      if (!this.loaded) this.load();
+      var key = this.keyOf(title, s.artist);
+      var pos = Math.max(0, (Number(s.position) || 0) / 1000);
+      var wall = this.session ? Math.max(0, (now - this.session.at) / 1000) : 0;
+      if (!this.session || this.session.k !== key) {
+        /* Nouveau titre : le précédent part avec le temps qu'il a pris. */
+        this.flush(now);
+        this.session = {
+          k: key,
+          t: title.slice(0, 80),
+          a: (s.artist || "").slice(0, 80),
+          ts: now,
+          sec: 0,
+          pos: pos,
+          at: now,
+        };
+        return true;
+      }
+      var delta = pos - this.session.pos;
+      if (delta < 0) {
+        /* Retour en arrière, ou le même titre relancé depuis le début : la
+           nouvelle écoute est une écoute, pas une continuation. */
+        this.flush(now);
+        this.session = {
+          k: key,
+          t: title.slice(0, 80),
+          a: (s.artist || "").slice(0, 80),
+          ts: now,
+          sec: 0,
+          pos: pos,
+          at: now,
+        };
+        return true;
+      }
+      /* Bornes : jamais plus que le temps écoulé depuis le dernier relevé
+         (+2 s de tolérance), donc un saut de position ne fabrique pas
+         d'écoute. Une page figée pendant une longue lecture d'arrière-plan
+         sous-compte : c'est la seule erreur qui reste, et elle va dans le bon
+         sens (on n'invente pas d'écoute). */
+      var add = Math.min(delta, wall + 2);
+      if (add > 0) this.session.sec += add;
+      this.session.pos = pos;
+      this.session.at = now;
+      return true;
+    },
+
+    /** Ferme l'écoute en cours : elle rejoint les statistiques. */
+    flush: function (nowMs) {
+      var s = this.session;
+      if (!s) return false;
+      this.session = null;
+      if (!(s.sec >= STATS_MIN_SEC)) return false;
+      this.load();
+      this.entries.push({
+        k: s.k,
+        t: s.t,
+        a: s.a,
+        ts: s.ts,
+        d: Math.round(s.sec),
+        /* `m` : durée **mesurée** pendant l'écoute (voir `summary`). */
+        m: 1,
+      });
+      this.entries.sort(function (a, b) {
+        return a.ts - b.ts;
+      });
+      if (this.entries.length > STATS_MAX) this.entries = this.entries.slice(-STATS_MAX);
+      this.save();
+      if (Home.built) Home.refresh("stats-mesure");
+      return true;
+    },
+
     /** Note une écoute. `at` (ms) permet d'importer un historique daté. */
     /**
      * Une durée d'écoute **plausible**, en secondes.
@@ -4593,25 +4975,30 @@
       return Math.round(v);
     },
 
-    record: function (title, artist, durationSec, at) {
+    record: function (title, artist, durationSec, at, measured) {
       if (!this.enabled()) return false;
       title = (title || "").trim();
       if (title.length < 2) return false;
       this.load();
-      var key = (title + "\\u0000" + (artist || "")).toLowerCase();
+      var key = this.keyOf(title, artist);
       var when = typeof at === "number" && at > 0 ? at : Date.now();
       /* Le même titre deux fois en trois minutes est une reprise, pas une
          nouvelle écoute (le web player annonce parfois le même morceau deux
          fois au chargement). */
       var last = this.entries.length ? this.entries[this.entries.length - 1] : null;
       if (last && last.k === key && Math.abs(when - last.ts) < 3 * 60 * 1000) return false;
-      this.entries.push({
+      var entry = {
         k: key,
         t: title.slice(0, 80),
         a: (artist || "").slice(0, 80),
         ts: when,
         d: this.plausible(durationSec),
-      });
+      };
+      /* `m` seulement quand la durée vient d'une écoute mesurée. Un historique
+         importé annonce la durée **du titre**, pas le temps passé : on ne fait
+         pas passer l'un pour l'autre dans les totaux. */
+      if (measured) entry.m = 1;
+      this.entries.push(entry);
       /* Chronologique : l'import d'un historique insère des écoutes passées. */
       this.entries.sort(function (a, b) {
         return a.ts - b.ts;
@@ -4642,29 +5029,15 @@
     /** Récupère l'historique par l'API, avec le jeton que la page utilise déjà.
         Silencieux en cas d'échec : les statistiques locales continuent seules. */
     syncFromApi: function (force) {
-      if (!this.enabled() || !window.fetch || !Api.authToken) return false;
+      if (!this.enabled() || !Api.authToken) return false;
       var now = Date.now();
       if (!force && now - this.lastSync < 30 * 60 * 1000) return false;
       this.lastSync = now;
-      try {
-        window
-          .fetch("https://api.spotify.com/v1/me/player/recently-played?limit=50", {
-            headers: { Authorization: Api.authToken },
-          })
-          .then(function (r) {
-            return r && r.ok ? r.json() : null;
-          })
-          .then(function (data) {
-            if (!data || !data.items) return;
-            if (Stats.importRecent(data.items) && Home.built) Home.refresh("stats-api");
-          })
-          .catch(function () {
-            /* pas de jeton utilisable : on garde les statistiques locales */
-          });
-        return true;
-      } catch (e) {
-        return false;
-      }
+      Net.get("/me/player/recently-played?limit=50").then(function (data) {
+        if (!data || !data.items) return;
+        if (Stats.importRecent(data.items) && Home.built) Home.refresh("stats-api");
+      });
+      return true;
     },
 
     clear: function () {
@@ -4685,23 +5058,43 @@
       var t0 = startToday.getTime();
       var sum = {
         total: this.entries.length,
+        plays: 0,
         seconds: 0,
+        /* Dont mesuré pendant l'écoute, et dont estimé (historique importé ou
+           écoutes d'avant la mesure) : les deux sont dits séparément. */
+        measured: 0,
+        measuredPlays: 0,
+        estimated: 0,
+        estimatedPlays: 0,
         secondsWeek: 0,
         secondsToday: 0,
         playsToday: 0,
         playsWeek: 0,
+        first: 0,
         tracks: {},
         artists: {},
         byDay: [],
         bands: { night: 0, morning: 0, afternoon: 0, evening: 0 },
+        bandPlays: { night: 0, morning: 0, afternoon: 0, evening: 0 },
         weekdays: [0, 0, 0, 0, 0, 0, 0],
         streak: 0,
         discovery: [],
       };
-      var i, e, sec, when, hour;
+      var i, e, sec, when, hour, band;
       for (i = 0; i < this.entries.length; i++) {
         e = this.entries[i];
-        sec = e.d > 0 ? e.d : STATS_DEFAULT_SEC;
+        /* Aucune durée inventée : une écoute sans durée compte comme une
+           écoute, et zéro seconde. C'est ce qui rend « 56095 h » impossible. */
+        sec = e.d > 0 ? e.d : 0;
+        sum.plays++;
+        if (!sum.first || e.ts < sum.first) sum.first = e.ts;
+        if (e.m) {
+          sum.measured += sec;
+          sum.measuredPlays++;
+        } else {
+          sum.estimated += sec;
+          sum.estimatedPlays++;
+        }
         sum.seconds += sec;
         when = new Date(e.ts);
         if (e.ts >= now - 7 * day) {
@@ -4722,21 +5115,31 @@
           if (e.ts < sum.artists[e.a].first) sum.artists[e.a].first = e.ts;
         }
         hour = when.getHours();
-        if (hour >= 5 && hour < 12) sum.bands.morning++;
-        else if (hour >= 12 && hour < 18) sum.bands.afternoon++;
-        else if (hour >= 18 && hour < 24) sum.bands.evening++;
-        else sum.bands.night++;
+        if (hour >= 5 && hour < 12) band = "morning";
+        else if (hour >= 12 && hour < 18) band = "afternoon";
+        else if (hour >= 18 && hour < 24) band = "evening";
+        else band = "night";
+        /* Les moments de la journée se comptent en **temps écouté** : c'est la
+           même unité que le reste de la page, donc comparable. */
+        sum.bands[band] += sec;
+        sum.bandPlays[band]++;
         sum.weekdays[when.getDay()]++;
       }
-      /* Les sept derniers jours, du plus ancien à aujourd'hui. */
+      /* Les sept derniers jours, du plus ancien à aujourd'hui — en temps
+         écouté, et avec le nombre d'écoutes pour la légende. */
       for (i = 6; i >= 0; i--) {
         var from = t0 - i * day;
         var to = from + day;
         var count = 0;
+        var secs = 0;
         for (var j = 0; j < this.entries.length; j++) {
-          if (this.entries[j].ts >= from && this.entries[j].ts < to) count++;
+          var entry = this.entries[j];
+          if (entry.ts >= from && entry.ts < to) {
+            count++;
+            secs += entry.d > 0 ? entry.d : 0;
+          }
         }
-        sum.byDay.push({ day: new Date(from).getDay(), date: from, n: count });
+        sum.byDay.push({ day: new Date(from).getDay(), date: from, n: count, sec: secs });
       }
       /* Série de jours d'affilée (aujourd'hui, sinon hier si rien aujourd'hui). */
       var cursor = t0;
@@ -4769,15 +5172,20 @@
         return b.n - a.n;
       });
       sum.discovery = sum.discovery.slice(0, 8);
-      var favBand = "";
+      /* Le moment préféré : au temps écouté ; à défaut (aucune durée
+         mesurée), au nombre d'écoutes. */
+      var favKey = "";
       var best = -1;
-      for (var band in sum.bands) {
-        if (sum.bands[band] > best) {
-          best = sum.bands[band];
-          favBand = band;
+      var usePlays = sum.seconds <= 0;
+      for (var key in sum.bands) {
+        var score = usePlays ? sum.bandPlays[key] : sum.bands[key];
+        if (score > best) {
+          best = score;
+          favKey = key;
         }
       }
-      sum.favBand = best > 0 ? Stats.bandLabel(favBand) : "";
+      sum.favBand = best > 0 ? Stats.bandLabel(favKey) : "";
+      sum.favBandShare = sum.seconds > 0 && favKey ? Math.round((sum.bands[favKey] / sum.seconds) * 100) : 0;
       var favDay = -1;
       for (i = 0; i < 7; i++) {
         if (favDay === -1 || sum.weekdays[i] > sum.weekdays[favDay]) favDay = i;
@@ -4808,6 +5216,17 @@
       if (h && min) return h + " h " + min;
       if (h) return h + " h";
       return min + " min";
+    },
+
+    /** « 25/09 » — et l'année seulement si ce n'est pas celle en cours. */
+    dayLabel: function (ts) {
+      var d = new Date(ts);
+      if (!isFinite(d.getTime())) return "";
+      var two = function (n) {
+        return (n < 10 ? "0" : "") + n;
+      };
+      var short = two(d.getDate()) + "/" + two(d.getMonth() + 1);
+      return d.getFullYear() === new Date().getFullYear() ? short : short + "/" + d.getFullYear();
     },
 
     bandLabel: function (band) {
@@ -5584,6 +6003,18 @@
         Library.enter();
       }, ms);
     });
+    /* L'écoute en cours est fermée quand l'application passe en arrière-plan ou
+       se termine : sans ça, le temps mesuré depuis le dernier passage resterait
+       dans la session et ne rejoindrait jamais les statistiques. */
+    ["pagehide", "beforeunload"].forEach(function (name) {
+      window.addEventListener(name, function () {
+        Stats.flush();
+      });
+    });
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "hidden") Stats.flush();
+    });
+
     /* L'accueil lit la page : il se rafraîchit quand le contenu arrive, quand on
        change d'onglet, et sur redimensionnement — jamais en boucle serrée. */
     Home.refresh("boot");
@@ -5753,6 +6184,8 @@
     library: Library,
     /** Vos statistiques d'écoute : `summary()`, `record()`, `clear()`. */
     stats: Stats,
+    /** Les appels à l'API du lecteur : par où ils passent, et ce qui manque. */
+    net: Net,
     /** Change one setting (`theme`, `haptics`, `accentFromArt`, `tabbar`,
      *  `takeControl`, `resume`, `reduceMotion`) and persist it. */
     set: function (key, value) {

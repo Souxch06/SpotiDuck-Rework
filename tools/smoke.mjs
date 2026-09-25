@@ -205,6 +205,34 @@ await checkAsync("shuffle toggles", async () => {
   return "aria-checked=true";
 });
 
+await checkAsync("le lecteur ne disparaît pas quand la barre de Spotify quitte l'arbre", async () => {
+  /* **Signalé le 25/09 : « le lecteur disparaît quand on scroll vers le bas ».**
+     La barre de lecture de Spotify quitte l'arbre pendant un défilement (rendu
+     différé), et `sd-mini-on` — jusqu'ici recalculé à partir d'une lecture
+     instantanée — tombait à ce moment-là : le lecteur s'effaçait sous le doigt.
+     Vu une fois, il doit rester. */
+  assert(doc.documentElement.classList.contains("sd-mini-on"), "sd-mini-on absent avant le test");
+  const bar = q('div[data-testid="now-playing-widget"]');
+  assert(bar, "la barre de lecture simulée est introuvable");
+  const holder = bar.parentNode;
+  const next = bar.nextSibling;
+  holder.removeChild(bar);
+  await tick(220);
+  assert(
+    doc.documentElement.classList.contains("sd-mini-on"),
+    "le lecteur s'efface dès que la barre de lecture quitte l'arbre"
+  );
+  assert(q(".sd-mini-title").textContent.trim().length > 0, "le mini-lecteur est vide après la disparition de la barre");
+  /* La barre revient (fin du défilement) : rien ne doit casser. */
+  holder.insertBefore(bar, next);
+  await tick(220);
+  assert(
+    doc.documentElement.classList.contains("sd-mini-on"),
+    "le lecteur a disparu au retour de la barre de lecture"
+  );
+  return "barre retirée → lecteur toujours là → barre revenue ✓";
+});
+
 await checkAsync("seek uses the native setter on Spotify's range input", async () => {
   window.MockSpotify.play(0);
   await tick(80);
@@ -590,8 +618,15 @@ await checkAsync("native playback API is idempotent", async () => {
   await tick(120);
   assert(!playing(), "pause() toggled playback instead of being idempotent");
   SD.seek(5000);
-  await tick(120);
-  const pos = SD.state.position;
+  /* Le déplacement demande un aller-retour avec le faux lecteur : on lui laisse
+     le temps d'aboutir au lieu de le juger sur un seul relevé (il arrivait que
+     la position soit encore celle d'avant le geste). */
+  let pos = 0;
+  for (let i = 0; i < 20; i++) {
+    await tick(60);
+    pos = SD.state.position;
+    if (pos >= 4000 && pos <= 9000) break;
+  }
   assert(pos >= 4000 && pos <= 9000, "seek() did not move the position, got " + pos + " ms");
   return "play/pause idempotent · seek " + Math.round(pos / 1000) + " s";
 });
@@ -1004,13 +1039,16 @@ await checkAsync("listening statistics are computed, and they are correct", asyn
   assert(sum.byDay[6].n === 2, `aujourd'hui : 2 écoutes attendues, ${sum.byDay[6].n}`);
   assert(sum.byDay[5].n === 2, `hier : 2 écoutes attendues, ${sum.byDay[5].n}`);
   assert(sum.streak >= 2, `série attendue ≥ 2 jours, calculée ${sum.streak}`);
-  assert(sum.bands.evening === 6, `le soir devrait compter 6 écoutes, ${sum.bands.evening}`);
+  /* Les moments de la journée se comptent en **temps écouté** : c'est la même
+     unité que les durées du haut de la page. */
+  assert(sum.bands.evening === 1320, `le soir devrait compter 1 320 s, ${sum.bands.evening}`);
   assert(sum.favBand === "Le soir", `moment préféré attendu « Le soir », calculé « ${sum.favBand} »`);
   assert(sum.discovery.length === 1, `une découverte attendue, ${sum.discovery.length} trouvée(s)`);
   assert(sum.discovery[0].name === "Artiste Deux", "la découverte devrait être Artiste Deux (2 écoutes cette semaine)");
   /* 1 320 s = 22 min pile : l'arrondi des minutes doit être celui-là. */
   assert(stats.human(sum.seconds) === "22 min", `affichage attendu « 22 min », calculé « ${stats.human(sum.seconds)} »`);
   assert(stats.human(3 * 3600 + 20 * 60) === "3 h 20", "affichage des heures incorrect");
+
 
   /* Persistance : les statistiques survivent au redémarrage (localStorage). */
   const stored = JSON.parse(dom.window.localStorage.getItem("sd.stats.v1"));
@@ -1030,8 +1068,50 @@ await checkAsync("listening statistics are computed, and they are correct", asyn
   stats.clear();
   assert(stats.summary().total === 0, "la remise à zéro ne vide pas les statistiques");
   assert(JSON.parse(dom.window.localStorage.getItem("sd.stats.v1")).e.length === 0, "le stockage n'est pas vidé");
+
+  /* **Les durées viennent de l'écoute, pas de la durée annoncée du titre.**
+     On rejoue le geste réel : la position avance seconde par seconde, et c'est
+     ce temps-là qui compte. */
+  stats.clear();
+  const t0 = today + 10 * 60 * 1000;
+  const track = { hasTrack: true, playing: true, title: "Titre Mesuré", artist: "Artiste Mesuré" };
+  stats.tick(Object.assign({}, track, { position: 0 }), t0);
+  stats.tick(Object.assign({}, track, { position: 20000 }), t0 + 20000); // +20 s
+  stats.tick(Object.assign({}, track, { position: 60000 }), t0 + 40000); // +40 s de position, 20 s écoulées
+  stats.tick({ hasTrack: false, playing: false }, t0 + 41000);
+  let measured = stats.summary(t0 + 41000);
+  assert(measured.plays === 1, `une écoute mesurée attendue, ${measured.plays} comptée(s)`);
+  assert(measured.measured === 42, `temps mesuré attendu 42 s (20 + 20 bornées), calculé ${measured.measured}`);
+  assert(measured.measuredPlays === 1 && measured.estimatedPlays === 0, "l'écoute mesurée n'est pas marquée comme telle");
+  const measuredEntry = JSON.parse(dom.window.localStorage.getItem("sd.stats.v1")).e[0];
+  assert(measuredEntry.m === 1 && measuredEntry.d === 42, `entrée mesurée attendue m=1 d=42, obtenue ${JSON.stringify(measuredEntry)}`);
+
+  /* Un titre **survolé** ne compte pas quatre minutes : le saut de position est
+     borné par le temps réellement écoulé, et moins de dix secondes ne compte
+     pas du tout. */
+  stats.clear();
+  stats.tick(Object.assign({}, track, { position: 0, title: "Titre Survolé" }), t0 + 60000);
+  stats.tick(Object.assign({}, track, { position: 180000, title: "Titre Survolé" }), t0 + 61000);
+  stats.tick({ hasTrack: false, playing: false }, t0 + 62000);
+  const skipped = stats.summary(t0 + 62000);
+  assert(skipped.plays === 0, `un titre survolé ne devrait pas compter une écoute, ${skipped.plays} comptée(s)`);
+
+  /* Le **même titre relancé** est une seconde écoute, pas une continuation. */
+  stats.clear();
+  stats.tick(Object.assign({}, track, { position: 0, title: "Titre Bouclé" }), t0 + 100000);
+  stats.tick(Object.assign({}, track, { position: 15000, title: "Titre Bouclé" }), t0 + 115000);
+  stats.tick(Object.assign({}, track, { position: 0, title: "Titre Bouclé" }), t0 + 116000);
+  stats.tick(Object.assign({}, track, { position: 25000, title: "Titre Bouclé" }), t0 + 141000);
+  stats.tick({ hasTrack: false, playing: false }, t0 + 142000);
+  const looped = stats.summary(t0 + 142000);
+  assert(looped.plays === 2, `deux écoutes attendues après une reprise, ${looped.plays} comptée(s)`);
+  const loopedEntry = JSON.parse(dom.window.localStorage.getItem("sd.stats.v1"));
+  assert(loopedEntry.e.length === 2, `deux entrées attendues, ${loopedEntry.e.length} écrite(s)`);
+
+  /* Et le total reste celui des deux durées mesurées (15 + 25). */
+  assert(looped.measured === 40, `temps mesuré attendu 40 s, calculé ${looped.measured}`);
   dom.window.close();
-  return "6 écoutes · 3 artistes · parts, série, moments et découvertes exacts ✓";
+  return "6 écoutes · 3 artistes · parts, série, moments exacts · durées mesurées (42 s mesurées, survol écarté, reprise comptée) ✓";
 });
 
 await checkAsync("the home screen shows the statistics, and can live without Spotify's rows", async () => {
@@ -1059,7 +1139,13 @@ await checkAsync("the home screen shows the statistics, and can live without Spo
   assert(statsBox, "le bloc de statistiques n'est pas dans l'accueil");
   assert(statsBox.hidden === false, "le bloc de statistiques est masqué");
   const tiles = [...statsBox.querySelectorAll(".sd-stat-tile")];
-  assert(tiles.length === 6, `six tuiles attendues, ${tiles.length} trouvée(s)`);
+  /* Trois durées (aujourd'hui, sept jours, depuis le début) puis quatre
+     nombres (écoutes, titres différents, artistes, jours d'affilée). */
+  assert(tiles.length === 7, `sept tuiles attendues, ${tiles.length} trouvée(s)`);
+  assert(
+    statsBox.querySelectorAll(".sd-stat-hint").length >= 7,
+    "chaque tuile doit dire ce qu'elle compte"
+  );
   const values = tiles.map((t) => t.querySelector(".sd-stat-value").textContent);
   assert(
     values.some((v) => /min|h/.test(v)),
@@ -1073,7 +1159,7 @@ await checkAsync("the home screen shows the statistics, and can live without Spo
     "l'accueil reste masqué alors qu'il a des statistiques à montrer"
   );
   dom.window.close();
-  return "6 tuiles · 7 jours · artistes · moments, sans rangée de Spotify ✓";
+  return "7 tuiles (3 durées + 4 nombres, chacune expliquée) · 7 jours · artistes · moments, sans rangée de Spotify ✓";
 });
 
 await checkAsync("the app has a home screen of its own, built from the page's data", async () => {
@@ -1299,7 +1385,7 @@ await checkAsync("a tall, narrow page is not 'nothing displayed', and the diagno
     const width = isMain ? 29 : hasText ? 24 : 0;
     return { width, height, top: 0, left: 0, right: width, bottom: height, x: 0, y: 0 };
   };
-  w.AndBridge = { version: () => "2.11.6", session: () => false };
+  w.AndBridge = { version: () => "2.11.7", session: () => false };
   w.eval(await read("dist/spotiduck-ui.js"));
   await tick(250);
 
@@ -1317,7 +1403,11 @@ await checkAsync("a tall, narrow page is not 'nothing displayed', and the diagno
   );
   const diag = api.content.diagnose();
   assert(!/2\.9\.0/.test(diag), "le diagnostic annonce encore une version figée : " + diag);
-  assert(/SpotiDuck 2\.11\.6/.test(diag), "le diagnostic n'annonce pas la version de l'application : " + diag);
+  const pkgVersion = JSON.parse(await read("package.json")).version;
+  assert(
+    diag.includes("SpotiDuck " + pkgVersion),
+    `le diagnostic n'annonce pas la version de l'application (${pkgVersion}) : ` + diag
+  );
   assert(/page \/intl-fr\//.test(diag), "le diagnostic ne dit pas sur quelle page il a été pris : " + diag);
   /* Le diagnostic doit porter **les mots de la page** (« Choisissez votre
      langue ») et l'état réel de la session : sans ça, une capture ne dit pas ce
@@ -1608,6 +1698,92 @@ await checkAsync("without a token the library keeps Spotify's sidebar (never an 
   );
   dom.window.close();
   return "sans jeton : rien ne masque Spotify · une source en panne : les autres suffisent ✓";
+});
+
+await checkAsync("la bibliothèque passe par le pont natif, donc sans contrôle d'accès", async () => {
+  /* **La capture du 25/09 : « Votre bibliothèque n'a pas répondu pour
+     l'instant ».** Le jeton était là, la page s'affichait, mais le `fetch` du
+     navigateur vers `api.spotify.com` depuis `open.spotify.com` est refusé par
+     le contrôle d'accès (la console de la vraie page le dit mot pour mot). Sur
+     le téléphone, c'est `AndBridge.nFetch` qui fait la requête — hors
+     navigateur, donc sans contrôle d'accès. On le vérifie ici avec `fetch`
+     **en panne**, exactement comme sur le téléphone. */
+  const answers = {
+    "/me/playlists?limit=50": {
+      total: 2,
+      items: [
+        { id: "p1", name: "Mes tubes", images: [{ url: "https://i.scdn.co/image/big", width: 640 }] },
+        { id: "p2", name: "Le matin", images: [] },
+      ],
+    },
+    "/me/albums?limit=50": { total: 0, items: [] },
+    "/me/artists?limit=50": { total: 1, items: [{ id: "ar1", name: "Artiste Suivi", images: [] }] },
+    "/me/shows?limit=50": { total: 0, items: [] },
+    "/me/tracks?limit=1": { total: 12 },
+  };
+  const openDom = (status) => {
+    const dom = new JSDOM('<!doctype html><html><body><div id="main-view"></div></body></html>', {
+      url: "https://open.spotify.com/",
+      pretendToBeVisual: true,
+      runScripts: "dangerously",
+    });
+    dom.window.__calls = [];
+    dom.window.AndBridge = {
+      nFetch: (url) => {
+        dom.window.__calls.push(url);
+        if (status !== 200) return JSON.stringify({ status: status, body: "{}", headers: {} });
+        const body = answers[String(url).replace("https://api.spotify.com/v1", "")] || {};
+        return JSON.stringify({ status: 200, body: JSON.stringify(body), headers: {} });
+      },
+      recMediaStatus: () => undefined,
+      recMediaPosition: () => undefined,
+      playLoaded: () => undefined,
+      cssInjected: () => undefined,
+    };
+    /* Le `fetch` du navigateur échoue comme sur le téléphone : rien ne doit
+       dépendre de lui quand le pont est là. */
+    dom.window.fetch = () => Promise.reject(new TypeError("Failed to fetch"));
+    return dom;
+  };
+
+  const dom = openDom(200);
+  dom.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(200);
+  const api = dom.window.SpotiDuckUI;
+  await dom.window.fetch("https://api.spotify.com/v1/me", { headers: { Authorization: "Bearer pont-de-test" } }).catch(() => {});
+  assert(api.state && api.state.tab, "la coque ne s'est pas construite");
+  api.library.load(true);
+  for (let i = 0; i < 40 && !api.library.items.length; i++) await tick(25);
+  assert(api.library.state === "ready", `état attendu « ready », obtenu « ${api.library.state} »`);
+  /* Les titres likés, deux playlists et un artiste suivi : la ligne « titres
+     likés » vient du total annoncé par l'API, pas d'une page. */
+  assert(api.library.items.length === 4, `4 lignes attendues, ${api.library.items.length} lue(s)`);
+  assert(dom.window.__calls.length >= 5, `les cinq sources doivent être lues, ${dom.window.__calls.length} lue(s)`);
+  assert(
+    api.library.items.some((row) => row.name === "Mes tubes" && row.href === "/playlist/p1"),
+    "la playlist du compte n'a pas été lue : " + JSON.stringify(api.library.items.map((r) => r.name))
+  );
+  assert(dom.window.SpotiDuckUI.net ? dom.window.SpotiDuckUI.net.via === "pont" : true, "la requête n'est pas passée par le pont");
+  dom.window.close();
+
+  /* **Le pont répond mal : la raison est dite.** Une seule capture doit alors
+     suffire à comprendre ce qui manque (401, 403, réseau). */
+  const broken = openDom(401);
+  broken.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(200);
+  const api2 = broken.window.SpotiDuckUI;
+  await broken.window.fetch("https://api.spotify.com/v1/me", { headers: { Authorization: "Bearer pont-de-test" } }).catch(() => {});
+  api2.state.tab = "library";
+  api2.library.load(true);
+  for (let i = 0; i < 40 && api2.library.state !== "error"; i++) await tick(25);
+  assert(api2.library.state === "error", `état attendu « error », obtenu « ${api2.library.state} »`);
+  const page = broken.window.document;
+  const note = page.querySelector(".sd-lib-note").textContent;
+  assert(/401/.test(note), `la raison (401) doit être affichée, obtenu « ${note} »`);
+  const retry = page.querySelector(".sd-lib-retry");
+  assert(retry && !page.querySelector(".sd-lib-actions").hidden, "sans réponse, le bouton « Réessayer » doit être là");
+  broken.window.close();
+  return "pont natif : 3 lignes lues, et une panne dit sa raison ✓";
 });
 
 await checkAsync("a duration announced in milliseconds never becomes thousands of hours", async () => {
