@@ -885,15 +885,30 @@ async function main() {
             return `${e.name}→RIEN (chemin ${e.click && e.click.pathAfter})`;
           })
           .join(", ")}`;
-      if (after && after.contentVisible) lines.push(`Contenu - ${target.label} : ${after.contentVisible}`);
-      if (after && after.structure) lines.push(`Structure - ${target.label} : ${after.structure}`);
-      if (after && after.shelves) lines.push(`Rangées - ${target.label} : ${after.shelves}`);
-      if (after && after.content) lines.push(`Contenu-te tailles - ${target.label} : ${after.content}`);
-      if (after && after.rognes) lines.push(`Rognage - ${target.label} : ${after.rognes}`);
-      if (after && after.home) lines.push(`Accueil maison - ${target.label} : ${after.home}`);
-      lines.push(summary);
+      /* Les mesures détaillées de **cette** page. Elles étaient jointes en une
+         seule note pour toutes les pages, à la toute fin : une note longue peut
+         être perdue (observé le 25/09 : « Accueil maison » et « Rognage »
+         disparus des annotations alors que le run était vert), et on perdait
+         alors la seule mesure qui compte — celle de l'accueil. Chaque page
+         publie donc la sienne. */
+      const pageLines = [];
+      if (after && after.contentVisible) pageLines.push(`Contenu - ${target.label} : ${after.contentVisible}`);
+      if (after && after.structure) pageLines.push(`Structure - ${target.label} : ${after.structure}`);
+      if (after && after.shelves) pageLines.push(`Rangées - ${target.label} : ${after.shelves}`);
+      if (after && after.content) pageLines.push(`Contenu-te tailles - ${target.label} : ${after.content}`);
+      if (after && after.rognes) pageLines.push(`Rognage - ${target.label} : ${after.rognes}`);
+      if (after && after.home) pageLines.push(`Accueil maison - ${target.label} : ${after.home}`);
+      lines.push(summary, ...pageLines);
       console.log(`[Sonde coque] ${summary}`);
       note(`Mesure — ${target.label}`, summary);
+      if (pageLines.length) {
+        note(`Détail — ${target.label}`, pageLines.join("  ||  "));
+      } else if (after && after.layout) {
+        /* La mesure est un témoin : si l'état de la page est arrivé mais que
+           rien n'en a été relevé, la sonde elle-même est en cause — il faut le
+           dire, au lieu de laisser un rapport muet. */
+        warn(`Mesure incomplète — ${target.label}`, "la page a été mesurée mais aucun relevé détaillé n'est remonté");
+      }
 
       report.pages.push({ label: target.label, url: target.url, before, after, navEffects, errors });
       if (errors.length) warn(`Erreurs — ${target.label}`, errors.slice(0, 5).join("  ||  "));
