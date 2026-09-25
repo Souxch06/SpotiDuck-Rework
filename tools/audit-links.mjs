@@ -1041,6 +1041,62 @@ if (!/isAnonymous/.test(libraryCode)) {
   errors.push("un jeton anonyme est accepté comme un vrai : la page dirait « compte vide » à tort");
 }
 
+/* **L'enveloppe de la requête.** Le lecteur ne demande pas `api.spotify.com`
+   avec le seul jeton : il envoie aussi `client-token`. Ces en-têtes étaient
+   captés puis jamais renvoyés — nos appels partaient « nus » et Spotify les
+   refusait alors que ceux de la page passaient. C'est la cause la plus probable
+   du « il n'arrive pas à reconnaître mes playlists ». */
+if (!/KEEP: \/\^\(authorization\|client-token/.test(libraryCode) || !/keepHeader: function/.test(libraryCode)) {
+  errors.push("les en-têtes de la page ne sont plus gardés : les appels d'API repartiraient sans client-token");
+}
+if (!/requestHeaders: function \(browser\)/.test(libraryCode) || !/Api\.apiHeaders\(browser\)/.test(libraryCode)) {
+  errors.push("la coque ne renvoie plus l'enveloppe de la page sur ses appels");
+}
+if (!/JSON\.stringify\(\{ method: "GET", headers: self\.requestHeaders\(false\) \}\)/.test(libraryCode)) {
+  errors.push("le pont asynchrone ne reçoit plus les en-têtes de la page : la requête native partirait nue");
+}
+if (!/window\.fetch\(url, \{ headers: this\.requestHeaders\(true\) \}\)/.test(libraryCode)) {
+  errors.push("la voie du navigateur ne renvoie plus les en-têtes de la page");
+}
+if (!/headerNames: function/.test(libraryCode) || !/libraryHeaders/.test(runtime)) {
+  errors.push("le journal ne dit plus quels en-têtes ont été gardés : une capture ne suffirait plus à diagnostiquer un refus");
+}
+/* **La liste de Spotify, cherchée partout.** Elle n'est pas qu'une barre
+   latérale : les rangées de l'accueil la portent aussi, et la barre est repliée
+   sur un téléphone (donc vide dans le document). */
+if (!/pick\(SEL\.mainView\), document\.body/.test(libraryCode)) {
+  errors.push("la liste de Spotify n'est plus cherchée que dans la barre latérale : les rangées de l'accueil seraient ignorées");
+}
+if (!/a\.closest && a\.closest\("\.sd-layer"\)/.test(libraryCode)) {
+  errors.push("la lecture de la liste de Spotify ne s'exclut plus elle-même : elle pourrait lire sa propre page");
+}
+if (!/wake: function/.test(libraryCode) || !/retrySidebar: function/.test(libraryCode)) {
+  errors.push("la coque ne déplie plus la liste de Spotify : une liste repliée (téléphone) ne serait jamais lue");
+}
+if (!/linkName: function/.test(libraryCode)) {
+  errors.push("les lignes de Spotify seraient lues sans leur nom");
+}
+
+/* **Le lecteur ne se ferme pas sur un défilement.** Le geste de défilement et
+   le geste de fermeture sont le même : sans cette garde, faire défiler depuis
+   la pochette fermait le lecteur plein écran — « le lecteur disparaît quand je
+   scroll vers le bas ». */
+if (!/var released = ev\.type !== "pointercancel"/.test(libraryCode)) {
+  errors.push("un défilement peut de nouveau fermer le lecteur plein écran (le geste repris par le navigateur est pris pour un tirage)");
+}
+if (!/var flick = velocity > 0\.8 && dy > 64/.test(libraryCode)) {
+  errors.push("un frôlement rapide fermerait le lecteur : le lancer doit avoir parcouru de quoi être vu");
+}
+if (!/if \(ev\.type === "pointercancel"\) return;/.test(libraryCode)) {
+  errors.push("un défilement commencé sur le mini-lecteur peut de nouveau changer de titre ou ouvrir la feuille");
+}
+if (!/reassertMini: function/.test(libraryCode) || !/UI\.reassertMini\(\)/.test(libraryCode)) {
+  errors.push("le mini-lecteur n'est plus réaffirmé : une classe restée en place le laisserait hors de l'écran");
+}
+if (!/html\.classList\.toggle\("sd-player-open", Player\.open\)/.test(libraryCode)) {
+  errors.push("la classe du lecteur plein écran n'est plus posée au même endroit que l'état qui la décide");
+}
+
 /* Le repli qui rend la page utile même sans API : la liste de Spotify. */
 if (!/fromSpotifyList: function \(\)/.test(libraryCode) || !/fromSidebar/.test(libraryCode)) {
   errors.push("aucun repli sur la liste de Spotify : sans API, la bibliothèque resterait vide");
@@ -1216,6 +1272,15 @@ if (!/bas\+900ms=/.test(probeTool) || !/after2/.test(probeTool)) {
 }
 if (!/journal=/.test(probeTool) || !/dit=/.test(probeTool)) {
   errors.push("la sonde ne relève plus ce que la page dit (raison, journal) : une capture ne suffirait plus à diagnostiquer");
+}
+if (!/lignes-spotify=/.test(probeTool) || !/en-têtes=/.test(probeTool)) {
+  errors.push("la sonde ne relève plus la source de repli (lignes de Spotify) ni les en-têtes gardés : la prochaine panne de bibliothèque serait de nouveau à l'aveugle");
+}
+if (!/document=\$\{scroll\.document\}/.test(probeTool)) {
+  errors.push("la sonde ne fait plus défiler le document entier : le défilement du téléphone n'aurait plus de témoin");
+}
+if (!/plein-écran=/.test(probeTool) || !/transform=/.test(probeTool)) {
+  errors.push("la sonde ne dit plus si la feuille du lecteur est ouverte ni si le mini-lecteur porte un transform : un lecteur « disparu » ne se verrait pas");
 }
 if (!/out\.verdict/.test(probeTool) || !/homePath/.test(probeTool)) {
   errors.push("la sonde ne relève plus ce que la coque conclut de la page (état, chemin d'accueil, ancre)");

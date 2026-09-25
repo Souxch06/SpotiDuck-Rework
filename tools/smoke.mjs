@@ -708,6 +708,68 @@ await checkAsync("le curseur se lit et s'écrit dans la même unité", async () 
   return "secondes ↔ millisecondes · saut ignoré ✓";
 });
 
+await checkAsync("le lecteur plein écran ne se ferme plus quand on fait défiler", async () => {
+  /* Signalé deux fois : « le lecteur disparaît quand je scroll vers le bas ».
+     Le lecteur plein écran se ferme en le tirant vers le bas — mais le geste de
+     défilement est le même, et la pochette occupe l'écran : dès que le doigt
+     partait de là pour faire défiler, le navigateur reprenait le geste
+     (`pointercancel`) et la coque le prenait pour un tirage décidé. */
+  SD.openPlayer();
+  await tick(80);
+  assert(doc.documentElement.classList.contains("sd-player-open"), "le lecteur ne s'ouvre pas");
+  const art = q(".sd-player-art");
+  assert(art, "la pochette du lecteur est introuvable");
+  /* jsdom n'a pas `PointerEvent` : `MouseEvent` porte exactement ce que la
+     coque lit (`type`, `clientX`, `clientY`) — c'est la même surface d'API. */
+  const gesture = (type, moves, dy) => {
+    const fire = (name, y) =>
+      art.dispatchEvent(new window.MouseEvent(name, { bubbles: true, clientX: 180, clientY: y }));
+    fire("pointerdown", 200);
+    for (const step of moves) fire("pointermove", 200 + step);
+    fire(type, 200 + dy);
+  };
+  /* Un défilement : le navigateur reprend le geste et le signale. */
+  gesture("pointercancel", [60, 140, 260], 260);
+  await tick(120);
+  assert(
+    doc.documentElement.classList.contains("sd-player-open"),
+    "un défilement a fermé le lecteur plein écran"
+  );
+  /* Un petit mouvement relâché : ce n'est pas un tirage décidé non plus. */
+  gesture("pointerup", [20, 40], 40);
+  await tick(120);
+  assert(doc.documentElement.classList.contains("sd-player-open"), "un petit mouvement a fermé le lecteur");
+
+  /* Et un vrai tirage vers le bas, relâché, ferme bien le lecteur. */
+  gesture("pointerup", [80, 160, 280], 300);
+  await tick(420);
+  assert(
+    !doc.documentElement.classList.contains("sd-player-open"),
+    "le tirage vers le bas ne ferme plus le lecteur : le geste d'origine est perdu"
+  );
+  /* Le mini-lecteur est revenu avec la fermeture (il ne reste pas traduit). */
+  assert(doc.documentElement.classList.contains("sd-mini-on"), "le mini-lecteur n'est pas revenu après la fermeture");
+  return "défilement : lecteur gardé · tirage décidé : fermé ✓";
+});
+
+await checkAsync("le mini-lecteur se remet tout seul s'il a été poussé hors de l'écran", async () => {
+  /* Deuxième filet, indépendant de la cause : une classe restée en place ou un
+     transform laissé par un geste interrompu ne peuvent plus faire disparaître
+     le lecteur — il est réaffirmé chaque seconde. */
+  SD.closePlayer();
+  await tick(120);
+  const html = doc.documentElement;
+  const mini = q(".sd-mini");
+  html.classList.remove("sd-mini-on");
+  mini.style.transform = "translate3d(0,120%,0)";
+  html.classList.add("sd-player-open"); // classe restée en place, lecteur fermé
+  await tick(1400);
+  assert(html.classList.contains("sd-mini-on"), "le mini-lecteur ne se remet pas en place : la classe manque toujours");
+  assert(!mini.style.transform, "le transform laissé par un geste interrompu n'est pas nettoyé");
+  assert(!html.classList.contains("sd-player-open"), "la classe du lecteur plein écran reste alors qu'il est fermé");
+  return "classe reprise · transform nettoyé · feuille refermée ✓";
+});
+
 await checkAsync("tab bar can be disabled without leaving a floating mini player", async () => {
   SD.set("tabbar", false);
   await tick(40);
@@ -1509,7 +1571,7 @@ await checkAsync("a tall, narrow page is not 'nothing displayed', and the diagno
     const width = isMain ? 29 : hasText ? 24 : 0;
     return { width, height, top: 0, left: 0, right: width, bottom: height, x: 0, y: 0 };
   };
-  w.AndBridge = { version: () => "2.11.9", session: () => false };
+  w.AndBridge = { version: () => "2.11.10", session: () => false };
   w.eval(await read("dist/spotiduck-ui.js"));
   await tick(250);
 
@@ -1793,6 +1855,94 @@ await checkAsync("la bibliothèque lit la liste de Spotify quand l'API ne répon
   return "repli sur la liste de Spotify · 3 lignes · refus écrit dans le journal ✓";
 });
 
+await checkAsync("la bibliothèque lit la liste de Spotify partout où elle est", async () => {
+  /* **« Il n'arrive toujours pas à reconnaître mes playlists » (25/09).**
+     La liste de Spotify n'est pas qu'une barre latérale : elle est aussi dans
+     les rangées de l'accueil (« Vos playlists », « Écoutés récemment ») et dans
+     le panneau latéral. Ne chercher que dans la barre latérale, c'était
+     dépendre de la mise en page de Spotify à un instant donné — et ne rien
+     trouver quand elle est repliée. */
+  const dom = new JSDOM(
+    "<!doctype html><html><body>" +
+      "<div id='Desktop_LeftSidebar_Id'><header><h1>Ma bibliothèque</h1></header></div>" +
+      "<main id='main-view'><section>" +
+      "<a href='/playlist/p1?si=xyz' aria-label='Mes tubes'><img src='https://i.scdn.co/image/p1' alt=''/></a>" +
+      "<a href='/playlist/p2'><div><div><span>Découvertes</span></div></div></a>" +
+      "<a href='/album/a1' aria-label='Album Un'></a>" +
+      "</section></main>" +
+      "</body></html>",
+    { url: "https://open.spotify.com/intl-fr/", pretendToBeVisual: true, runScripts: "dangerously" }
+  );
+  dom.window.fetch = () => Promise.resolve({ ok: false, status: 401, json: () => Promise.resolve({}) });
+  dom.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => undefined }));
+  dom.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(200);
+  const api = dom.window.SpotiDuckUI;
+  const page = dom.window.document;
+  api.state.tab = "library";
+  api.library.load(true);
+  for (let i = 0; i < 40 && api.library.state === "loading"; i++) await tick(25);
+
+  assert(api.library.fromSidebar === true, "les lignes ne sont pas marquées comme lues dans Spotify");
+  assert(api.library.items.length === 3, `3 lignes attendues, ${api.library.items.length} lue(s)`);
+  assert(
+    api.library.items.map((r) => r.href).join(",") === "/playlist/p1,/playlist/p2,/album/a1",
+    "les adresses lues ne sont pas celles de la page : " + api.library.items.map((r) => r.href).join(",")
+  );
+  assert(api.library.items[0].name === "Mes tubes", "l'aria-label n'est pas lu : " + api.library.items[0].name);
+  assert(
+    api.library.items[1].name === "Découvertes",
+    "le texte de la ligne n'est pas lu : " + api.library.items[1].name
+  );
+  const rows = [...page.querySelectorAll(".sd-lib-row")];
+  assert(rows.length === 3, `3 lignes attendues à l'écran, ${rows.length} affichée(s)`);
+  const journal = [...page.querySelectorAll(".sd-lib-log-list li")].map((li) => li.textContent).join(" | ");
+  assert(/Lignes trouvées/.test(journal) && /page 3/.test(journal), "le journal ne dit pas où la liste a été trouvée : " + journal);
+  assert(/En-têtes de la page/.test(journal), "le journal ne dit pas quels en-têtes la coque a gardés : " + journal);
+  dom.window.close();
+  return "3 lignes lues dans la page · adresses, noms, journal ✓";
+});
+
+await checkAsync("la bibliothèque déplie la liste de Spotify quand elle est repliée", async () => {
+  /* Sur un téléphone, la barre latérale est étroite : Spotify la garde repliée
+     et **ne rend alors aucune ligne** — il n'y a rien à lire. On fait ce que
+     l'utilisateur ferait : on la déplie une fois, puis on relit. */
+  const dom = new JSDOM(
+    "<!doctype html><html><body>" +
+      "<div id='Desktop_LeftSidebar_Id'><button aria-label='Agrandir la bibliothèque'></button></div>" +
+      "<main></main></body></html>",
+    { url: "https://open.spotify.com/intl-fr/", pretendToBeVisual: true, runScripts: "dangerously" }
+  );
+  dom.window.fetch = () => Promise.resolve({ ok: false, status: 401, json: () => Promise.resolve({}) });
+  dom.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => undefined }));
+  dom.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(200);
+  const api = dom.window.SpotiDuckUI;
+  const page = dom.window.document;
+  const sidebar = page.querySelector("#Desktop_LeftSidebar_Id");
+  /* Le dépliage fait rendre la liste, comme dans la vraie page. */
+  sidebar.querySelector("button").addEventListener("click", () => {
+    sidebar.insertAdjacentHTML(
+      "beforeend",
+      "<a href='/playlist/p9' aria-label='Playlist repliée'></a>"
+    );
+  });
+  api.state.tab = "library";
+  api.library.load(true);
+  for (let i = 0; i < 40 && api.library.state === "loading"; i++) await tick(25);
+  assert(api.library.items.length === 0, "la liste ne devrait rien donner avant dépliage");
+  for (let i = 0; i < 80 && !api.library.items.length; i++) await tick(25);
+  assert(api.library.woke, "la coque n'a pas essayé de déplier la liste de Spotify");
+  assert(api.library.items.length === 1, `la playlist est attendue après dépliage, ${api.library.items.length} lue(s)`);
+  assert(api.library.items[0].href === "/playlist/p9", "la mauvaise ligne a été lue : " + api.library.items[0].href);
+  assert(
+    page.querySelectorAll(".sd-lib-row").length === 1,
+    "la ligne lue n'est pas affichée à l'écran"
+  );
+  dom.window.close();
+  return "liste repliée → dépliée → " + "1 playlist lue ✓";
+});
+
 await checkAsync("la bibliothèque redemande le jeton à la page quand il manque", async () => {
   /* Le cas du téléphone : la capture n'a rien attrapé (aucune requête portant
      l'en-tête n'est passée, ou le jeton est refusé), et la bibliothèque restait
@@ -1805,6 +1955,15 @@ await checkAsync("la bibliothèque redemande le jeton à la page quand il manque
     runScripts: "dangerously",
   });
   const calls = [];
+  /* Le jeton et le client-token arrivent comme sur la page : posés dans une
+     requête du lecteur, captés par la coque, puis renvoyés tels quels. */
+  const warmToken = () => {
+    /* Le `client-token` seul : c'est lui qui manquait à nos appels (le jeton,
+       lui, arrive par la voie du renouvellement que ce test exerce). */
+    const xhrWarm = new dom.window.XMLHttpRequest();
+    xhrWarm.open("GET", "https://api.spotify.com/v1/me");
+    xhrWarm.setRequestHeader("client-token", "client-token-de-la-page");
+  };
   dom.window.fetch = (url, init) => {
     const key = String(url);
     if (key.indexOf("/get_access_token") === 0) {
@@ -1815,8 +1974,8 @@ await checkAsync("la bibliothèque redemande le jeton à la page quand il manque
         json: () => Promise.resolve({ accessToken: "JETON-DE-LA-PAGE", isAnonymous: false }),
       });
     }
-    const auth = (init && init.headers && init.headers.Authorization) || "";
-    calls.push({ key, auth });
+    const h = (init && init.headers) || {};
+    calls.push({ key, auth: h.authorization || h.Authorization || "", token: h["client-token"] || "" });
     let body = { total: 0, items: [] };
     if (key === "https://api.spotify.com/v1/me") body = { id: "moi", display_name: "Moi" };
     if (key.indexOf("/me/playlists") >= 0) {
@@ -1828,6 +1987,8 @@ await checkAsync("la bibliothèque redemande le jeton à la page quand il manque
   dom.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => undefined }));
   dom.window.eval(await read("dist/spotiduck-ui.js"));
   await tick(200);
+  warmToken();
+  await tick(40);
   const api = dom.window.SpotiDuckUI;
   api.state.tab = "library";
   api.library.load(true);
@@ -1842,6 +2003,14 @@ await checkAsync("la bibliothèque redemande le jeton à la page quand il manque
   assert(
     calls.length > 0 && calls.every((c) => /Bearer JETON-DE-LA-PAGE/.test(c.auth)),
     "les appels d'API ne portent pas le jeton redemandé : " + JSON.stringify(calls.slice(0, 2))
+  );
+  /* **Et l'enveloppe de la page avec.** Le lecteur ne demande pas l'API avec
+     le seul jeton : il envoie aussi `client-token`. Nos appels partaient « nus »
+     — c'est ce qui les faisait refuser alors que ceux de la page passaient. */
+  const withToken = calls.filter((c) => c.token);
+  assert(
+    withToken.length === calls.length,
+    "les appels d'API ne portent pas le client-token de la page : " + JSON.stringify(calls.slice(0, 2))
   );
   assert(/Compte Moi/.test(dom.window.document.querySelector(".sd-lib-sum").textContent), "le compte redemandé n'est pas nommé");
   dom.window.close();

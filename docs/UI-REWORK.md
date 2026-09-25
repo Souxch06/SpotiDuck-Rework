@@ -2881,3 +2881,95 @@ trois en CI (« seek() did not move the position, got 5 ms »), et un banc qui
   présent, lecteur affiché en permanence et repeint au défilement ; sonde :
   barre de Spotify distinguée de la nôtre, lecteur relevé deux fois pendant le
   défilement, raison et journal relevés.
+
+## §45 — La requête partait « nue », et le défilement fermait le lecteur (v2.11.10)
+
+Message du 25/09 (10:05), après la 2.11.9 :
+
+> « Il n'arrive tjrs pas a reconnaître mes playlist, et le lecteur disparaît tjrs
+> quand je scroll vers le bas »
+
+Deux causes trouvées **dans le code**, pas devinées.
+
+### 1. Nos appels d'API ne portaient pas l'enveloppe de la page
+
+Le lecteur ne demande pas `api.spotify.com` avec le seul jeton : il envoie aussi
+`client-token` et sa version d'application. La coque **captait** ces en-têtes
+(`Api.capture`, `Api.watch` sur `fetch` et sur `XMLHttpRequest`)… et n'en
+renvoyait **aucun** : chaque appel partait avec `{ Authorization: … }`, point.
+Résultat : Spotify refuse une requête par ailleurs correcte (401/403/429), alors
+que celles de la page passent — exactement « il n'arrive pas à reconnaître mes
+playlists ».
+
+Désormais :
+
+* `Api.headers` garde les en-têtes utiles de la page (`authorization`,
+  `client-token`, `spotify-app-version`, `app-platform`, `accept-language`,
+  `x-spotify-*`) ;
+* `Net.requestHeaders()` les renvoie tels quels — par le pont natif **et** par
+  `fetch` (où `origin`/`referer` sont retirés : le navigateur les interdit) ;
+* le journal de la bibliothèque affiche **ce qui a été gardé**
+  (« En-têtes de la page : authorization, client-token ») : une capture suffit à
+  savoir si l'enveloppe manquait.
+
+### 2. La liste de Spotify n'était cherchée qu'à un seul endroit
+
+Le repli ne lisait que la barre latérale `#Desktop_LeftSidebar_Id`. Or Spotify
+affiche la bibliothèque du compte **aussi** dans les rangées de l'accueil
+(« Vos playlists », « Écoutés récemment ») et dans le panneau latéral — et sur un
+téléphone, la barre latérale est **repliee** : ses lignes n'existent alors pas
+dans le document. Trois correctifs :
+
+* la lecture couvre la barre latérale, le panneau, la vue principale et le corps
+  de la page, dans cet ordre, en s'excluant elle-même (notre page mène aussi aux
+  playlists) ;
+* les noms viennent de `aria-label`, sinon de l'infobulle, sinon du texte de la
+  ligne (sans nom, pas de ligne : une liste de lignes vides ne serait pas
+  « reconnaître ses playlists ») ;
+* si rien n'est trouvé, la coque **déplie la liste** (l'appui que l'utilisateur
+  ferait lui-même : « Agrandir la bibliothèque »…) puis relit une fois — et le
+  dit dans son journal (« Lignes trouvées — barre latérale 12 · page 3 »,
+  « barre latérale ouverte : … »).
+
+### 3. Le défilement fermait le lecteur plein écran
+
+« Le lecteur disparaît quand je scroll vers le bas » : le lecteur plein écran se
+ferme en le tirant vers le bas — **et c'est le geste du défilement**. La pochette
+occupe l'écran ; dès que le doigt partait de là pour faire défiler, le navigateur
+reprenait le geste et émettait `pointercancel`, que la coque traitait comme un
+tirage décidé : le lecteur se fermait sous le doigt.
+
+* la fermeture n'a plus lieu que sur un **relâchement** (`pointerup`) ;
+* il faut un geste franc : 22 % de l'écran, ou un lancer ayant parcouru au moins
+  64 px (un frôlement rapide fermait le lecteur) ;
+* sur le mini-lecteur, un geste repris par le navigateur ne déclenche plus rien
+  (avant : un défilement parti du lecteur pouvait changer de titre) ;
+* `pointercancel` remet tout en place, sans exception.
+
+### 4. Et le mini-lecteur se remet tout seul
+
+Deuxième filet, indépendant de la cause : la classe `sd-mini-on` et l'absence de
+`transform` résiduel sont **réaffirmés une fois par seconde** (`UI.reassertMini`,
+appelé par le Ticker). Et la classe du lecteur plein écran est maintenant posée
+au même endroit que l'état qui la décide (`paintChrome`) : un chemin de fermeture
+qui ne passait pas par `closeSheet` la laissait en place, et le mini-lecteur
+restait hors de l'écran (`transform: 120 %`) — « le lecteur a de nouveau
+disparu ».
+
+### Vérifications
+
+* banc : les appels d'API portent le `client-token` de la page (le faux pont le
+  reçoit, le faux `fetch` le vérifie) ;
+* banc : la bibliothèque lit les lignes de Spotify **dans la page** (rangées de
+  l'accueil, adresses, noms, journal « Lignes trouvées — page 3 ») ;
+* banc : une liste repliée est **dépliée** puis relue (une playlist apparaît) ;
+* banc : un défilement (`pointercancel`) ne ferme plus le lecteur ; un petit
+  mouvement non plus ; un vrai tirage relâché ferme toujours ;
+* banc : le mini-lecteur est réaffirmé (classe reprise, `transform` nettoyé,
+  feuille refermée) ;
+* audit : enveloppe renvoyée par les deux voies, en-têtes nommés dans le journal,
+  lecture multi-zones, dépliage, garde de défilement sur la feuille et sur le
+  mini-lecteur, réaffirmation ;
+* sonde : `lignes-spotify=` (la source de repli), `en-têtes=` (ce qui a été
+  gardé), `document=` (défilement du document entier), `plein-écran=` et
+  `transform=` (un lecteur « disparu » se voit dans l'annotation).

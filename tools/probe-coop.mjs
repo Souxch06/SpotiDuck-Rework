@@ -565,6 +565,19 @@ const TABMEASURE = () => {
     lecteurOn: document.documentElement.classList.contains("sd-mini-on") ? "oui" : "non",
     /* Ce que la page dit — la raison, en clair (une capture doit suffire). */
     dire: ((document.querySelector(".sd-lib-note") || {}).textContent || "").trim().slice(0, 110),
+    /* **Combien de lignes de Spotify sont dans la page** (barre latérale,
+       panneau, rangées de l'accueil) : c'est la source de repli de la
+       bibliothèque. Si ce compte est à 0 chez quelqu'un qui est connecté, la
+       coque n'a rien à lire — et on le voit ici, sans capture. */
+    lignesSpotify: document.querySelectorAll(
+      "#Desktop_LeftSidebar_Id a[href^='/playlist/'], #Desktop_PanelContainer_Id a[href^='/playlist/'], #main-view a[href^='/playlist/']"
+    ).length,
+    /* Les en-têtes que la coque a gardés de la page : sans `client-token`,
+       Spotify refuse les appels d'API alors que le jeton est bon. */
+    enTetes:
+      window.SpotiDuckUI && window.SpotiDuckUI.net && window.SpotiDuckUI.net.requestHeaders
+        ? Object.keys(window.SpotiDuckUI.net.requestHeaders(false)).join(",")
+        : "?",
     journal: [].map
       .call(document.querySelectorAll(".sd-lib-log-list li"), (li) => (li.textContent || "").trim())
       .slice(0, 2)
@@ -603,11 +616,23 @@ const SCROLLPROBE = async () => {
   if (node) node.scrollTop = start;
   window.scrollTo(0, window.scrollY - 900);
   await new Promise((r) => setTimeout(r, 400));
+  /* Deuxième manière de faire défiler : le **document** entier. Selon la page,
+     c'est l'un ou l'autre qui bouge — et c'est justement là que le lecteur
+     disparaissait. */
+  window.scrollTo(0, 900);
+  await new Promise((r) => setTimeout(r, 700));
+  const docScroll = size(".sd-mini");
+  window.scrollTo(0, 0);
   return {
     coque: coque,
+    document: docScroll,
     before: before,
     after: after,
     after2: after2,
+    lecteurPlein: document.documentElement.classList.contains("sd-player-open") ? "ouvert" : "fermé",
+    transform: (document.querySelector(".sd-mini") || {}).style
+      ? document.querySelector(".sd-mini").style.transform || "aucun"
+      : "?",
     classe: document.documentElement.classList.contains("sd-mini-on") ? "sd-mini-on" : "sans sd-mini-on",
     bas: window.getComputedStyle(document.documentElement).getPropertyValue("--sd-mini-h-current").trim(),
   };
@@ -941,6 +966,7 @@ async function main() {
               `onglets-visibles=${m.ongletsVisibles} barre-titre=${m.barreTitre} barre-laterale=${m.barreLaterale} ` +
               `texte=${m.textePage} car. · classes="${m.classes}"` +
               ` · barre-spotify=${m.barreSpotify} · lecteur=${m.lecteur} (${m.lecteurOn})` +
+              ` · lignes-spotify=${m.lignesSpotify} · en-têtes=${m.enTetes}` +
               (m.dire ? ` · dit="${m.dire}"` : "") +
               (m.journal ? ` · journal="${m.journal}"` : "")
           );
@@ -969,7 +995,8 @@ async function main() {
         if (scroll) {
           const line =
             `${scroll.coque} · haut=${scroll.before} · bas=${scroll.after} · bas+900ms=${scroll.after2} · ` +
-            `${scroll.classe} · place réservée=${scroll.bas || "—"}`;
+            ` · document=${scroll.document} · ${scroll.classe} · place réservée=${scroll.bas || "—"}` +
+            ` · plein-écran=${scroll.lecteurPlein} · transform=${scroll.transform}`;
           if (scroll.before === "absent" || scroll.after === "absent" || scroll.after2 === "absent") {
             warn(`Lecteur au défilement — ${target.label}`, line);
           } else {
