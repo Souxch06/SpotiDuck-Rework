@@ -1114,9 +1114,10 @@ await checkAsync("the app has a home screen of its own, built from the page's da
   assert(titles.includes("Vos playlists"), "les titres de rangées ne sont pas repris : " + titles.join(", "));
   assert(page.querySelector(".sd-home-more"), "le lien « Tout afficher » n'est pas repris");
 
-  /* Les filtres filtrent pour de vrai. */
-  const chips = [...page.querySelectorAll(".sd-chip")];
-  assert(chips.length === 3, "les trois filtres ne sont pas là");
+  /* Les filtres filtrent pour de vrai. (Scopés à l'accueil : la bibliothèque
+     maison porte elle aussi des filtres — les compter ensemble ne dit rien.) */
+  const chips = [...page.querySelectorAll(".sd-home .sd-chip")];
+  assert(chips.length === 3, "les trois filtres ne sont pas là : " + chips.map((c) => c.textContent).join("/"));
   chips.find((c) => c.getAttribute("data-filter") === "podcast").click();
   await tick(80);
   const afterPodcast = [...page.querySelectorAll(".sd-home-card")];

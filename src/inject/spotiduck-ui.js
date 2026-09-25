@@ -5405,11 +5405,19 @@
       window.setTimeout(function () {
         Content.apply();
         Home.refresh("contenu");
+        Library.enter();
       }, ms);
     });
     /* L'accueil lit la page : il se rafraîchit quand le contenu arrive, quand on
        change d'onglet, et sur redimensionnement — jamais en boucle serrée. */
     Home.refresh("boot");
+    /* La bibliothèque se construit ** même sans lecteur** : `paintChrome` n'est
+       appelé qu'une fois la barre de lecture prête, et une page sans session
+       (ou dont le lecteur n'a pas démarré) n'aurait alors jamais de page de
+       bibliothèque — mesuré en CI : « bibliothèque maison absente » sur toutes
+       les pages. La construire ici la rend visible par la sonde et le
+       diagnostic, et prête dès le premier appui sur l'onglet. */
+    Library.enter();
     /* L'historique récent de Spotify, quand le jeton de la page le permet : les
        statistiques ne commencent pas à zéro. Silencieux sinon. */
     window.setTimeout(function () {
