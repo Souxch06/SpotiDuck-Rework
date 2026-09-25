@@ -4500,26 +4500,52 @@
       this.loading = true;
       this.state = "loading";
       this.apply();
-      Promise.all([
-        this.get("/me/playlists?limit=" + LIBRARY_PAGE),
-        this.get("/me/albums?limit=" + LIBRARY_PAGE),
-        this.get("/me/artists?limit=" + LIBRARY_PAGE),
-        this.get("/me/shows?limit=" + LIBRARY_PAGE),
-        this.get("/me/tracks?limit=1"),
-      ]).then(function (res) {
+      /* **Une requête à la fois.** Le pont natif répond de façon bloquante (le
+         fil JavaScript attend le réseau) : cinq requêtes lancées d'un coup
+         gèleraient l'écran le temps de toutes les attendre. On les enchaîne en
+         laissant la page respirer entre deux, et on s'arrête à la première panne
+         franche — inutile de faire attendre quelqu'un dont le réseau ne répond
+         pas, la page peut tout de suite le dire. */
+      var paths = [
+        "/me/playlists?limit=" + LIBRARY_PAGE,
+        "/me/albums?limit=" + LIBRARY_PAGE,
+        "/me/artists?limit=" + LIBRARY_PAGE,
+        "/me/shows?limit=" + LIBRARY_PAGE,
+        "/me/tracks?limit=1",
+      ];
+      var res = [null, null, null, null, null];
+      var finish = function () {
         self.items = self.parse(res);
         self.counts = self.tally(res);
         self.loadedAt = Date.now();
         self.loading = false;
         /* Aucune des cinq réponses : l'API n'a rien voulu dire (jeton expiré,
            hors ligne, refus). On ne prétend pas que la bibliothèque est vide —
-           on rend la main à Spotify. */
+           la page le dit, avec la raison. */
         var answered = res.some(function (r) {
           return !!r;
         });
         self.state = self.items.length ? "ready" : answered ? "empty" : "error";
         self.apply();
-      });
+      };
+      var step = function (index) {
+        if (index >= paths.length) {
+          finish();
+          return;
+        }
+        self.get(paths[index]).then(function (data) {
+          res[index] = data;
+          if (!data && index === 0 && Net.status === 0) {
+            /* Rien n'a répondu du tout : les quatre autres ne feront pas mieux. */
+            finish();
+            return;
+          }
+          setTimeout(function () {
+            step(index + 1);
+          }, 0);
+        });
+      };
+      step(0);
       return true;
     },
 

@@ -1001,6 +1001,18 @@ if (!/Net\.get\("\/me\/player\/recently-played\?limit=50"\)/.test(libraryCode)) 
 if (!/hasBridge: function/.test(libraryCode) || !/throughFetch: function/.test(libraryCode)) {
   errors.push("la voie de repli (navigateur) a disparu : plus rien ne fonctionnerait sans pont");
 }
+/* Le pont natif répond de façon **bloquante** : cinq requêtes lancées ensemble
+   gèleraient l'écran le temps qu'elles aboutissent toutes. La bibliothèque les
+   enchaîne donc une par une, et s'arrête à la première panne franche. */
+if (!/var step = function \(index\)/.test(libraryCode) || !/step\(index \+ 1\)/.test(libraryCode)) {
+  errors.push("la bibliothèque relance ses cinq requêtes d'un coup : l'écran se figerait le temps du réseau (le pont natif est bloquant)");
+}
+if (/Promise\.all\(\[\s*\n\s*this\.get\(/.test(libraryCode)) {
+  errors.push("les cinq sources de la bibliothèque repartent en parallèle, alors que chaque appel natif bloque le fil JavaScript");
+}
+if (!/if \(!data && index === 0 && Net\.status === 0\)/.test(libraryCode)) {
+  errors.push("la bibliothèque n'arrête plus ses appels quand rien ne répond : l'utilisateur attendrait pour rien");
+}
 if (!/libraryWhy: "Raison : %s\."/.test(runtime) || !/Settings\.labels\.libraryError \+ " " \+ Settings\.labels\.libraryWhy/.test(libraryCode)) {
   errors.push("une panne de la bibliothèque ne dit plus sa raison : il faudrait deviner au lieu de lire une capture");
 }

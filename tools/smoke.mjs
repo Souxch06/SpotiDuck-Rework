@@ -1721,7 +1721,7 @@ await checkAsync("la bibliothèque passe par le pont natif, donc sans contrôle 
     "/me/shows?limit=50": { total: 0, items: [] },
     "/me/tracks?limit=1": { total: 12 },
   };
-  const openDom = (status) => {
+  const openDom = (status, failAll) => {
     const dom = new JSDOM('<!doctype html><html><body><div id="main-view"></div></body></html>', {
       url: "https://open.spotify.com/",
       pretendToBeVisual: true,
@@ -1731,6 +1731,7 @@ await checkAsync("la bibliothèque passe par le pont natif, donc sans contrôle 
     dom.window.AndBridge = {
       nFetch: (url) => {
         dom.window.__calls.push(url);
+        if (failAll) return JSON.stringify({ status: 0, body: "timeout", headers: {} });
         if (status !== 200) return JSON.stringify({ status: status, body: "{}", headers: {} });
         const body = answers[String(url).replace("https://api.spotify.com/v1", "")] || {};
         return JSON.stringify({ status: 200, body: JSON.stringify(body), headers: {} });
@@ -1783,7 +1784,26 @@ await checkAsync("la bibliothèque passe par le pont natif, donc sans contrôle 
   const retry = page.querySelector(".sd-lib-retry");
   assert(retry && !page.querySelector(".sd-lib-actions").hidden, "sans réponse, le bouton « Réessayer » doit être là");
   broken.window.close();
-  return "pont natif : 3 lignes lues, et une panne dit sa raison ✓";
+
+  /* **Rien ne répond : on n'insiste pas.** L'appel natif bloque le fil
+     JavaScript ; enchaîner les cinq attendrait le réseau cinq fois pour rien. */
+  const dead = openDom(200, true);
+  dead.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(200);
+  const api3 = dead.window.SpotiDuckUI;
+  await dead.window
+    .fetch("https://api.spotify.com/v1/me", { headers: { Authorization: "Bearer pont-de-test" } })
+    .catch(() => {});
+  api3.state.tab = "library";
+  api3.library.load(true);
+  for (let i = 0; i < 40 && api3.library.state !== "error"; i++) await tick(25);
+  assert(api3.library.state === "error", `état attendu « error », obtenu « ${api3.library.state} »`);
+  assert(
+    dead.window.__calls.length === 1,
+    `un seul appel attendu quand rien ne répond, ${dead.window.__calls.length} lancé(s)`
+  );
+  dead.window.close();
+  return "pont natif : 3 lignes lues · une panne dit sa raison · rien qui répond → un seul appel ✓";
 });
 
 await checkAsync("a duration announced in milliseconds never becomes thousands of hours", async () => {

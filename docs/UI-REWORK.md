@@ -2712,11 +2712,19 @@ total ne correspondait à aucune écoute réelle. Désormais :
   valeur ; le moment préféré est celui où le plus de temps a été passé ;
 * les classements disent « N écoutes · temps » et non un nombre nu.
 
+**Une requête à la fois.** Le pont natif répond de façon **bloquante** (le fil
+JavaScript attend le réseau) : cinq requêtes lancées ensemble gèleraient l'écran
+le temps qu'elles aboutissent toutes. La bibliothèque les enchaîne donc une par
+une, en laissant la page respirer entre deux, et **s'arrête à la première panne
+franche** (rien n'a répondu du tout) : inutile de faire attendre quelqu'un dont le
+réseau ne répond pas.
+
 ### Vérifications
 
 * banc : la bibliothèque lue **par le pont natif** avec `fetch` en panne (le cas
   du téléphone) — quatre lignes, dont la playlist du compte ; et une panne du pont
-  (401) affiche la **raison** avec le bouton « Réessayer » ;
+  (401) affiche la **raison** avec le bouton « Réessayer » ; rien ne répond → **un
+  seul appel** et l'état d'échec ;
 * banc : les durées sont **mesurées** — 20 s + 20 s bornées = 42 s pour une écoute,
   un saut de position de 180 s en 1 s ne compte pas, un titre survolé ne compte
   pas, le même titre relancé compte deux écoutes (15 s + 25 s = 40 s) ;
