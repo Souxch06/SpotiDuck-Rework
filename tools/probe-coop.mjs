@@ -791,6 +791,96 @@ const SUBPAGE_PROBE = () => {
   };
 };
 
+/* **Le lecteur : est-ce que nos appuis atteignent vraiment Spotify ?** Nos six
+   commandes (lecture, suivant, précédent, aléatoire, répétition, j'aime)
+   cliquent les boutons de la page. Si un sélecteur ne trouve rien sur la
+   disposition réelle, la commande ne fait **rien** — « impossible de zapper la
+   musique ». On relève donc, pour chacune, le bouton trouvé (sélecteur, état
+   `disabled`), et on éprouve la chaîne complète là où c'est mesurable sans
+   lecture : un appui sur notre « aléatoire » ou notre « j'aime » doit changer
+   l'état du bouton de Spotify (`aria-checked`). */
+const TRANSPORT_SELS = {
+  playPause: ['aside button[data-testid="control-button-playpause"]', 'button[data-testid="control-button-playpause"]'],
+  next: ['aside button[data-testid="control-button-skip-forward"]', 'button[data-testid="control-button-skip-forward"]'],
+  prev: ['aside button[data-testid="control-button-skip-back"]', 'button[data-testid="control-button-skip-back"]'],
+  shuffle: ['aside button[data-testid="control-button-shuffle"]', 'button[data-testid="control-button-shuffle"]'],
+  repeat: ['aside button[data-testid="control-button-repeat"]', 'button[data-testid="control-button-repeat"]'],
+  like: ['aside button[data-testid="add-button"]', 'button[data-testid="add-button"]', 'button[data-testid="now-playing-widget-add-button"]'],
+};
+
+const TRANSPORT_TARGET = (nom) => {
+  const list = TRANSPORT_SELS[nom] || [];
+  for (let i = 0; i < list.length; i++) {
+    const el = document.querySelector(list[i]);
+    if (!el) continue;
+    const r = el.getBoundingClientRect();
+    return {
+      sel: list[i],
+      taille: Math.round(r.width) + "x" + Math.round(r.height),
+      disabled: el.disabled === true,
+      testid: el.getAttribute("data-testid") || "",
+      label: el.getAttribute("aria-label") || "",
+    };
+  }
+  return null;
+};
+
+const TRANSPORT_PROBE = () => {
+  const out = {};
+  Object.keys(TRANSPORT_SELS).forEach((k) => {
+    const t = TRANSPORT_TARGET(k);
+    out[k] = t ? `${t.sel.replace("aside ", "")} ${t.taille}${t.disabled ? " DÉSACTIVÉ" : ""}` : "AUCUN";
+  });
+  const etat = (sel) => {
+    const el = document.querySelector(sel);
+    return el ? el.getAttribute("aria-checked") : "?";
+  };
+  return {
+    cibles: out,
+    page: {
+      shuffle: etat('button[data-testid="control-button-shuffle"]'),
+      repeat: etat('button[data-testid="control-button-repeat"]'),
+      like: etat('button[data-testid="add-button"]'),
+      titre: (() => {
+        const el = document.querySelector('[data-testid="context-item-link"], [data-testid="now-playing-widget"] a');
+        return el ? (el.textContent || "").trim().slice(0, 40) : "(aucun)";
+      })(),
+    },
+    nous: {
+      shuffle: !!document.querySelector(".sd-mini-shuffle"),
+      like: !!document.querySelector(".sd-mini-like"),
+      next: !!document.querySelector(".sd-mini-next"),
+    },
+  };
+};
+
+/* L'appui **par nos boutons**, puis ce qu'est devenu le bouton de Spotify. */
+const TRANSPORT_CANARY = async () => {
+  const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+  const click = (sel) => {
+    const el = document.querySelector(sel);
+    if (!el) return false;
+    el.click();
+    return true;
+  };
+  const etat = (sel) => {
+    const el = document.querySelector(sel);
+    return el ? el.getAttribute("aria-checked") : "?";
+  };
+  const avant = { shuffle: etat('button[data-testid="control-button-shuffle"]'), like: etat('button[data-testid="add-button"]') };
+  const appuyeShuffle = click(".sd-mini-shuffle");
+  await pause(700);
+  const apresShuffle = etat('button[data-testid="control-button-shuffle"]');
+  const appuyeLike = click(".sd-mini-like");
+  await pause(700);
+  const apresLike = etat('button[data-testid="add-button"]');
+  /* On remet comme avant (l'essai ne doit pas laisser d'état modifié). */
+  if (appuyeShuffle && apresShuffle !== avant.shuffle) click(".sd-mini-shuffle");
+  if (appuyeLike && apresLike !== avant.like) click(".sd-mini-like");
+  await pause(300);
+  return { avant, apresShuffle, apresLike, appuyeShuffle, appuyeLike };
+};
+
 const CLICK = async (selector) => {
   const el = document.querySelector(selector);
   if (!el) return { clicked: false, reason: `${selector} absent` };
@@ -1131,6 +1221,26 @@ async function main() {
            départ, et les captures aussi. */
         await safely(() => page.evaluate(CLICK, '.sd-nav-item[data-tab="home"]'));
         await sleep(600);
+
+        /* **La lecture : nos appuis atteignent-ils Spotify ?** */
+        const transport = await safely(() => page.evaluate(TRANSPORT_PROBE));
+        const canary = await safely(() => page.evaluate(TRANSPORT_CANARY));
+        if (transport) {
+          const manquants = Object.keys(transport.cibles).filter((k) => transport.cibles[k] === "AUCUN");
+          const line =
+            `cibles : ${Object.keys(transport.cibles).map((k) => k + "=" + transport.cibles[k]).join(" · ")}` +
+            ` · page : shuffle=${transport.page.shuffle} repeat=${transport.page.repeat} like=${transport.page.like} titre="${transport.page.titre}"` +
+            (canary
+              ? ` · nos appuis : aléatoire ${canary.avant.shuffle}→${canary.apresShuffle}${canary.appuyeShuffle ? "" : " (bouton absent)"}` +
+                `, j'aime ${canary.avant.like}→${canary.apresLike}${canary.appuyeLike ? "" : " (bouton absent)"}`
+              : " · nos appuis : non mesurés");
+          /* Un bouton introuvable, ou un appui qui ne change rien côté Spotify,
+             est exactement « impossible de zapper la musique ». */
+          const muet = canary && ((canary.appuyeShuffle && canary.avant.shuffle === canary.apresShuffle) || (canary.appuyeLike && canary.avant.like === canary.apresLike));
+          if (manquants.length || muet) warn(`Lecture — ${target.label}`, line);
+          else note(`Lecture — ${target.label}`, line);
+          report.pages.push({ label: `${target.label} (lecture)`, transport, canary });
+        }
       }
 
       /* **Une playlist ouverte : écran noir ? lecteur disparu ?** Le parcours
