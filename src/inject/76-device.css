@@ -67,3 +67,13 @@ html.sd-mobile .sd-layer .sd-mini-row,
 html.sd-mobile .sd-layer .sd-mini-row2 {
   min-height: var(--sd-tap);
 }
+
+/* **La barre d'onglets désactivée : sa place est nulle.** Ce bloc doit rester
+   **après** les paliers ci-dessus : `--sd-tabbar-h` y est redéclaré avec la même
+   spécificité, donc la dernière règle gagne. Mesuré en CI le 25/09 : la barre
+   était cachée (`sd-no-tabbar`) et sa hauteur de 64 px restait dans la réserve du
+   bas — l'écran montrait la page coupée avec une bande morte de 64 px en dessous,
+   exactement ce que l'utilisateur a signalé (« l'écran est bugué vers le bas »). */
+html.sd-mobile.sd-no-tabbar {
+  --sd-tabbar-h: 0px;
+}

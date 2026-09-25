@@ -936,6 +936,18 @@ if (!/--sd-mini-h-current: 0px/.test(baseCss)) {
 if (!/sd-mini-on,\s*\nhtml\.sd-mobile\.sd-has-track \{[\s\S]{0,80}--sd-mini-h-current: var\(--sd-mini-h\)/.test(baseCss)) {
   errors.push("la place du mini-lecteur n'est plus liée à son affichage");
 }
+/* La barre d'onglets désactivée : sa place doit être **nulle**, et la règle doit
+   venir après les paliers de taille (même spécificité : la dernière gagne). Sans
+   ça, 64 px restent réservés pour une barre cachée — une bande morte sous la
+   page, telle qu'elle a été mesurée en CI. */
+const zeroIndex = bundleCss.lastIndexOf("--sd-tabbar-h:0px");
+const sizeIndex = bundleCss.lastIndexOf("--sd-tabbar-h:calc(");
+if (zeroIndex < 0) {
+  errors.push("la barre d'onglets désactivée ne remet plus sa hauteur à zéro : une bande morte apparaîtrait sous la page");
+} else if (sizeIndex > zeroIndex) {
+  errors.push("la hauteur de la barre d'onglets est redéclarée après sa désactivation : la réserve du bas ne suivrait plus l'écran");
+}
+
 for (const sheet of ["78-home.css", "79-library.css"]) {
   const body = read(`src/inject/${sheet}`);
   if (!/scrollbar-width: none/.test(body) || !/::-webkit-scrollbar \{\s*width: 0/.test(body)) {
