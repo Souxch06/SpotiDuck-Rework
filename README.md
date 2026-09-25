@@ -44,7 +44,7 @@ By wrapping the Spotify Web Player in a highly optimized Android WebView, SpotiD
 
 <p align="center">
   <img src="./screenshots/home_screen.jpg" width="31%" alt="Home Screen" />
-  <img src="./screenshots/library_menu.png" width="31%" alt="Library Menu" />
+  <img src="./screenshots/library_board.png" width="31%" alt="Library" />
   <img src="./screenshots/fullscreen_player.png" width="31%" alt="Full Screen Player" />
 </p>
 

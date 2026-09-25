@@ -1773,7 +1773,7 @@ await checkAsync("a tall, narrow page is not 'nothing displayed', and the diagno
     const width = isMain ? 29 : hasText ? 24 : 0;
     return { width, height, top: 0, left: 0, right: width, bottom: height, x: 0, y: 0 };
   };
-  w.AndBridge = { version: () => "2.11.15", session: () => false };
+  w.AndBridge = { version: () => "2.11.16", session: () => false };
   w.eval(await read("dist/spotiduck-ui.js"));
   await tick(250);
 
@@ -3047,6 +3047,48 @@ await checkAsync("la bibliothèque lit la liste de Spotify quand l'API ne répon
   assert(log && log.hidden === false, "le journal des essais reste caché alors que la bibliothèque a échoué");
   const journal = [...page.querySelectorAll(".sd-lib-log-list li")].map((li) => li.textContent).join(" | ");
   assert(/\/me/.test(journal) && /401/.test(journal), "le journal ne dit pas que /me a été refusé : " + journal);
+
+  /* **Le diagnostic reste rangé.** Signalé le 25/09 : « rends l'onglet
+     bibliothèque plus propre » — et le journal, déployé, occupait plus d'écran
+     que les playlists. Replié, il ne prend qu'une ligne : son résumé dit
+     pourquoi on l'ouvrirait, et combien d'essais il contient. */
+  assert(log.tagName === "DETAILS" && !log.open, "le journal n'est plus replié : il reprend la moitié de l'écran");
+  const resume = (log.querySelector(".sd-lib-log-title") || {}).textContent || "";
+  assert(/API/.test(resume), "le résumé du journal n'explique pas ce qu'on y trouverait : « " + resume + " »");
+  const compteEssais = (log.querySelector(".sd-lib-log-n") || {}).textContent || "";
+  assert(compteEssais === String(log.querySelectorAll(".sd-lib-log-list li").length), `le journal affiche « ${compteEssais} » essais, il en contient ${log.querySelectorAll(".sd-lib-log-list li").length}`);
+
+  /* **L'en-tête dit combien il y a de lignes**, et le compte suit le filtre :
+     « 2 / 4 » dit d'un coup d'œil qu'on regarde une partie de la bibliothèque. */
+  const badge = page.querySelector(".sd-lib-count");
+  assert(badge && badge.hidden === false, "l'en-tête n'affiche pas le nombre de lignes");
+  assert(/4/.test(badge.textContent), "le compte de l'en-tête ne dit pas les 4 lignes : " + badge.textContent);
+  const chipAlbum = page.querySelector('.sd-lib-chip[data-filter="album"]');
+  chipAlbum.click();
+  await tick(60);
+  assert(/1 \/ 4/.test(badge.textContent), `le compte ne suit pas le filtre : « ${badge.textContent} »`);
+  assert(chipAlbum.classList.contains("is-active"), "le filtre actif n'est pas marqué");
+  page.querySelector('.sd-lib-chip[data-filter="all"]').click();
+  await tick(60);
+
+  /* **Une catégorie vide se voit comme vide** sans disparaître (sinon les
+     autres puces bougent sous le doigt). */
+  const chipShow = page.querySelector('.sd-lib-chip[data-filter="show"]');
+  assert(chipShow, "la puce des podcasts a disparu");
+  assert(chipShow.classList.contains("is-empty"), "une puce à zéro ne se distingue pas d'une puce remplie");
+  assert(/^Podcasts 0/.test(chipShow.textContent.trim()), "la puce à zéro n'annonce pas son compte : " + chipShow.textContent);
+
+  /* **La phrase d'état a son icône et son ton**, et son texte reste exactement
+     le message (c'est ce que lisent la sonde et ce test). */
+  const phrase = page.querySelector(".sd-lib-note");
+  assert(phrase.querySelector("svg.sd-lib-note-glyph"), "la phrase d'état n'a plus d'icône");
+  assert(phrase.querySelector(".sd-lib-note-text").textContent === api.library.note(), "le texte de la phrase n'est plus le message de la page");
+  assert(phrase.classList.contains("is-info"), "la phrase qui explique le repli n'est pas marquée comme une information");
+
+  /* **Chaque type a son glyphe** quand la pochette manque : un album ne
+     ressemble plus à une playlist. */
+  const glyphes = [...page.querySelectorAll(".sd-lib-art.is-empty svg")].map((el) => el.outerHTML.length);
+  assert(glyphes.length === rows.filter((r) => !r.querySelector(".sd-lib-art img")).length, "les lignes sans pochette n'ont pas toutes un glyphe");
   dom.window.close();
   return "repli sur la liste de Spotify · vos titres likés en tête · 3 lignes · refus écrit dans le journal ✓";
 });

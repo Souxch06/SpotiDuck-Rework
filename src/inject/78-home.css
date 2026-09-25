@@ -181,6 +181,13 @@ html.sd-mobile .sd-layer .sd-home-section {
   flex-direction: column;
   gap: calc(8px * var(--sd-u));
 }
+/* Même règle que pour la bibliothèque : le conteneur défile, donc ses enfants
+   (titre, filtres, en-têtes de rangée) gardent leur taille au lieu d'être
+   rétrécis par le moteur quand la liste est plus haute que l'écran. */
+html.sd-mobile .sd-layer .sd-home > * {
+  flex: 0 0 auto;
+}
+
 html.sd-mobile .sd-layer .sd-home-head {
   display: flex;
   align-items: baseline;

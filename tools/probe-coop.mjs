@@ -791,6 +791,76 @@ const SUBPAGE_PROBE = () => {
   };
 };
 
+/* **La bibliothèque, mesurée pendant qu'elle défile.** Signalé le 25/09 :
+   « rends l'onglet bibliothèque plus propre » — les filtres étaient coupés en
+   deux et l'en-tête écrasé, parce que le conteneur qui défile rétrécit ses
+   enfants. En jsdom, aucune mise en page n'existe : c'est ici, dans Chrome,
+   qu'on peut le voir. */
+const LIBPROBE = async () => {
+  const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+  const lib = document.querySelector(".sd-lib");
+  if (!lib) return { etat: "absente" };
+  if (lib.hidden) return { etat: "cachée" };
+  const head = lib.querySelector(".sd-lib-head");
+  const chips = lib.querySelector(".sd-lib-chips");
+  if (!head || !chips) return { etat: "sans en-tête" };
+  const enveloppe = lib.getBoundingClientRect();
+  const avant = {
+    headTop: Math.round(head.getBoundingClientRect().top),
+    headH: Math.round(head.getBoundingClientRect().height),
+    chipsH: Math.round(chips.getBoundingClientRect().height),
+  };
+  lib.scrollTop = Math.max(0, Math.min(240, lib.scrollHeight - lib.clientHeight));
+  await pause(420);
+  const apres = {
+    headTop: Math.round(head.getBoundingClientRect().top),
+    headH: Math.round(head.getBoundingClientRect().height),
+    chipsTop: Math.round(chips.getBoundingClientRect().top),
+    chipsH: Math.round(chips.getBoundingClientRect().height),
+    scrollTop: Math.round(lib.scrollTop),
+  };
+  /* **Qu'y a-t-il juste sous le bord haut ?** Si une ligne y apparaît, c'est
+     qu'une bande de la page passe au-dessus de l'en-tête au défilement. */
+  let sousLeBord = "rien";
+  try {
+    const el = document.elementFromPoint(Math.round(enveloppe.left + enveloppe.width / 2), Math.round(enveloppe.top) + 3);
+    if (el) {
+      const cls = String(el.className || "").split(" ").filter(Boolean);
+      sousLeBord = el.tagName.toLowerCase() + (cls.length ? "." + cls.join(".") : "");
+    }
+  } catch (e) {
+    sousLeBord = "non mesurable";
+  }
+  /* **Une puce rognée** : sa hauteur réelle est plus petite que ce qu'elle
+     demande. C'est exactement « les filtres sont coupés en deux ». */
+  const chip = lib.querySelector(".sd-lib-chip");
+  const puceRognee = chip ? Math.round(chip.getBoundingClientRect().height) + 1 < Math.round(chip.scrollHeight) : false;
+  const badge = lib.querySelector(".sd-lib-count");
+  const journal = lib.querySelector(".sd-lib-log");
+  /* **Et la règle elle-même**, quand il n'y a rien à faire défiler (le banc
+     n'a que deux lignes) : la position collante et le point d'accroche des
+     filtres se lisent dans le style calculé, exactement. */
+  const style = {
+    head: getComputedStyle(head).position,
+    chips: getComputedStyle(chips).position,
+    accroche: getComputedStyle(chips).top,
+  };
+  lib.scrollTop = 0;
+  return {
+    collant: style.head + "/" + style.chips,
+    accroche: style.accroche + " pour un en-tête de " + apres.headH + "px",
+    colle: Math.abs(apres.headTop - avant.headTop) < 2 && Math.abs(apres.headTop - Math.round(enveloppe.top)) < 3 ? "oui" : "non",
+    entete: apres.headH + "px (avant " + avant.headH + "px)",
+    filtres: apres.chipsH + "px (avant " + avant.chipsH + "px)",
+    sousLeBord,
+    puceRognee: puceRognee ? "oui" : "non",
+    lignes: lib.querySelectorAll(".sd-lib-row").length,
+    compte: badge && !badge.hidden ? (badge.textContent || "").trim() : "(absent)",
+    journal: journal ? (journal.open ? "ouvert" : "replié") + (journal.hidden ? " (caché)" : "") : "absent",
+    defile: apres.scrollTop > 0 ? "oui" : "non",
+  };
+};
+
 /* **Le lecteur : est-ce que nos appuis atteignent vraiment Spotify ?** Nos six
    commandes (lecture, suivant, précédent, aléatoire, répétition, j'aime)
    cliquent les boutons de la page. Si un sélecteur ne trouve rien sur la
@@ -1354,6 +1424,27 @@ async function main() {
         await sleep(900);
         const m = await safely(() => page.evaluate(TABMEASURE));
         if (m) {
+          /* Et, tout de suite après, **la page pendant qu'elle défile**. */
+          const libMesure = await safely(() => page.evaluate(LIBPROBE));
+          if (libMesure && libMesure.etat === undefined) {
+            const ligne =
+              `en-tête collé=${libMesure.colle} · entête=${libMesure.entete} · filtres=${libMesure.filtres}` +
+              ` · collant=${libMesure.collant} · accroche=${libMesure.accroche}` +
+              ` · sous-le-bord=${libMesure.sousLeBord} · puce rognée=${libMesure.puceRognee} · lignes=${libMesure.lignes}` +
+              ` · compte=${libMesure.compte} · journal=${libMesure.journal} · défilement=${libMesure.defile}`;
+            /* Une puce coupée, ou une ligne qui passe au-dessus de l'en-tête,
+               c'est la capture du 25/09 : on le dit en alerte. */
+            const accrocheOk = /^(\d+)px pour un en-tête de \1px$/.test(libMesure.accroche);
+            const abime =
+              libMesure.puceRognee === "oui" ||
+              libMesure.colle === "non" ||
+              libMesure.collant !== "sticky/sticky" ||
+              !accrocheOk ||
+              !/^div\.sd-lib-head/.test(libMesure.sousLeBord);
+            if (abime) warn(`Bibliothèque au défilement — ${target.label}`, ligne);
+            else note(`Bibliothèque au défilement — ${target.label}`, ligne);
+            report.pages.push({ label: `${target.label} (bibliothèque au défilement)`, lib: libMesure });
+          }
           note(
             `Onglet Bibliothèque — ${target.label}`,
             `chemin=${m.chemin} · onglet-actif=${m.ongletActif} · bibliothèque=${m.bibliotheque} ` +

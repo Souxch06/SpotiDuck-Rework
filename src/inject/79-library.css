@@ -41,8 +41,12 @@ html.sd-mobile .sd-layer .sd-lib {
   z-index: 20;
   display: flex;
   flex-direction: column;
-  gap: calc(8px * var(--sd-u));
-  padding: calc(6px * var(--sd-u)) 0 0;
+  /* **Aucun interstice.** Un `gap` (ou une marge) entre l'en-tête et les
+     filtres laisse voir les lignes qui défilent *entre* eux : la capture du
+     25/09 montrait une ligne de playlist glissée sous le titre, et des puces
+     rognées. Chaque bloc porte donc sa propre respiration, et ils se touchent. */
+  gap: 0;
+  padding: 0;
   background: var(--sd-bg);
   overflow-x: hidden;
   overflow-y: auto;
@@ -270,73 +274,284 @@ html.sd-mobile.sd-tab-search .sd-layer .sd-home {
 }
 
 /* --------------------------------------------------------------------------
-   4. Plus propre : un en-tête qui reste, des compteurs lisibles, des lignes
-      séparées franchement, et des actions qui ressemblent à des boutons
+   4. La page, tenue : un en-tête qui reste, des filtres qui se lisent, des
+      lignes séparées franchement, un diagnostic rangé, des actions nettes
+
+   Signalé le 25/09 : « rends l'onglet bibliothèque plus propre ». Ce qui
+   n'allait pas, capture à l'appui : le journal des essais, déployé, occupait
+   plus d'écran que les playlists ; la phrase d'état se lisait comme un
+   paragraphe ; les puces étaient à moitié coupées par l'en-tête au défilement ;
+   et toutes les pochettes manquantes portaient le **même** cœur — un album
+   ressemblait à une playlist.
+
+   Rien de tout cela n'est une « décoration » : chaque changement répond à une
+   chose qu'on ne pouvait pas lire.
    -------------------------------------------------------------------------- */
 
-/* L'en-tête et les filtres **restent** pendant que la liste défile : on sait
-   toujours où on est, et on peut changer de filtre sans remonter. */
-html.sd-mobile .sd-layer .sd-lib-head,
-html.sd-mobile .sd-layer .sd-lib-chips {
+/* --- 4a. L'en-tête : titre, résumé, et le compte à droite ----------------- */
+
+/* **Aucun enfant de la page ne se laisse écraser.** Le conteneur défile
+   (`overflow-y: auto`) : le moteur de mise en page distribue alors la hauteur
+   entre ses enfants, et les **rétrécit** quand la liste est plus haute que
+   l'écran. C'est ce qui coupait les filtres en deux et écrasait l'en-tête
+   (capture du 25/09 : des puces coupées à mi-hauteur) — un conteneur qui défile
+   doit laisser ses enfants à leur taille, seule la liste est longue. */
+html.sd-mobile .sd-layer .sd-lib > * {
+  flex: 0 0 auto;
+}
+
+html.sd-mobile .sd-layer .sd-lib-head {
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: 2;
+  /* **En ligne**, et non en colonne : la règle d'origine du fichier mettait
+     `flex-direction: column`, et cette section ne la contredisait pas — le
+     compte se retrouvait sous le titre, et le résumé, lui, débordait à gauche
+     et à droite. */
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: calc(10px * var(--sd-u));
+  padding: calc(6px * var(--sd-u)) calc(16px * var(--sd-u)) calc(8px * var(--sd-u));
   background: var(--sd-bg);
 }
-html.sd-mobile .sd-layer .sd-lib-head {
-  padding-top: calc(4px * var(--sd-u));
-  padding-bottom: calc(2px * var(--sd-u));
+html.sd-mobile .sd-layer .sd-lib-id {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1 1 auto;
 }
-html.sd-mobile .sd-layer .sd-lib-chips {
-  padding-top: calc(4px * var(--sd-u));
-  padding-bottom: calc(8px * var(--sd-u));
-}
-
-/* Le compteur d'une puce : discret, jamais coupé. */
-html.sd-mobile .sd-layer .sd-lib-chip-n {
-  opacity: 0.62;
+/* Le compte : une pastille, jamais coupée, qui suit le filtre actif. */
+html.sd-mobile .sd-layer .sd-lib-count {
+  flex: 0 0 auto;
+  padding: calc(4px * var(--sd-u)) calc(10px * var(--sd-u));
+  border-radius: 999px;
+  background: var(--sd-bg-hi);
+  color: var(--sd-sub);
+  font-size: calc(12px * var(--sd-u));
   font-variant-numeric: tabular-nums;
-  margin-left: calc(2px * var(--sd-u));
+  white-space: nowrap;
 }
-html.sd-mobile .sd-layer .sd-lib-chip.is-active .sd-lib-chip-n {
-  opacity: 0.85;
-}
-
-/* Les lignes : un filet discret entre elles (sauf la dernière), pas de cadre. */
-html.sd-mobile .sd-layer .sd-lib-row + .sd-lib-row {
-  box-shadow: inset 0 1px 0 0 var(--sd-bg-tint);
-}
-
-/* « Titres likés » : la première ligne se reconnaît (cœur sur fond dégradé). */
-html.sd-mobile .sd-layer .sd-lib-row-liked .sd-lib-art {
-  background: linear-gradient(135deg, var(--sd-accent), var(--sd-bg-tint));
-}
-html.sd-mobile .sd-layer .sd-lib-row-liked .sd-lib-glyph {
-  color: #fff;
-}
-
-/* Rien dans ce filtre : la phrase est au centre, la liste est rangée. */
-html.sd-mobile .sd-layer .sd-lib-nofilter .sd-lib-note {
-  text-align: center;
-  padding-top: calc(28px * var(--sd-u));
-}
-html.sd-mobile .sd-layer .sd-lib-nofilter .sd-lib-list {
+html.sd-mobile .sd-layer .sd-lib-count[hidden] {
   display: none;
 }
-
-/* Le journal : lisible, borné, et il ne pousse pas les actions hors de l'écran. */
-html.sd-mobile .sd-layer .sd-lib-log-list {
-  max-height: calc(132px * var(--sd-u));
-  overflow-y: auto;
+/* Le filet qui sépare l'en-tête de la liste, **posé sur toute la largeur** :
+   c'est lui qui dit que la page a défilé sous un en-tête immobile. */
+html.sd-mobile .sd-layer .sd-lib-head::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: var(--sd-bg-tint);
 }
 
-/* Les actions : deux boutons nets, la connexion en avant. */
-html.sd-mobile .sd-layer .sd-lib-actions:has(.sd-lib-login:not([hidden])) .sd-lib-retry {
-  flex: 1 1 auto;
+/* --- 4b. Les filtres : des puces qui ne se coupent pas, un actif franc ----- */
+
+html.sd-mobile .sd-layer .sd-lib-chips {
+  position: sticky;
+  top: var(--sd-lib-head-h, 0px);
+  z-index: 1;
+  align-items: center;
+  overflow-y: hidden;
+  gap: calc(6px * var(--sd-u));
+  padding: calc(8px * var(--sd-u)) calc(16px * var(--sd-u)) calc(10px * var(--sd-u));
+  background: var(--sd-bg);
+  /* Le défilement s'arrête sur une puce entière, et la première respire même
+     collée au bord : sans ces deux règles, la puce active était rognée. */
+  scroll-snap-type: x proximity;
+  scroll-padding-inline: calc(16px * var(--sd-u));
 }
-html.sd-mobile .sd-layer .sd-lib-actions:has(.sd-lib-login:not([hidden])) .sd-lib-login {
-  flex: 1 1 auto;
+html.sd-mobile .sd-layer .sd-lib-chip {
+  scroll-snap-align: start;
+  /* La hauteur est celle du doigt, pas celle de la ligne qui la contient. */
+  min-height: calc(34px * var(--sd-u));
+  line-height: 1;
+}
+html.sd-mobile .sd-layer .sd-lib-chip.is-active {
   background: var(--sd-accent);
   color: var(--sd-on-accent, #000);
   border-color: transparent;
+}
+html.sd-mobile .sd-layer .sd-lib-chip.is-empty {
+  opacity: 0.45;
+}
+html.sd-mobile .sd-layer .sd-lib-chip-n {
+  opacity: 0.62;
+  font-variant-numeric: tabular-nums;
+  margin-left: calc(3px * var(--sd-u));
+}
+html.sd-mobile .sd-layer .sd-lib-chip.is-active .sd-lib-chip-n {
+  opacity: 0.8;
+}
+
+/* --- 4c. Les lignes : une liste, pas un empilement ----------------------- */
+
+html.sd-mobile .sd-layer .sd-lib-list {
+  padding: calc(2px * var(--sd-u)) calc(12px * var(--sd-u)) calc(10px * var(--sd-u));
+}
+html.sd-mobile .sd-layer .sd-lib-row {
+  position: relative;
+  gap: calc(14px * var(--sd-u));
+  min-height: calc(66px * var(--sd-u));
+  padding: calc(7px * var(--sd-u)) calc(6px * var(--sd-u));
+  border-radius: calc(10px * var(--sd-u));
+  transition: background 0.12s ease;
+}
+html.sd-mobile .sd-layer .sd-lib-row:active {
+  background: var(--sd-bg-tint);
+}
+/* Le filet **commence après la pochette**, comme dans la bibliothèque de
+   Spotify : la vignette et son texte se lisent alors comme un seul objet. */
+html.sd-mobile .sd-layer .sd-lib-row + .sd-lib-row::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: calc(76px * var(--sd-u));
+  right: calc(6px * var(--sd-u));
+  height: 1px;
+  background: var(--sd-bg-tint);
+}
+html.sd-mobile .sd-layer .sd-lib-art {
+  border-radius: calc(6px * var(--sd-u));
+}
+/* Sans pochette lisible : un fond très discret et le **glyphe du type**. */
+html.sd-mobile .sd-layer .sd-lib-art.is-empty {
+  background: var(--sd-bg-hi);
+}
+html.sd-mobile .sd-layer .sd-lib-art.is-empty .sd-lib-glyph {
+  width: calc(24px * var(--sd-u));
+  height: calc(24px * var(--sd-u));
+  color: var(--sd-sub);
+  opacity: 0.85;
+}
+html.sd-mobile .sd-layer .sd-lib-row-liked .sd-lib-art.is-empty {
+  background: linear-gradient(135deg, var(--sd-accent), var(--sd-bg-hi));
+}
+html.sd-mobile .sd-layer .sd-lib-row-liked .sd-lib-art.is-empty .sd-lib-glyph {
+  color: #fff;
+  opacity: 1;
+}
+html.sd-mobile .sd-layer .sd-lib-name {
+  font-size: calc(15.5px * var(--sd-u));
+  font-weight: 600;
+  letter-spacing: -0.1px;
+}
+
+/* --- 4d. La phrase d'état : une ligne lisible, avec son ton ------------- */
+
+html.sd-mobile .sd-layer .sd-lib-note {
+  display: flex;
+  align-items: flex-start;
+  gap: calc(8px * var(--sd-u));
+  margin: calc(4px * var(--sd-u)) calc(16px * var(--sd-u)) 0;
+  padding: calc(10px * var(--sd-u)) calc(12px * var(--sd-u));
+  border-radius: calc(10px * var(--sd-u));
+  background: var(--sd-bg-hi);
+  font-size: calc(12.5px * var(--sd-u));
+  line-height: 1.4;
+  color: var(--sd-sub);
+}
+html.sd-mobile .sd-layer .sd-lib-note-glyph {
+  flex: 0 0 auto;
+  width: calc(16px * var(--sd-u));
+  height: calc(16px * var(--sd-u));
+  margin-top: calc(1px * var(--sd-u));
+  color: var(--sd-sub);
+}
+html.sd-mobile .sd-layer .sd-lib-note.is-warn .sd-lib-note-glyph {
+  color: var(--sd-warn, #f5a524);
+}
+html.sd-mobile .sd-layer .sd-lib-note.is-warn .sd-lib-note-text {
+  color: var(--sd-text);
+}
+html.sd-mobile .sd-layer .sd-lib-note-text {
+  min-width: 0;
+}
+
+/* --- 4e. Le diagnostic : replié, il ne prend qu'une ligne ---------------- */
+
+html.sd-mobile .sd-layer .sd-lib-log {
+  margin: calc(6px * var(--sd-u)) calc(16px * var(--sd-u)) 0;
+  padding: 0;
+  border-radius: calc(10px * var(--sd-u));
+  background: var(--sd-bg-hi);
+  overflow: hidden;
+}
+html.sd-mobile .sd-layer .sd-lib-log-title {
+  display: flex;
+  align-items: center;
+  gap: calc(6px * var(--sd-u));
+  margin: 0;
+  padding: calc(10px * var(--sd-u)) calc(12px * var(--sd-u));
+  font-size: calc(12.5px * var(--sd-u));
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--sd-sub);
+  cursor: pointer;
+  list-style: none;
+}
+html.sd-mobile .sd-layer .sd-lib-log-title::-webkit-details-marker {
+  display: none;
+}
+html.sd-mobile .sd-layer .sd-lib-log-n {
+  padding: 0 calc(6px * var(--sd-u));
+  border-radius: 999px;
+  background: var(--sd-bg-tint);
+  font-size: calc(11px * var(--sd-u));
+  font-variant-numeric: tabular-nums;
+}
+html.sd-mobile .sd-layer .sd-lib-log-chev {
+  display: inline-flex;
+  margin-left: auto;
+  transition: transform 0.15s ease;
+}
+html.sd-mobile .sd-layer .sd-lib-log-chev svg {
+  width: calc(16px * var(--sd-u));
+  height: calc(16px * var(--sd-u));
+}
+html.sd-mobile .sd-layer .sd-lib-log[open] .sd-lib-log-chev {
+  transform: rotate(180deg);
+}
+html.sd-mobile .sd-layer .sd-lib-log-list {
+  max-height: calc(150px * var(--sd-u));
+  overflow-y: auto;
+  padding: 0 calc(12px * var(--sd-u)) calc(10px * var(--sd-u)) calc(24px * var(--sd-u));
+  scrollbar-width: thin;
+}
+
+/* --- 4f. Les actions, et le filtre vide ---------------------------------- */
+
+html.sd-mobile .sd-layer .sd-lib-actions {
+  padding: calc(12px * var(--sd-u)) calc(16px * var(--sd-u)) calc(20px * var(--sd-u));
+  gap: calc(8px * var(--sd-u));
+}
+html.sd-mobile .sd-layer .sd-lib-actions:has(.sd-lib-login:not([hidden])) .sd-lib-retry,
+html.sd-mobile .sd-layer .sd-lib-actions:has(.sd-lib-login:not([hidden])) .sd-lib-login {
+  flex: 1 1 auto;
+}
+html.sd-mobile .sd-layer .sd-lib-actions:has(.sd-lib-login:not([hidden])) .sd-lib-login {
+  background: var(--sd-accent);
+  color: var(--sd-on-accent, #000);
+  border-color: transparent;
+}
+/* Rien dans ce filtre : la phrase est au centre, la liste est rangée,
+   et le compte de l'en-tête dit déjà combien d'éléments existent. */
+html.sd-mobile .sd-layer .sd-lib-nofilter .sd-lib-note {
+  margin-top: calc(28px * var(--sd-u));
+  flex-direction: column;
+  align-items: center;
+  background: transparent;
+  text-align: center;
+}
+html.sd-mobile .sd-layer .sd-lib-nofilter .sd-lib-note-glyph {
+  width: calc(28px * var(--sd-u));
+  height: calc(28px * var(--sd-u));
+  margin: 0 0 calc(4px * var(--sd-u));
+}
+html.sd-mobile .sd-layer .sd-lib-nofilter .sd-lib-list {
+  display: none;
 }

@@ -290,8 +290,11 @@
       libraryLikedHint: "Vos titres likés",
       libraryIgnored: "%s playlists recommandées ignorées (elles ne sont pas au compte)",
       libraryIgnoredOne: "1 playlist recommandée ignorée (elle n'est pas au compte)",
-      librarySidebar: "Lues dans la liste de Spotify (%s éléments) : l'API du lecteur n'a pas répondu.",
-      libraryLog: "Derniers essais",
+      librarySidebar: "Lus dans la liste de Spotify (%s éléments) — l'API du lecteur n'a pas répondu.",
+      libraryLog: "Détails des essais",
+      libraryLogHint: "Pourquoi l'API n'a pas répondu",
+      libraryCountOne: "%s élément",
+      libraryCountMany: "%s éléments",
       libraryTokenAge: "Jeton capté %s · /me → %s",
       libraryTokenRefresh: "Jeton redemandé à la page : %s",
       libraryRetry: "Réessayer",
@@ -1322,6 +1325,8 @@
     cloudOffLine:
       '<g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 18h8a4 4 0 0 0 .8-7.9 5.5 5.5 0 0 0-8-2.6M6.6 18a3.8 3.8 0 0 1-.4-7.6"/><path d="M3.5 3.5l17 17"/></g>',
     checkLine: '<path d="M9.6 16.3 5.3 12l-1.4 1.4 5.7 5.7L20.4 7.4 19 6z"/>',
+    infoLine:
+      '<g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5.5M12 7.6v.2"/></g>',
     shieldLine:
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v6c0 4.2-2.9 7.6-7 9-4.1-1.4-7-4.8-7-9V6l7-3z"/><path d="M9.5 12l1.8 1.8L14.8 10"/></svg>',
     arrowUndo:
@@ -5861,7 +5866,10 @@
       el.setAttribute("role", "region");
       el.setAttribute("aria-label", Settings.labels.library);
       el.innerHTML =
-        '<div class="sd-lib-head"><h1 class="sd-lib-title"></h1><span class="sd-lib-sum"></span></div>' +
+        '<div class="sd-lib-head">' +
+        '<div class="sd-lib-id"><h1 class="sd-lib-title"></h1><span class="sd-lib-sum"></span></div>' +
+        '<span class="sd-lib-count" hidden></span>' +
+        "</div>" +
         '<div class="sd-lib-chips" role="tablist">' +
         '<button class="sd-chip sd-lib-chip" type="button" role="tab" data-filter="all"></button>' +
         '<button class="sd-chip sd-lib-chip" type="button" role="tab" data-filter="playlist"></button>' +
@@ -5870,10 +5878,19 @@
         '<button class="sd-chip sd-lib-chip" type="button" role="tab" data-filter="show"></button>' +
         "</div>" +
         '<div class="sd-lib-list"></div>' +
-        '<p class="sd-lib-note"></p>' +
+        /* **La phrase d'état, et son icône.** Elle dit pourquoi la liste est ce
+           qu'elle est (repli, rien à montrer, panne) : c'est la première chose
+           qu'on lit quand la bibliothèque n'est pas celle qu'on attendait. */
+        '<p class="sd-lib-note" hidden>' +
+        svg(ICONS.infoLine, "sd-lib-note-glyph") +
+        '<span class="sd-lib-note-text"></span>' +
+        "</p>" +
         /* Le journal des essais : sans lui, « la bibliothèque ne reconnaît pas
-           mes playlists » oblige à deviner entre le jeton, le réseau et l'API. */
-        '<div class="sd-lib-log" hidden><h2 class="sd-lib-log-title"></h2><ul class="sd-lib-log-list"></ul></div>' +
+           mes playlists » oblige à deviner entre le jeton, le réseau et l'API.
+           **Replié par défaut** : c'est un diagnostic, pas la bibliothèque —
+           déployé sur huit lignes, il occupait plus d'écran que les playlists. */
+        '<details class="sd-lib-log" hidden><summary class="sd-lib-log-title"></summary>' +
+        '<ul class="sd-lib-log-list"></ul></details>' +
         '<div class="sd-lib-actions">' +
         '<button class="sd-btn sd-lib-retry" type="button"></button>' +
         /* Sans session, « Réessayer » ne peut rien donner : la porte de sortie
@@ -5885,6 +5902,26 @@
       this.el = el;
       UI.layer.appendChild(el);
       var self = this;
+      /* **La hauteur de l'en-tête, mesurée.** Les filtres se collent juste en
+         dessous (`top: var(--sd-lib-head-h)`), et cette hauteur dépend de la
+         police de l'appareil : la deviner en dur décalerait les puces d'un
+         téléphone à l'autre. On la relève, et on la relève encore quand la page
+         change de taille (rotation, clavier, densité). */
+      var head = $(".sd-lib-head", el);
+      var mesure = function () {
+        if (!head) return;
+        var h = head.getBoundingClientRect().height;
+        if (h > 0) el.style.setProperty("--sd-lib-head-h", Math.round(h) + "px");
+      };
+      this.measureHead = mesure;
+      mesure();
+      if (window.ResizeObserver && head) {
+        try {
+          new ResizeObserver(mesure).observe(head);
+        } catch (e) {
+          /* pas de mesure continue : la valeur posée au montage suffit */
+        }
+      }
       $$(".sd-lib-chip", el).forEach(function (chip) {
         chip.addEventListener("click", function () {
           self.filter = chip.getAttribute("data-filter") || "all";
@@ -6023,6 +6060,10 @@
         chip.appendChild(compte);
         var active = key === Library.filter;
         chip.classList.toggle("is-active", active);
+        /* Une catégorie vide est **grisée**, pas retirée : la puce dit qu'elle
+           existe et qu'il n'y a rien dedans — la faire disparaître ferait
+           bouger les autres sous le doigt. */
+        chip.classList.toggle("is-empty", !n && !active);
         chip.setAttribute("aria-selected", active ? "true" : "false");
       });
       var list = $(".sd-lib-list", this.el);
@@ -6086,7 +6127,18 @@
             ];
         logBox.hidden = !lines.length && !withToken.length;
         var logTitle = $(".sd-lib-log-title", logBox);
-        if (logTitle) logTitle.textContent = Settings.labels.libraryLog;
+        if (logTitle) {
+          logTitle.textContent = "";
+          logTitle.appendChild(document.createTextNode(Settings.labels.libraryLogHint));
+          var count = document.createElement("span");
+          count.className = "sd-lib-log-n";
+          count.textContent = String(withToken.length + lines.length);
+          logTitle.appendChild(count);
+          var chev = document.createElement("span");
+          chev.className = "sd-lib-log-chev";
+          chev.innerHTML = svg(ICONS.chevronDown);
+          logTitle.appendChild(chev);
+        }
         var logList = $(".sd-lib-log-list", logBox);
         if (logList) {
           logList.textContent = "";
@@ -6101,8 +6153,19 @@
       var actions = $(".sd-lib-actions", this.el);
       var retry = $(".sd-lib-retry", this.el);
       var message = this.note();
-      note.textContent = message;
+      /* Le texte dans son propre élément : l'icône de la phrase n'est pas
+         effacée à chaque repeint (et `textContent` reste exactement le
+         message — c'est ce que lisent le banc et la sonde). */
+      var noteText = $(".sd-lib-note-text", note);
+      if (noteText) noteText.textContent = message;
+      else note.textContent = message;
       note.hidden = !message;
+      /* Le ton : une **panne** (rouge discret) ne se lit pas comme une simple
+         information (« ces lignes viennent de Spotify »). */
+      var panne =
+        this.state === "no-token" || this.state === "error" || this.state === "guest";
+      note.classList.toggle("is-warn", !!message && panne);
+      note.classList.toggle("is-info", !!message && !panne);
       /* Quand il n'y a rien à montrer, on dit quoi faire : réessayer, et où
          retrouver la bibliothèque de Spotify si on la préfère. */
       if (retry) retry.textContent = Settings.labels.libraryRetry;
@@ -6127,6 +6190,18 @@
         actions.hidden = !nothing && (!login || login.hidden);
         if (nothing && retry) retry.setAttribute("aria-label", Settings.labels.libraryRetry + " — " + Settings.labels.libraryHint);
       }
+      /* L'en-tête vient peut-être de changer de hauteur (résumé plus long,
+         libellés, police de l'appareil) : les filtres se recollent en dessous. */
+      if (this.measureHead) this.measureHead();
+      /* **Combien de lignes, pour de vrai.** Le compte suit le filtre : « 3 / 12 »
+         dit d'un coup d'œil qu'on regarde une partie de la bibliothèque. */
+      var badge = $(".sd-lib-count", this.el);
+      if (badge) {
+        var taille = this.items.length;
+        var quoi = shown.length + (this.filter === "all" ? "" : " / " + taille);
+        badge.textContent = Settings.labels[taille === 1 ? "libraryCountOne" : "libraryCountMany"].replace("%s", quoi);
+        badge.hidden = !taille;
+      }
       if (!sameList) list.textContent = "";
       if (sameList) return shown.length;
       shown.forEach(function (row) {
@@ -6142,7 +6217,19 @@
           img.setAttribute("loading", "lazy");
           art.appendChild(img);
         } else {
-          art.innerHTML = svg(ICONS.heartSolid, "sd-lib-glyph");
+          /* **Sans pochette, le type se voit quand même.** Un cœur pour tout le
+             monde faisait ressembler un album à une playlist ; chaque type a son
+             glyphe, et la vignette se lit comme un repère, pas comme une image
+             manquante. */
+          var glyphes = {
+            liked: ICONS.heartSolid,
+            playlist: ICONS.musicNote,
+            album: ICONS.discLine,
+            artist: ICONS.personLine,
+            show: ICONS.micLine,
+          };
+          art.classList.add("is-empty");
+          art.innerHTML = svg(glyphes[row.type] || ICONS.musicNote, "sd-lib-glyph");
         }
         var text = document.createElement("span");
         text.className = "sd-lib-text";

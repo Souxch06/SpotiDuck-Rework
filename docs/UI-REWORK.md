@@ -3388,3 +3388,75 @@ page est celle du bureau :
 * la sonde CI relève désormais, pour chaque commande, **toutes** les copies
   trouvées (bureau + page), leur taille et leur état, ainsi que nos huit boutons
   (taille et élément réellement au centre).
+
+## §51 — La bibliothèque, lisible (v2.11.16)
+
+Demande, capture à l'appui : « Voici l'onglet bibliothèque qu'il faut rendre plus
+beau. » La capture montrait trois choses — et elles se mesurent, elles ne se
+discutent pas.
+
+### 1. Ce que la capture disait
+
+* **Les filtres étaient coupés en deux.** Les puces « Tout / Playlists / Albums /
+  Artistes / Podcasts » apparaissaient rognées à mi-hauteur. La cause est dans le
+  CSS, pas dans le dessin : le conteneur de la page défile (`overflow-y: auto`),
+  et le moteur de mise en page **distribue la hauteur** entre ses enfants — il
+  les rétrécit dès que leur total dépasse l'écran. La liste est longue par
+  nature ; tout le reste était écrasé avec elle. Les enfants de la page ne se
+  laissent plus comprimer (`flex: 0 0 auto`), et l'accueil reçoit la même règle
+  (il défile aussi).
+* **Le journal des essais occupait plus d'écran que les playlists.** Déployé, il
+  poussait la liste hors de vue. Il est maintenant **replié** (`<details>`), avec
+  un résumé qui dit ce qu'on y trouverait (« Pourquoi l'API n'a pas répondu ») et
+  combien d'essais il contient.
+* **La phrase d'état se lisait comme un paragraphe** et se confondait avec la
+  liste. Elle est devenue un **bloc d'état** : une icône, un fond discret, et un
+  ton — neutre pour une information (« ces lignes viennent de la liste de
+  Spotify »), chaud pour une panne (session fermée, API muette).
+
+### 2. Ce qui rend la page plus lisible
+
+* **l'en-tête tient sur une ligne** : titre à gauche, **compte des lignes** dans
+  une pastille à droite (« 15 éléments », « 3 / 12 » quand un filtre est actif) ;
+  la section « plus propre » du pass 50 avait laissé la règle d'origine en
+  `column`, et le compte se retrouvait sous le titre, le résumé débordant à
+  gauche et à droite (mesuré : `id` de 509 px pour 412 px d'écran) ;
+* **en-tête et filtres sont collants**, sans interstice : au défilement, une
+  ligne se glissait *entre* les deux (visible sur la capture) — le `gap` du
+  conteneur a disparu, chaque bloc porte sa propre respiration. La hauteur de
+  l'en-tête est **mesurée** (`ResizeObserver`) pour que les filtres s'y collent
+  exactement, à chaque changement de police ou de densité ;
+* **les puces ne se coupent plus** : hauteur minimale propre, accroche de
+  défilement, et une catégorie **vide** est grisée au lieu de disparaître (les
+  autres ne bougent plus sous le doigt) ;
+* **les lignes se lisent comme une liste** : filet qui commence après la
+  pochette, vignette de 56 px, titre un peu plus grand, coins arrondis ;
+* **chaque type a son glyphe** quand la pochette manque : un cœur pour les titres
+  likés, une note pour une playlist, un disque pour un album, un buste pour un
+  artiste, un micro pour un podcast — avant, **tous** portaient le même cœur, et
+  un album ressemblait à une playlist.
+
+### Vérifications
+
+Un banc jsdom ne voit rien de tout cela (aucune mise en page) : la mesure se fait
+en **Chrome**, sur le banc de démonstration, avec un téléphone de 412×915 et un
+jeu de données complet (5 playlists, 3 albums, 4 artistes, 2 podcasts, 87 titres
+likés).
+
+* **avant → après**, mesuré : en-tête `53 px` en colonne → `60 px` en ligne ;
+  filtres `12 px` écrasés → `52 px` entiers ; puce rognée `oui` → `non` ;
+  sous le bord haut au défilement `div.sd-lib-head` (l'en-tête, et non une
+  ligne) ; accroche des filtres `60 px` pour un en-tête de `60 px` ;
+* la capture avant/après (repli « liste de Spotify », le cas de la capture de
+  l'utilisateur) est dans `screenshots/library_board.png` pour l'après ;
+* banc jsdom : **138/138**, complété par sept vérifications de propreté —
+  journal replié et son compte d'essais, compte de l'en-tête qui suit le filtre,
+  puce vide marquée, phrase d'état avec icône et ton, glyphes par type ;
+* audit : **0 erreur**, avec des garde-fous sur chacun de ces points, et quatre
+  régressions volontaires (contrainte d'enfants retirée, en-tête remis en
+  colonne, journal redevenu un bloc déployé, une icône de type changée) sont
+  détectées ;
+* la sonde CI mesure la bibliothèque **en train de défiler** : collage de
+  l'en-tête, hauteur des filtres, puce rognée, élément sous le bord, compte,
+  état du journal — et alerte si l'un d'eux se dégrade sur la vraie page.
+

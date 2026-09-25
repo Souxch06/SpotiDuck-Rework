@@ -1472,6 +1472,45 @@ if (!/\.sd-lib-nofilter/.test(css) || !/sd-lib-nofilter/.test(runtime)) {
   errors.push("un filtre qui ne montre rien ne s'explique plus : la bibliothèque paraîtrait vide");
 }
 
+/* **Pass 51 — la bibliothèque, lisible.** « Rends l'onglet bibliothèque plus
+   propre » : ce qui suit empêche de revenir en arrière sans le voir — les
+   enfants écrasés par un conteneur qui défile, l'en-tête en colonne, les
+   filtres sans point d'accroche, le journal déployé, une puce vide
+   indiscernable, un cœur pour toutes les pochettes manquantes. */
+const libCss = read("src/inject/79-library.css");
+if (!/\.sd-lib > \*\s*\{[^}]*flex: 0 0 auto/.test(libCss)) {
+  errors.push("rien ne protège les enfants de la bibliothèque : le moteur les rétrécit dès que la liste dépasse l'écran (filtres coupés en deux, en-tête écrasé)");
+}
+if (!/\.sd-lib-head \{[^}]*flex-direction: row/s.test(libCss)) {
+  errors.push("l'en-tête de la bibliothèque n'est plus en ligne : le compte repasse sous le titre et le résumé déborde");
+}
+if (!/position: sticky/.test(libCss) || !/--sd-lib-head-h/.test(libCss)) {
+  errors.push("l'en-tête de la bibliothèque ne se colle plus au-dessus des filtres : au défilement, les puces passent dessous");
+}
+if (!/--sd-lib-head-h/.test(runtime) || !/measureHead/.test(runtime)) {
+  errors.push("la hauteur de l'en-tête n'est plus mesurée : le point d'accroche des filtres serait faux (le compte et le résumé changent la hauteur)");
+}
+if (!/<details class="sd-lib-log"/.test(runtime)) {
+  errors.push("le journal des essais n'est plus repliable : déployé, il reprend la moitié de l'écran (« plus propre »)");
+}
+if (!/libraryLogHint/.test(runtime) || !/sd-lib-log-n/.test(runtime)) {
+  errors.push("le résumé du journal ne dit plus ce qu'on y trouverait ni combien d'essais");
+}
+if (!/sd-lib-count/.test(runtime) || !/libraryCountOne/.test(runtime) || !/libraryCountMany/.test(runtime)) {
+  errors.push("l'en-tête n'annonce plus le nombre de lignes : la page ne dit pas combien d'éléments elle montre");
+}
+if (!/sd-lib-note-text/.test(runtime) || !/sd-lib-note-glyph/.test(runtime)) {
+  errors.push("la phrase d'état n'a plus son icône ni son texte isolé : elle se lit comme un paragraphe au lieu d'un état");
+}
+if (!/is-empty/.test(runtime) || !/\.sd-lib-chip\.is-empty/.test(libCss)) {
+  errors.push("une catégorie vide ne se distingue plus d'une catégorie remplie");
+}
+for (const [type, icone] of [["liked", "heartSolid"], ["playlist", "musicNote"], ["album", "discLine"], ["artist", "personLine"], ["show", "micLine"]]) {
+  if (!new RegExp(type + ": ICONS\\." + icone).test(runtime)) {
+    errors.push(`une ligne « ${type} » sans pochette n'a plus son propre glyphe : tous les types se ressemblent`);
+  }
+}
+
 /* Rapport ------------------------------------------------------------------ */
 const size = (n) => String(n).padStart(2);
 console.log(`\nSpotiDuck — liens internes\n`);
