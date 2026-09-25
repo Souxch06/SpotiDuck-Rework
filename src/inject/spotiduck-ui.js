@@ -4278,7 +4278,11 @@
           self.reason = "";
           return r.data;
         }
-        if (r && r.why) self.reason = self.reason ? self.reason + " · " + r.why : r.why;
+        /* Cinq requêtes pour la même panne ne font pas cinq fois la même
+           raison : la page affiche une phrase, pas un journal. */
+        if (r && r.why && self.reason.indexOf(r.why) < 0) {
+          self.reason = self.reason ? self.reason + " · " + r.why : r.why;
+        }
         if (r && r.status) self.status = r.status;
         return null;
       });

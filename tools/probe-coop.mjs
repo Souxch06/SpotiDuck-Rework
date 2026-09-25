@@ -577,6 +577,7 @@ const SCROLLPROBE = async () => {
     const gone = el.hidden === true || c.display === "none" || r.width < 2 || r.height < 2;
     return (gone ? "caché" : "visible") + " " + Math.round(r.width) + "x" + Math.round(r.height);
   };
+  const coque = document.querySelector(".sd-layer") ? "coque posée" : "coque absente";
   const before = size(".sd-mini");
   const node = document.querySelector(".main-view-container__scroll-node, #main-view");
   const start = node ? node.scrollTop : window.scrollY;
@@ -588,6 +589,7 @@ const SCROLLPROBE = async () => {
   window.scrollTo(0, window.scrollY - 900);
   await new Promise((r) => setTimeout(r, 400));
   return {
+    coque: coque,
     before: before,
     after: after,
     classe: document.documentElement.classList.contains("sd-mini-on") ? "sd-mini-on" : "sans sd-mini-on",
@@ -935,12 +937,25 @@ async function main() {
 
       /* **Le lecteur pendant le défilement** : il ne doit pas s'effacer. */
       if (hasNav === true) {
+        /* Une navigation a pu emporter la coque (l'appui sur « accueil » juste
+           avant, ou une redirection de Spotify) : sans coque il n'y a pas de
+           lecteur à mesurer, et la mesure ne dirait rien. On la repose, et si
+           elle manque toujours, on le dit au lieu de publier un « absent ». */
+        const missing = await safely(() => page.evaluate(() => !document.querySelector(".sd-mini")));
+        if (missing === true) {
+          await safely(() => page.evaluate(target.mode === "original" ? original : bundle));
+          await sleep(2500);
+        }
         const scroll = await safely(() => page.evaluate(SCROLLPROBE));
         if (scroll) {
-          note(
-            `Lecteur au défilement — ${target.label}`,
-            `avant=${scroll.before} · après=${scroll.after} · ${scroll.classe} · place réservée=${scroll.bas}`
-          );
+          const line =
+            `${scroll.coque} · avant=${scroll.before} · après=${scroll.after} · ${scroll.classe} · ` +
+            `place réservée=${scroll.bas || "—"}`;
+          if (scroll.before === "absent" || scroll.after === "absent") {
+            warn(`Lecteur au défilement — ${target.label}`, line);
+          } else {
+            note(`Lecteur au défilement — ${target.label}`, line);
+          }
           report.pages.push({ label: `${target.label} (défilement)`, scroll });
         }
       }
