@@ -4316,6 +4316,12 @@
 
     /** À chaque changement de vue : on entre dans la bibliothèque, ou on en sort. */
     enter: function () {
+      /* La page est construite même hors de son onglet (et reste cachée) : c'est
+         ce qui permet à la sonde et au diagnostic de la **mesurer** partout —
+         « bibliothèque absente » ne doit pas être confondu avec « masquée
+         exprès », c'est exactement l'erreur qui a coûté deux versions à
+         l'accueil. */
+      this.build();
       if (State.tab !== "library") {
         this.leave();
         return false;

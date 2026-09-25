@@ -1489,6 +1489,14 @@ await checkAsync("without a token the library keeps Spotify's sidebar (never an 
   const api = dom.window.SpotiDuckUI;
   const page = dom.window.document;
 
+  api.state.tab = "home";
+  api.library.enter();
+  /* La page existe même hors de son onglet (cachée) : c'est ce qui permet de la
+     mesurer partout — « absente » ne doit pas se confondre avec « masquée ». */
+  const panel = page.querySelector(".sd-lib");
+  assert(panel, "la page de bibliothèque n'est même pas construite");
+  assert(panel.hidden === true, "la bibliothèque s'affiche alors qu'on est sur l'accueil");
+
   api.state.tab = "library";
   api.library.enter();
   await tick(120);
