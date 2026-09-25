@@ -976,11 +976,17 @@ for (const needle of ["sd-stat-lead", "sd-stat-hint", "sd-stat-note"]) {
    quand on scroll vers le bas ». La barre de lecture de Spotify quitte l'arbre
    pendant un défilement ; la présence du mini-lecteur ne doit donc plus dépendre
    d'une lecture instantanée. */
-if (!/seen: false/.test(libraryCode) || !/Spotify\.seen = true/.test(libraryCode)) {
-  errors.push("le lecteur n'est plus « vu une fois pour toutes » : il s'effacerait de nouveau pendant un défilement");
+if (!/html\.classList\.add\("sd-mini-on"\)/.test(libraryCode)) {
+  errors.push("le mini-lecteur n'est plus affiché en permanence : il peut de nouveau s'effacer (deux fois signalé)");
 }
-if (!/html\.classList\.toggle\("sd-mini-on", !!s\.hasTrack \|\| Spotify\.ready\(\) \|\| Spotify\.seen\)/.test(libraryCode)) {
-  errors.push("l'affichage du mini-lecteur ne tient plus compte du lecteur déjà vu");
+if (!/Spotify\.seen = Spotify\.seen \|\|/.test(libraryCode)) {
+  errors.push("le lecteur n'est plus retenu quand il a été vu une fois");
+}
+if (!/sd-mini-signed-out/.test(libraryCode)) {
+  errors.push("le mini-lecteur ne dit plus qu'une session est fermée : le bas de l'écran resterait muet");
+}
+if (!/document\.addEventListener\(\s*"scroll"/.test(libraryCode)) {
+  errors.push("aucun repeint au défilement : la coque ne corrige plus ce que Spotify efface pendant qu'on fait défiler");
 }
 
 /* **L'API est atteinte.** La capture du 25/09 : la page de bibliothèque
@@ -1010,8 +1016,37 @@ if (!/var step = function \(index\)/.test(libraryCode) || !/step\(index \+ 1\)/.
 if (/Promise\.all\(\[\s*\n\s*this\.get\(/.test(libraryCode)) {
   errors.push("les cinq sources de la bibliothèque repartent en parallèle, alors que chaque appel natif bloque le fil JavaScript");
 }
-if (!/if \(!data && index === 0 && Net\.status === 0\)/.test(libraryCode)) {
+if (!/!data &&[\s\S]{0,120}index === 0[\s\S]{0,200}Net\.status === 0[\s\S]{0,200}Net\.status === 401/.test(libraryCode)) {
   errors.push("la bibliothèque n'arrête plus ses appels quand rien ne répond : l'utilisateur attendrait pour rien");
+}
+/* Et quand le jeton est **refusé** (401/403/419), les cinq autres appels posent
+   la même question avec le même jeton : ils attendraient pour rien de plus. */
+["401", "403", "419"].forEach(function (code) {
+  if (libraryCode.indexOf("Net.status === " + code) === -1) {
+    errors.push("la bibliothèque insiste après un refus de jeton (" + code + ") : cinq attentes inutiles avant de dire pourquoi");
+  }
+});
+/* **Le jeton redemandé à la page.** Constaté le 25/09 : « il n'arrive pas à
+   reconnaître mes playlists ». Quand la capture n'a rien attrapé (ou que Spotify
+   a refusé le jeton), il n'existait aucun moyen de relire la bibliothèque sans
+   se reconnecter. La page du lecteur sait donner son jeton — même origine, donc
+   pas de contrôle d'accès — et la coque le lui redemande. */
+if (!/refreshToken: function/.test(libraryCode) || !/get_access_token/.test(libraryCode)) {
+  errors.push("le jeton n'est plus redemandé à la page : une bibliothèque sans jeton resterait vide, sans issue");
+}
+if (!/forgetToken: function/.test(libraryCode) || !/Api\.forgetToken\(\)/.test(libraryCode)) {
+  errors.push("un jeton refusé n'est jamais oublié : la coque insisterait avec le même jeton");
+}
+if (!/isAnonymous/.test(libraryCode)) {
+  errors.push("un jeton anonyme est accepté comme un vrai : la page dirait « compte vide » à tort");
+}
+
+/* Le repli qui rend la page utile même sans API : la liste de Spotify. */
+if (!/fromSpotifyList: function \(\)/.test(libraryCode) || !/fromSidebar/.test(libraryCode)) {
+  errors.push("aucun repli sur la liste de Spotify : sans API, la bibliothèque resterait vide");
+}
+if (!/sd-lib-log/.test(runtime)) {
+  errors.push("le journal des essais a disparu : une capture ne suffirait plus à dire pourquoi la bibliothèque est vide");
 }
 if (!/libraryWhy: "Raison : %s\."/.test(runtime) || !/Settings\.labels\.libraryError \+ " " \+ Settings\.labels\.libraryWhy/.test(libraryCode)) {
   errors.push("une panne de la bibliothèque ne dit plus sa raison : il faudrait deviner au lieu de lire une capture");
@@ -1150,6 +1185,18 @@ if (
   !/Lecteur au défilement — /.test(probeTool)
 ) {
   errors.push("la sonde ne mesure plus l'appui sur l'onglet Bibliothèque : le « rien ne s'affiche » du 25/09 ne serait plus vu en CI");
+}
+/* Ce que la sonde doit distinguer pour qu'une capture suffise : notre barre de
+   la barre de Spotify, le lecteur pendant **deux** relevés de défilement, et ce
+   que la page dit (raison, journal). */
+if (!/barre-spotify=/.test(probeTool) || !/lecteurOn/.test(probeTool)) {
+  errors.push("la sonde ne distingue plus la barre de Spotify de la nôtre : une barre étrangère sur nos onglets passerait inaperçue");
+}
+if (!/bas\+900ms=/.test(probeTool) || !/after2/.test(probeTool)) {
+  errors.push("la sonde ne relève plus le lecteur deux fois pendant le défilement : une disparition différée passerait inaperçue");
+}
+if (!/journal=/.test(probeTool) || !/dit=/.test(probeTool)) {
+  errors.push("la sonde ne relève plus ce que la page dit (raison, journal) : une capture ne suffirait plus à diagnostiquer");
 }
 if (!/out\.verdict/.test(probeTool) || !/homePath/.test(probeTool)) {
   errors.push("la sonde ne relève plus ce que la coque conclut de la page (état, chemin d'accueil, ancre)");

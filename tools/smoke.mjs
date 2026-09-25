@@ -868,6 +868,53 @@ check("the mini player exists even before anything plays (empty state)", () => {
   return "présent, avec état vide ✓";
 });
 
+await checkAsync("le lecteur reste affiché sans session, et le dit", async () => {
+  /* Signalé deux fois : « le lecteur disparaît quand on scroll vers le bas »,
+     puis « le lecteur a de nouveau disparu ». La barre ne dépend donc plus
+     d'aucune lecture d'état : elle est **toujours** là. Quand la session est
+     fermée, elle le dit — et son appui mène à la connexion, au lieu de laisser
+     le bas de l'écran vide. */
+  const dom = new JSDOM(
+    /* Sans lecteur **et** avec un lien de connexion de Spotify : la session est
+       fermée, et la page ne peut pas le deviner autrement. */
+    "<!doctype html><html><body><a href='/login'>Se connecter</a></body></html>",
+    { url: "https://open.spotify.com/intl-fr/", pretendToBeVisual: true, runScripts: "dangerously" }
+  );
+  dom.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => undefined }));
+  dom.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(220);
+  const page = dom.window.document;
+  assert(page.documentElement.classList.contains("sd-mobile"), "la coque n'est pas en mode téléphone");
+  assert(
+    page.documentElement.classList.contains("sd-mini-on"),
+    "le lecteur n'est pas affiché alors qu'aucune piste ne joue : le bas de l'écran est vide"
+  );
+  assert(
+    page.documentElement.classList.contains("sd-mini-signed-out"),
+    "la session fermée n'est pas signalée au CSS"
+  );
+  const title = page.querySelector(".sd-mini-title");
+  assert(title && title.textContent.trim().length > 0, "le lecteur ne dit pas pourquoi il est vide");
+  assert(title.textContent !== "Aucun titre en lecture", "le lecteur annonce « aucun titre » au lieu de la session fermée : " + title.textContent);
+
+  /* Et la bibliothèque propose la connexion, à côté de « Réessayer » : sans
+     session, réessayer ne peut rien donner (« il n'arrive pas à reconnaître mes
+     playlists »). */
+  const ui = dom.window.SpotiDuckUI;
+  ui.state.tab = "library";
+  ui.library.load(true);
+  await tick(180);
+  const login = page.querySelector(".sd-lib-login");
+  assert(login, "aucune porte de sortie vers la connexion dans la bibliothèque");
+  assert(login.hidden === false, "la porte de sortie vers la connexion reste cachée sans session");
+  assert(
+    /^https:\/\/accounts\.spotify\.com\/.*allow_password=1/.test(login.getAttribute("href") || ""),
+    "le bouton de connexion ne mène pas à la connexion classique : " + login.getAttribute("href")
+  );
+  dom.window.close();
+  return "barre toujours là · session fermée dite · connexion proposée ✓";
+});
+
 await checkAsync("the mini player carries the original app's fourth row", async () => {
   /* Paroles · karaoké · file d'attente · appareils · volume, comme dans
      l'application d'origine — chaque commande branchée sur celle de Spotify. */
@@ -1455,6 +1502,9 @@ await checkAsync("the library shows the account's playlists, albums, artists and
     runScripts: "dangerously",
   });
   const answers = {
+    /* `/me` d'abord : c'est **lui** qui dit à quel compte appartient le jeton.
+       Sans réponse de sa part, la page ne prétend plus que le compte est vide. */
+    "/me": { id: "moi", display_name: "Moi" },
     "/me/playlists?limit=50": {
       total: 2,
       items: [
@@ -1564,6 +1614,7 @@ await checkAsync("the library shows the account's playlists, albums, artists and
   );
   assert(page.querySelector(".sd-lib-row-playlist .sd-lib-art img"), "la pochette de la playlist n'est pas affichée");
   assert(/Playlists 2/.test(page.querySelector(".sd-lib-sum").textContent), "le résumé ne compte pas les playlists : " + page.querySelector(".sd-lib-sum").textContent);
+  assert(/Compte Moi/.test(page.querySelector(".sd-lib-sum").textContent), "le résumé ne nomme pas le compte lu : " + page.querySelector(".sd-lib-sum").textContent);
   const chips = [...page.querySelectorAll(".sd-lib-chip")];
   assert(chips.length === 5, `5 filtres attendus, ${chips.length} trouvé(s)`);
   assert(
@@ -1623,6 +1674,115 @@ await checkAsync("the library shows the account's playlists, albums, artists and
   return "6 lignes lues à la source · filtres, compteurs, adresses, masquage ✓";
 });
 
+await checkAsync("la bibliothèque lit la liste de Spotify quand l'API ne répond pas", async () => {
+  /* Signalé le 25/09 : « la bibliothèque est toujours buguée, il n'arrive pas à
+     reconnaître mes playlists ». L'API du lecteur peut refuser le jeton, se
+     taire, ou n'avoir rien à dire — et la page restait alors sur un constat
+     d'échec alors que Spotify, lui, **affiche déjà** la bibliothèque du compte
+     dans sa barre latérale. Ce test prend le cas d'un jeton refusé et vérifie
+     que les lignes de Spotify prennent le relais, avec la raison écrite noir sur
+     blanc (et le journal des essais, pour qu'une capture suffise). */
+  const dom = new JSDOM(
+    "<!doctype html><html><body><div id='Desktop_LeftSidebar_Id'>" +
+      "<a href='/playlist/abc?si=1'><img src='https://i.scdn.co/image/p' alt=''/><span>Mes tubes</span></a>" +
+      "<a href='/playlist/abc?si=1'><span>Mes tubes</span></a>" +
+      "<a href='/album/def'><span>Album Un</span></a>" +
+      "<a href='/artist/ghi'><span>Artiste Suivi</span></a>" +
+      "<a href='/search'>Rechercher</a>" +
+      "</div><main></main></body></html>",
+    { url: "https://open.spotify.com/intl-fr/", pretendToBeVisual: true, runScripts: "dangerously" }
+  );
+  dom.window.fetch = () => Promise.resolve({ ok: false, status: 401, json: () => Promise.resolve({}) });
+  dom.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => undefined }));
+  dom.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(200);
+  const api = dom.window.SpotiDuckUI;
+  const page = dom.window.document;
+  /* Un jeton qui sera **refusé** : le cas du téléphone dont la session a expiré
+     sans que la page s'en aperçoive. */
+  const xhr = new dom.window.XMLHttpRequest();
+  xhr.open("GET", "https://api.spotify.com/v1/me");
+  xhr.setRequestHeader("Authorization", "Bearer jeton-perime");
+  api.state.tab = "library";
+  api.library.load(true);
+  for (let i = 0; i < 40 && api.library.state === "loading"; i++) await tick(25);
+
+  assert(api.library.items.length === 3, `3 lignes de la liste de Spotify attendues, ${api.library.items.length} lue(s)`);
+  assert(api.library.fromSidebar === true, "les lignes ne sont pas marquées comme lues dans la liste de Spotify");
+  assert(api.library.state === "ready", `état attendu « ready », obtenu « ${api.library.state} »`);
+  const rows = [...page.querySelectorAll(".sd-lib-row")];
+  assert(rows.length === 3, `3 lignes attendues à l'écran, ${rows.length} affichée(s)`);
+  assert(
+    rows.map((r) => r.getAttribute("href")).join(",") === "/playlist/abc,/album/def,/artist/ghi",
+    "les adresses lues ne sont pas celles de Spotify : " + rows.map((r) => r.getAttribute("href")).join(",")
+  );
+  const note = page.querySelector(".sd-lib-note").textContent;
+  assert(/liste de Spotify/.test(note), "la page ne dit pas d'où viennent ces lignes : " + note);
+  /* Et le journal : une seule capture doit suffire à comprendre que le jeton a
+     été refusé, et sur quel appel. */
+  const log = page.querySelector(".sd-lib-log");
+  assert(log && log.hidden === false, "le journal des essais reste caché alors que la bibliothèque a échoué");
+  const journal = [...page.querySelectorAll(".sd-lib-log-list li")].map((li) => li.textContent).join(" | ");
+  assert(/\/me/.test(journal) && /401/.test(journal), "le journal ne dit pas que /me a été refusé : " + journal);
+  dom.window.close();
+  return "repli sur la liste de Spotify · 3 lignes · refus écrit dans le journal ✓";
+});
+
+await checkAsync("la bibliothèque redemande le jeton à la page quand il manque", async () => {
+  /* Le cas du téléphone : la capture n'a rien attrapé (aucune requête portant
+     l'en-tête n'est passée, ou le jeton est refusé), et la bibliothèque restait
+     vide pour toujours — « il n'arrive pas à reconnaître mes playlists ». La
+     page du lecteur sait donner son jeton (`/get_access_token`, même origine,
+     donc pas de contrôle d'accès) : la coque le redemande, puis relit. */
+  const dom = new JSDOM("<!doctype html><html><body><main></main></body></html>", {
+    url: "https://open.spotify.com/intl-fr/",
+    pretendToBeVisual: true,
+    runScripts: "dangerously",
+  });
+  const calls = [];
+  dom.window.fetch = (url, init) => {
+    const key = String(url);
+    if (key.indexOf("/get_access_token") === 0) {
+      askedToken++;
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ accessToken: "JETON-DE-LA-PAGE", isAnonymous: false }),
+      });
+    }
+    const auth = (init && init.headers && init.headers.Authorization) || "";
+    calls.push({ key, auth });
+    let body = { total: 0, items: [] };
+    if (key === "https://api.spotify.com/v1/me") body = { id: "moi", display_name: "Moi" };
+    if (key.indexOf("/me/playlists") >= 0) {
+      body = { total: 1, items: [{ id: "p1", name: "Mes tubes", owner: { display_name: "Moi" }, images: [] }] };
+    }
+    return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
+  };
+  let askedToken = 0;
+  dom.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => undefined }));
+  dom.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(200);
+  const api = dom.window.SpotiDuckUI;
+  api.state.tab = "library";
+  api.library.load(true);
+  for (let i = 0; i < 60 && !api.library.items.length; i++) await tick(25);
+
+  assert(askedToken >= 1, "la coque n'a pas redemandé le jeton à la page alors qu'il manquait");
+  assert(
+    api.library.items.some((r) => r.href === "/playlist/p1"),
+    "la bibliothèque n'a pas été relue avec le jeton redemandé : état " + api.library.state
+  );
+  assert(api.library.state === "ready", `état attendu « ready », obtenu « ${api.library.state} »`);
+  assert(
+    calls.length > 0 && calls.every((c) => /Bearer JETON-DE-LA-PAGE/.test(c.auth)),
+    "les appels d'API ne portent pas le jeton redemandé : " + JSON.stringify(calls.slice(0, 2))
+  );
+  assert(/Compte Moi/.test(dom.window.document.querySelector(".sd-lib-sum").textContent), "le compte redemandé n'est pas nommé");
+  dom.window.close();
+  return "jeton redemandé à la page · relecture · compte nommé ✓";
+});
+
 await checkAsync("without a token the library keeps Spotify's sidebar (never an empty screen)", async () => {
   /* La prudence qui compte : si le jeton manque (session fermée, page qui n'a
      rien demandé), notre page **ne s'affiche pas** et ne masque rien. Sinon un
@@ -1675,7 +1835,7 @@ await checkAsync("without a token the library keeps Spotify's sidebar (never an 
   /* Le bouton relance vraiment la lecture — ici avec un jeton arrivé entre-temps
      (c'est exactement le cas d'un téléphone : la page du lecteur émet ses
      requêtes quelques secondes après l'affichage). */
-  answers = () => ({ total: 0, items: [] });
+  answers = (key) => (key === "/me" ? { id: "moi", display_name: "Moi" } : { total: 0, items: [] });
   const xhrEarly = new dom.window.XMLHttpRequest();
   xhrEarly.open("GET", "https://api.spotify.com/v1/me");
   xhrEarly.setRequestHeader("Authorization", "Bearer jeton-tardif");
@@ -1689,9 +1849,11 @@ await checkAsync("without a token the library keeps Spotify's sidebar (never an 
      ses requêtes d'API. Deux choses à la fois : on garde ce qui a répondu (sans
      prétendre que le reste est vide), et le jeton posé en XHR est bien capté. */
   answers = (key) =>
-    key === "/me/playlists?limit=50"
-      ? { total: 1, items: [{ id: "p9", name: "La seule", owner: { display_name: "Moi" }, images: [] }] }
-      : null;
+    key === "/me"
+      ? { id: "moi", display_name: "Moi" }
+      : key === "/me/playlists?limit=50"
+        ? { total: 1, items: [{ id: "p9", name: "La seule", owner: { display_name: "Moi" }, images: [] }] }
+        : null;
   const xhr = new dom.window.XMLHttpRequest();
   xhr.open("GET", "https://api.spotify.com/v1/me");
   xhr.setRequestHeader("Authorization", "Bearer jeton-xhr");

@@ -447,6 +447,15 @@ html.sd-mobile.sd-mini-empty .sd-layer .sd-mini-art {
 html.sd-mobile.sd-mini-empty .sd-layer .sd-mini-art img {
   display: none;
 }
+/* Session fermée : la barre reste (elle ne doit **jamais** disparaître), et son
+   texte dit pourquoi elle est vide. */
+html.sd-mobile.sd-mini-signed-out .sd-layer .sd-mini-art {
+  opacity: 0.5;
+}
+html.sd-mobile.sd-mini-signed-out .sd-layer .sd-mini-title,
+html.sd-mobile.sd-mini-signed-out .sd-layer .sd-mini-artist {
+  color: var(--sd-sub);
+}
 html.sd-mobile.sd-mini-empty .sd-layer .sd-mini-title {
   color: var(--sd-sub);
   font-weight: 500;

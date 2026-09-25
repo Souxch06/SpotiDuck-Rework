@@ -558,7 +558,18 @@ const TABMEASURE = () => {
       return r.width > 2 && r.height > 2;
     }).length,
     barreTitre: state(".sd-topbar"),
+    barreSpotify: state("#global-nav-bar"),
     barreLaterale: state("#Desktop_LeftSidebar_Id"),
+    /* Le lecteur, tel qu'il est à cet instant : c'est lui qui « disparaît ». */
+    lecteur: state(".sd-mini"),
+    lecteurOn: document.documentElement.classList.contains("sd-mini-on") ? "oui" : "non",
+    /* Ce que la page dit — la raison, en clair (une capture doit suffire). */
+    dire: ((document.querySelector(".sd-lib-note") || {}).textContent || "").trim().slice(0, 110),
+    journal: [].map
+      .call(document.querySelectorAll(".sd-lib-log-list li"), (li) => (li.textContent || "").trim())
+      .slice(0, 2)
+      .join(" ; ")
+      .slice(0, 110),
     textePage: (document.body.innerText || "").replace(/\s+/g, " ").trim().length,
     classes: document.documentElement.className,
   };
@@ -585,6 +596,10 @@ const SCROLLPROBE = async () => {
   window.scrollTo(0, window.scrollY + 900);
   await new Promise((r) => setTimeout(r, 700));
   const after = size(".sd-mini");
+  /* Deuxième lecture, plus tard : le lecteur pouvait disparaître **après** le
+     premier relevé (rendu différé de Spotify). */
+  await new Promise((r) => setTimeout(r, 900));
+  const after2 = size(".sd-mini");
   if (node) node.scrollTop = start;
   window.scrollTo(0, window.scrollY - 900);
   await new Promise((r) => setTimeout(r, 400));
@@ -592,6 +607,7 @@ const SCROLLPROBE = async () => {
     coque: coque,
     before: before,
     after: after,
+    after2: after2,
     classe: document.documentElement.classList.contains("sd-mini-on") ? "sd-mini-on" : "sans sd-mini-on",
     bas: window.getComputedStyle(document.documentElement).getPropertyValue("--sd-mini-h-current").trim(),
   };
@@ -923,7 +939,10 @@ async function main() {
             `chemin=${m.chemin} · onglet-actif=${m.ongletActif} · bibliothèque=${m.bibliotheque} ` +
               `lignes=${m.lignes} état=${m.etat} titre=${m.titre} · accueil-maison=${m.accueilMaison} ` +
               `onglets-visibles=${m.ongletsVisibles} barre-titre=${m.barreTitre} barre-laterale=${m.barreLaterale} ` +
-              `texte=${m.textePage} car. · classes="${m.classes}"`
+              `texte=${m.textePage} car. · classes="${m.classes}"` +
+              ` · barre-spotify=${m.barreSpotify} · lecteur=${m.lecteur} (${m.lecteurOn})` +
+              (m.dire ? ` · dit="${m.dire}"` : "") +
+              (m.journal ? ` · journal="${m.journal}"` : "")
           );
           report.pages.push({ label: `${target.label} (onglet bibliothèque)`, tab: m });
         } else {
@@ -949,9 +968,9 @@ async function main() {
         const scroll = await safely(() => page.evaluate(SCROLLPROBE));
         if (scroll) {
           const line =
-            `${scroll.coque} · avant=${scroll.before} · après=${scroll.after} · ${scroll.classe} · ` +
-            `place réservée=${scroll.bas || "—"}`;
-          if (scroll.before === "absent" || scroll.after === "absent") {
+            `${scroll.coque} · haut=${scroll.before} · bas=${scroll.after} · bas+900ms=${scroll.after2} · ` +
+            `${scroll.classe} · place réservée=${scroll.bas || "—"}`;
+          if (scroll.before === "absent" || scroll.after === "absent" || scroll.after2 === "absent") {
             warn(`Lecteur au défilement — ${target.label}`, line);
           } else {
             note(`Lecteur au défilement — ${target.label}`, line);

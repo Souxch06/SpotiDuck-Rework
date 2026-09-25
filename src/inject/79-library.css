@@ -22,7 +22,12 @@
    de quoi la remplacer (classe posée par `Library.apply`). Sinon elle reste —
    c'est le seul moyen de ne pas perdre l'accès à sa musique. */
 html.sd-mobile.sd-lib-on #Desktop_LeftSidebar_Id {
-  display: none !important;
+  /* Elle n'est pas retirée du flux : **cachée derrière** notre page, qui la
+     recouvre. En `display:none`, Spotify ne remplissait plus sa liste (elle ne
+     se charge qu'à l'écran) : c'était notre seul repli quand l'API ne répond
+     pas — « il arrive pas à reconnaître mes playlists », 25/09. */
+  opacity: 0 !important;
+  pointer-events: none !important;
 }
 
 html.sd-mobile .sd-layer .sd-lib {
@@ -63,6 +68,37 @@ html.sd-mobile .sd-layer .sd-lib-head {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+/* Le journal des essais : petit, lisible, et seulement quand il sert. */
+html.sd-mobile .sd-layer .sd-lib-log {
+  margin: calc(8px * var(--sd-u)) calc(14px * var(--sd-u)) 0;
+  padding: calc(8px * var(--sd-u)) calc(10px * var(--sd-u));
+  border-radius: calc(10px * var(--sd-u));
+  background: var(--sd-bg-hi, #1a1a1a);
+}
+html.sd-mobile .sd-layer .sd-lib-log[hidden] {
+  display: none;
+}
+html.sd-mobile .sd-layer .sd-lib-log-title {
+  margin: 0 0 4px;
+  font-size: calc(11px * var(--sd-u));
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--sd-sub);
+}
+html.sd-mobile .sd-layer .sd-lib-log-list {
+  margin: 0;
+  padding-left: calc(14px * var(--sd-u));
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+html.sd-mobile .sd-layer .sd-lib-log-list li {
+  font-size: calc(11px * var(--sd-u));
+  line-height: 1.35;
+  color: var(--sd-sub);
+  word-break: break-word;
 }
 html.sd-mobile .sd-layer .sd-lib-title {
   margin: 0;
@@ -203,6 +239,25 @@ html.sd-mobile .sd-layer .sd-lib-actions[hidden] {
 }
 html.sd-mobile .sd-layer .sd-lib-retry {
   min-height: var(--sd-tap);
+}
+/* **La porte de sortie quand la session est fermée.** « Réessayer » ne peut
+   rien donner sans session : la connexion est à côté, à la même place que sur
+   l'écran d'accueil (signalé : « il n'arrive pas à reconnaître mes playlists »
+   — un lecteur déconnecté ne peut pas les lire). */
+html.sd-mobile .sd-layer .sd-lib-actions:has(.sd-lib-login:not([hidden])) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(8px * var(--sd-u));
+}
+html.sd-mobile .sd-layer .sd-lib-login {
+  min-height: var(--sd-tap);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+html.sd-mobile .sd-layer .sd-lib-login[hidden] {
+  display: none;
 }
 
 /* **L'accueil ne couvre jamais un autre onglet.** La règle du script est la

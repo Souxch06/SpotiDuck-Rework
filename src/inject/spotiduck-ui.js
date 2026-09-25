@@ -159,6 +159,8 @@
       repeat: "Répéter",
       nowPlaying: "Lecture en cours",
       noTrack: "Aucun titre en lecture",
+      miniSignedOut: "Non connecté",
+      miniSignedOutHint: "Appuyez pour vous connecter",
       volume: "Volume",
       karaoke: "Karaoké",
       /* Accueil maison */
@@ -188,6 +190,14 @@
       libraryNoToken: "Connectez-vous à Spotify pour retrouver votre bibliothèque.",
       libraryError: "Votre bibliothèque n'a pas répondu pour l'instant.",
       libraryWhy: "Raison : %s.",
+      libraryGuest: "Le lecteur n'est pas connecté à Spotify : connecte-toi, puis appuie sur Réessayer.",
+      libraryUnknown: "Je n'ai pas pu vérifier à quel compte appartient le lecteur.",
+      libraryAccount: "Compte %s",
+      librarySignIn: "Se connecter à Spotify",
+      librarySidebar: "Lues dans la liste de Spotify (%s éléments) : l'API du lecteur n'a pas répondu.",
+      libraryLog: "Derniers essais",
+      libraryTokenAge: "Jeton capté %s · /me → %s",
+      libraryTokenRefresh: "Jeton redemandé à la page : %s",
       libraryRetry: "Réessayer",
       libraryHint: "Vous pouvez aussi retrouver celle de Spotify : Réglages → Bibliothèque SpotiDuck.",
       /* Statistiques d'écoute */
@@ -1474,8 +1484,13 @@
 
       /* titles — sans titre, le mini-lecteur dit où il en est plutôt que de
          rester vide (il reste affiché, c'est le lecteur de l'application). */
-      var miniTitle = s.title || Settings.labels.noTrack;
-      var miniArtist = s.artist || Settings.labels.app;
+      /* Sans piste, l'état vide dit **pourquoi** : session fermée ou rien
+         lancé. Et si la session est fermée, l'appui sur la barre ouvre la
+         connexion (voir le clic plus bas). */
+      var signedOut = !s.hasTrack && !!LoginState && LoginState.state() === "out";
+      document.documentElement.classList.toggle("sd-mini-signed-out", signedOut);
+      var miniTitle = s.title || (signedOut ? Settings.labels.miniSignedOut : Settings.labels.noTrack);
+      var miniArtist = s.artist || (signedOut ? Settings.labels.miniSignedOutHint : Settings.labels.app);
       if (e.miniTitle.textContent !== miniTitle) e.miniTitle.textContent = miniTitle;
       if (e.miniArtist.textContent !== miniArtist) e.miniArtist.textContent = miniArtist;
       if (e.track.textContent !== s.title) e.track.textContent = s.title || "";
@@ -1616,8 +1631,15 @@
          il n'existait qu'avec une piste : sur un compte qui n'a rien lancé,
          l'écran restait vide en bas (le fameux « des trucs n'apparaissent
          pas »). */
-      if (s.hasTrack || Spotify.ready()) Spotify.seen = true;
-      html.classList.toggle("sd-mini-on", !!s.hasTrack || Spotify.ready() || Spotify.seen);
+      /* **Le lecteur ne disparaît pas.** Il y avait trois conditions pour
+         l'afficher — une piste, un lecteur prêt, « vu une fois depuis le
+         chargement de la page » — et chacune pouvait manquer : après un
+         rechargement, sur une session fermée, ou pendant un rendu différé, le
+         bas de l'écran se vidait. « Le lecteur a de nouveau disparu » (25/09).
+         La barre est donc **toujours** là : c'est le lecteur de l'application.
+         La page de connexion, elle, la masque explicitement (`html.sd-login`). */
+      Spotify.seen = Spotify.seen || !!s.hasTrack || Spotify.ready();
+      html.classList.add("sd-mini-on");
       html.classList.toggle("sd-mini-empty", !s.hasTrack);
       /* The stylesheet keys the whole layout off these three classes
          (`html.sd-tab-search` restyles the desktop top bar into a mobile
@@ -1721,6 +1743,12 @@
       /* mini player: tap = open, controls stop propagation */
       e.mini.addEventListener("click", function (ev) {
         if (ev.target.closest(".sd-iconbtn")) return;
+        /* Pas de session : le lecteur ne peut rien ouvrir d'utile — l'appui
+           mène à la connexion, comme le bouton de l'écran d'accueil. */
+        if (document.documentElement.classList.contains("sd-mini-signed-out")) {
+          location.href = CLASSIC_LOGIN;
+          return;
+        }
         Player.openSheet();
       });
       e.mini.addEventListener("keydown", function (ev) {
@@ -1729,6 +1757,22 @@
           Player.openSheet();
         }
       });
+
+      /* **Le défilement ne doit rien effacer.** Spotify remonte et redescend
+         ses barres pendant qu'on fait défiler la page : on réapplique l'état de
+         la coque au fil du défilement, à cadence douce. « Le lecteur disparaît
+         quand on scroll vers le bas » — deux fois signalé. */
+      var scrollPaint = 0;
+      document.addEventListener(
+        "scroll",
+        function () {
+          var now = Date.now();
+          if (now - scrollPaint < 120) return;
+          scrollPaint = now;
+          UI.paint(State, "défilement");
+        },
+        true
+      );
       e.miniPlay.addEventListener("click", function (ev) {
         ev.stopPropagation();
         Actions.playPause();
@@ -3396,8 +3440,13 @@
     signedOut: function () {
       return !this.signedIn() && !!spotifyLoginLink();
     },
+    /** « login » (page de connexion), « in », « out », ou « ? » (pas d'avis). */
+    state: function () {
+      return this.isLoginPage() ? "login" : this.signedIn() ? "in" : this.signedOut() ? "out" : "?";
+    },
     report: function () {
-      var state = this.isLoginPage() ? "login" : this.signedIn() ? "in" : this.signedOut() ? "out" : null;
+      var state = this.state();
+      if (state === "?") state = null;
       /* Inconnu : on ne dit rien. (Le pont écarte de toute façon ce qu'il ne
          comprend pas ; autant ne pas l'appeler pour rien.) */
       if (!state) return null;
@@ -4249,6 +4298,10 @@
     timeoutMs: 12000,
     /* Le pont s'est tu : inutile de refaire attendre chaque appel suivant. */
     asyncDead: false,
+    /* Les derniers essais, en clair : « /me → pont 401 ». C'est ce que la page
+       montre quand elle n'a rien à afficher — une capture dit alors tout. */
+    history: [],
+    path: "",
 
     hasBridge: function () {
       return Bridge.has("nFetch");
@@ -4348,11 +4401,13 @@
       var url = /^https?:\/\//.test(path) ? path : API_ROOT + path;
       var token = Api.authToken;
       this.at = Date.now();
+      this.path = path;
       this.via = "";
       this.status = 0;
       this.reason = "";
       if (!token) {
         this.reason = "jeton absent";
+        this.trace("", 0, "jeton absent");
         return Promise.resolve(null);
       }
       var bridge = null;
@@ -4368,6 +4423,7 @@
           self.via = "";
           self.status = 0;
           self.reason = r.why;
+          self.trace("pont", 0, r.why);
           return null;
         }
         return self.throughFetch(url, token).then(function (f) {
@@ -4383,7 +4439,29 @@
       this.via = r && r.bridge ? "pont" : "navigateur";
       this.status = (r && r.status) || 0;
       this.reason = "";
+      this.trace(this.via, this.status, "");
       return r ? r.data : null;
+    },
+
+    /** Un essai retenu, pour pouvoir le montrer. */
+    trace: function (via, status, why) {
+      if (!this.path) return;
+      this.history.push({ path: this.path, via: via, status: status, why: why || "" });
+      if (this.history.length > 8) this.history = this.history.slice(-8);
+    },
+
+    /** « /me → pont 401 (jeton refusé (401)) » — la dernière tentative par appel. */
+    logLines: function () {
+      var seen = {};
+      var lines = [];
+      for (var i = this.history.length - 1; i >= 0; i--) {
+        var h = this.history[i];
+        if (seen[h.path]) continue;
+        seen[h.path] = 1;
+        var where = h.via === "pont" ? "pont" : h.via === "navigateur" ? "navigateur" : "aucune voie";
+        lines.push(h.path + " → " + where + (h.status ? " " + h.status : "") + (h.why ? " · " + h.why : ""));
+      }
+      return lines.reverse();
     },
 
     /** La raison, sans se répéter : celle du pont puis celle du navigateur. */
@@ -4395,6 +4473,7 @@
       });
       this.reason = parts.join(" · ");
       this.status = (browser && browser.status) || (bridge && bridge.status) || 0;
+      this.trace(browser ? "navigateur" : "pont", this.status, this.reason);
     },
 
     /** La voie native : hors navigateur, donc sans contrôle d'accès. */
@@ -4486,8 +4565,12 @@
     built: false,
     items: [],
     counts: { playlist: 0, album: 0, artist: 0, show: 0, liked: 0 },
-    /* idle | loading | ready | empty | no-token | error */
+    /* idle | loading | ready | empty | no-token | guest | error */
     state: "idle",
+    /* La bibliothèque vient-elle de la liste de Spotify (repli) ? */
+    fromSidebar: false,
+    /* Le compte est-il bien celui du jeton ? (`/me`) */
+    account: "",
     loading: false,
     loadedAt: 0,
     filter: "all",
@@ -4576,6 +4659,60 @@
       return rows;
     },
 
+    /**
+     * **La liste de Spotify, lue dans la page.**
+     *
+     * Repli quand l'API du lecteur ne répond pas : la barre latérale est déjà
+     * remplie par Spotify, avec le compte de l'utilisateur, et sans jeton ni
+     * requête réseau de notre part. On en tire les mêmes lignes (titre, type,
+     * adresse, pochette) — moins complètes que l'API, mais **vraies**, et elles
+     * mènent au bon endroit.
+     */
+    fromSpotifyList: function () {
+      var box = pick(SEL.sidebar);
+      if (!box) return [];
+      var links = box.querySelectorAll(
+        'a[href^="/playlist/"], a[href^="/album/"], a[href^="/artist/"], a[href^="/show/"], a[href^="/collection"]'
+      );
+      var rows = [];
+      var seen = {};
+      for (var i = 0; i < links.length && rows.length < 100; i++) {
+        var a = links[i];
+        var href = (a.getAttribute("href") || "").split("?")[0];
+        if (!href || seen[href]) continue;
+        var type = "";
+        if (/^\/playlist\//.test(href)) type = "playlist";
+        else if (/^\/album\//.test(href)) type = "album";
+        else if (/^\/artist\//.test(href)) type = "artist";
+        else if (/^\/show\//.test(href)) type = "show";
+        else if (/collection/.test(href)) type = "liked";
+        if (!type) continue;
+        var name = (a.getAttribute("aria-label") || a.textContent || "").trim();
+        if (!name) name = type === "liked" ? Settings.labels.libraryLiked : href;
+        seen[href] = 1;
+        var img = a.querySelector("img");
+        rows.push({
+          type: type,
+          /* Les libellés de la barre latérale mêlent titre et sous-titre : on
+             garde la première ligne comme titre. */
+          name: name.split("\n")[0].slice(0, 80),
+          sub: (name.split("\n")[1] || "").trim().slice(0, 80),
+          href: href,
+          img: img ? img.currentSrc || img.src || "" : "",
+        });
+      }
+      return rows;
+    },
+
+    /** Les compteurs, quand les lignes viennent de la liste de Spotify. */
+    tallyRows: function (rows) {
+      var n = { playlist: 0, album: 0, artist: 0, show: 0, liked: 0 };
+      for (var i = 0; i < rows.length; i++) {
+        if (n[rows[i].type] !== undefined) n[rows[i].type]++;
+      }
+      return n;
+    },
+
     /** Les totaux annoncés par l'API (pas seulement la première page). */
     tally: function (res) {
       var n = { playlist: 0, album: 0, artist: 0, show: 0, liked: 0 };
@@ -4602,9 +4739,25 @@
       if (this.loading) return false;
       if (!force && this.loadedAt && Date.now() - this.loadedAt < LIBRARY_TTL) return false;
       if (!Api.authToken) {
-        this.state = "no-token";
-        this.items = [];
+        /* Pas de jeton : l'API est hors jeu, mais la liste de Spotify est
+           peut-être là, remplie par le lecteur. La lire coûte une lecture de
+           page — et vaut mieux qu'un message quand des playlists existent. */
+        var noTokenRows = this.fromSpotifyList();
+        this.fromSidebar = !!noTokenRows.length;
+        this.items = noTokenRows;
+        this.counts = this.tallyRows(noTokenRows);
+        this.state = noTokenRows.length ? "ready" : "no-token";
+        this.loadedAt = Date.now();
         this.apply();
+        /* **Et on va chercher le jeton là où il est.** La page du lecteur sait
+           le donner (même origine) : sans ça, un téléphone dont la capture a
+           manqué le jeton ne pouvait plus jamais lire sa bibliothèque — il
+           fallait se reconnecter. S'il arrive, on relit. */
+        if (!Api.refreshState) {
+          Api.refreshToken().then(function (ok) {
+            if (ok) self.load(true);
+          });
+        }
         return false;
       }
       this.loading = true;
@@ -4617,13 +4770,18 @@
          franche — inutile de faire attendre quelqu'un dont le réseau ne répond
          pas, la page peut tout de suite le dire. */
       var paths = [
+        /* **Qui répond ?** `/me` est le seul appel qui distingue le jeton du
+           compte d'un jeton **anonyme** du lecteur déconnecté. Sans lui, un
+           jeton anonyme fait répondre « Votre compte est vide » — un mensonge
+           sur les données de l'utilisateur. */
+        "/me",
         "/me/playlists?limit=" + LIBRARY_PAGE,
         "/me/albums?limit=" + LIBRARY_PAGE,
         "/me/artists?limit=" + LIBRARY_PAGE,
         "/me/shows?limit=" + LIBRARY_PAGE,
         "/me/tracks?limit=1",
       ];
-      var res = [null, null, null, null, null];
+      var res = [null, null, null, null, null, null];
       this.step = 0;
       this.steps = paths.length;
       /* **Rien ne reste en chargement indéfiniment.** Le pont natif peut se
@@ -4636,20 +4794,49 @@
         Net.status = 0;
         finish();
       }, this.deadlineMs);
+      var done = false;
+      var triedRefresh = false;
       var finish = function () {
+        if (done) return;
+        done = true;
         clearTimeout(self.deadline);
         self.deadline = 0;
-        self.items = self.parse(res);
-        self.counts = self.tally(res);
-        self.loadedAt = Date.now();
         self.loading = false;
-        /* Aucune des cinq réponses : l'API n'a rien voulu dire (jeton expiré,
-           hors ligne, refus). On ne prétend pas que la bibliothèque est vide —
-           la page le dit, avec la raison. */
-        var answered = res.some(function (r) {
+        self.loadedAt = Date.now();
+        var profile = res[0];
+        /* Le nom, pas l'identifiant : c'est ce que l'utilisateur reconnaît
+           (« il arrive pas à reconnaître mes playlists »). */
+        self.account = profile ? profile.display_name || profile.id || "" : "";
+        var sources = res.slice(1);
+        self.items = self.parse(sources);
+        self.counts = self.tally(sources);
+        var answered = sources.some(function (r) {
           return !!r;
         });
-        self.state = self.items.length ? "ready" : answered ? "empty" : "error";
+        self.fromSidebar = false;
+        if (self.items.length) {
+          self.state = "ready";
+        } else {
+          /* **Repli : la liste de Spotify elle-même.** Elle est déjà sur
+             l'écran (c'est elle qui interroge le compte), elle ne dépend ni du
+             jeton ni du réseau de l'application. Si l'API ne répond pas, on
+             montre ce qu'elle affiche au lieu d'un écran qui dit « rien ». */
+          var rows = self.fromSpotifyList();
+          if (rows.length) {
+            self.items = rows;
+            self.counts = self.tallyRows(rows);
+            self.fromSidebar = true;
+            self.state = "ready";
+          } else if (!self.account) {
+            /* Pas de compte derrière le jeton : on ne dit pas « bibliothèque
+               vide », on dit que le compte n'est pas accessible. */
+            self.state = answered ? "guest" : "error";
+          } else if (answered) {
+            self.state = "empty";
+          } else {
+            self.state = "error";
+          }
+        }
         self.apply();
       };
       var step = function (index) {
@@ -4661,8 +4848,35 @@
           res[index] = data;
           self.step = index + 1;
           if (self.loading) self.apply();
-          if (!data && index === 0 && Net.status === 0) {
-            /* Rien n'a répondu du tout : les quatre autres ne feront pas mieux. */
+          var refused =
+            Net.status === 401 || Net.status === 403 || Net.status === 419 || Net.status === 400;
+          if (refused && !triedRefresh) {
+            /* Le jeton est refusé : on en redemande un à la page, **une fois**,
+               puis on relit. Sans ça, la seule issue était de se reconnecter. */
+            triedRefresh = true;
+            self.loading = false;
+            clearTimeout(self.deadline);
+            self.deadline = 0;
+            Api.forgetToken();
+            Api.refreshToken().then(function (ok) {
+              if (ok) {
+                self.load(true);
+                return;
+              }
+              self.loading = true;
+              finish();
+            });
+            return;
+          }
+          if (
+            !data &&
+            index === 0 &&
+            (Net.status === 0 || Net.status === 401 || Net.status === 403 || Net.status === 419)
+          ) {
+            /* Rien n'a répondu — ou le jeton est refusé. Les cinq autres appels
+               posent la même question avec le même jeton : ils n'auront pas une
+               autre réponse. On va directement au repli (la liste de Spotify) au
+               lieu de faire attendre quelqu'un huit secondes pour rien. */
             finish();
             return;
           }
@@ -4692,7 +4906,17 @@
         "</div>" +
         '<div class="sd-lib-list"></div>' +
         '<p class="sd-lib-note"></p>' +
-        '<div class="sd-lib-actions"><button class="sd-btn sd-lib-retry" type="button"></button></div>';
+        /* Le journal des essais : sans lui, « la bibliothèque ne reconnaît pas
+           mes playlists » oblige à deviner entre le jeton, le réseau et l'API. */
+        '<div class="sd-lib-log" hidden><h2 class="sd-lib-log-title"></h2><ul class="sd-lib-log-list"></ul></div>' +
+        '<div class="sd-lib-actions">' +
+        '<button class="sd-btn sd-lib-retry" type="button"></button>' +
+        /* Sans session, « Réessayer » ne peut rien donner : la porte de sortie
+           est la connexion, au même endroit que le bouton de l'accueil. */
+        '<a class="sd-btn sd-lib-login" href="' +
+        CLASSIC_LOGIN +
+        '"></a>' +
+        "</div>";
       this.el = el;
       UI.layer.appendChild(el);
       var self = this;
@@ -4724,7 +4948,25 @@
       if (c.artist) parts.push(Settings.labels.libraryArtists + " " + c.artist);
       if (c.show) parts.push(Settings.labels.libraryShows + " " + c.show);
       if (c.liked) parts.push(Settings.labels.libraryLiked + " " + c.liked);
+      /* **Le compte en tête** quand on a lu quelque chose : la preuve que
+         c'est bien sa bibliothèque, pas celle d'un autre. */
+      if (this.account && parts.length) {
+        parts.unshift(Settings.labels.libraryAccount.replace("%s", this.account.slice(0, 24)));
+      }
       return parts.join(" · ") || Settings.labels.librarySummary;
+    },
+
+    /**
+     * Le lecteur est-il ouvert sur un compte ? Trois signaux, du plus sûr au
+     * moins sûr : le lecteur lui-même (sa page est là), puis la session que
+     * connaît l'application. « Je ne sais pas » reste une réponse honnête.
+     */
+    accountState: function () {
+      var state = LoginState.state();
+      if (state === "in") return "in";
+      if (state === "out" || state === "login") return "out";
+      if (Bridge.has("session")) return Bridge.call("session") ? "in" : "out";
+      return "?";
     },
 
     /** Ce qu'il y a à dire quand la liste est vide (jamais un écran muet). */
@@ -4736,6 +4978,14 @@
           : Settings.labels.libraryLoading;
       }
       if (this.state === "no-token") return Settings.labels.libraryNoToken;
+      if (this.state === "guest") {
+        /* Ce que l'on **sait** d'abord : la session. « Pas connecté » est une
+           réponse ; « je n'ai pas pu vérifier » en est une autre, et les deux
+           valent mieux que « ton compte est vide ». */
+        var head =
+          this.accountState() === "out" ? Settings.labels.libraryGuest : Settings.labels.libraryUnknown;
+        return Net.reason ? head + " " + Settings.labels.libraryWhy.replace("%s", Net.reason) : head;
+      }
       /* Jamais un « ça n'a pas marché » muet : la raison exacte est dans le
          message, pour qu'une seule capture suffise à savoir ce qui manque. */
       if (this.state === "error") {
@@ -4748,6 +4998,9 @@
       }
       if (this.state === "empty") return Settings.labels.libraryEmpty;
       if (this.items.length && !this.filtered().length) return Settings.labels.homeEmptyCategory;
+      if (this.fromSidebar) {
+        return Settings.labels.librarySidebar.replace("%s", String(this.items.length));
+      }
       return "";
     },
 
@@ -4780,6 +5033,40 @@
       });
       var list = $(".sd-lib-list", this.el);
       list.textContent = "";
+      /* Le journal : montré seulement quand la page n'a rien à lister. */
+      var logBox = $(".sd-lib-log", this.el);
+      if (logBox) {
+        /* Le journal s'affiche dès que l'**API** a failli : quand la page ne
+           liste rien, et aussi quand elle liste les lignes de Spotify — dans ce
+           cas, savoir que le jeton a été refusé est justement ce qu'il faut pour
+           réparer. */
+        var apiTrouble = !this.items.length || this.fromSidebar;
+        var lines = apiTrouble ? Net.logLines() : [];
+        if (Api.refreshState && apiTrouble) {
+          lines.push(Settings.labels.libraryTokenRefresh.replace("%s", Api.refreshState));
+        }
+        var withToken = !apiTrouble
+          ? []
+          : [
+              /* Le jeton et le compte, avant les essais : si le jeton vient du
+                 lecteur **déconnecté**, tout le reste s'explique d'un coup. */
+              Settings.labels.libraryTokenAge
+                .replace("%s", Api.tokenAt ? Stats.sinceText(Api.tokenAt) : "jamais")
+                .replace("%s", this.account ? "compte " + this.account : "pas de compte"),
+            ];
+        logBox.hidden = !lines.length && !withToken.length;
+        var logTitle = $(".sd-lib-log-title", logBox);
+        if (logTitle) logTitle.textContent = Settings.labels.libraryLog;
+        var logList = $(".sd-lib-log-list", logBox);
+        if (logList) {
+          logList.textContent = "";
+          withToken.concat(lines).forEach(function (text) {
+            var li = document.createElement("li");
+            li.textContent = text;
+            logList.appendChild(li);
+          });
+        }
+      }
       var note = $(".sd-lib-note", this.el);
       var actions = $(".sd-lib-actions", this.el);
       var retry = $(".sd-lib-retry", this.el);
@@ -4790,8 +5077,18 @@
          retrouver la bibliothèque de Spotify si on la préfère. */
       if (retry) retry.textContent = Settings.labels.libraryRetry;
       if (actions) {
-        var nothing = !!message && (this.state === "no-token" || this.state === "error" || this.state === "empty");
-        actions.hidden = !nothing;
+        var nothing =
+          !!message &&
+          (this.state === "no-token" ||
+            this.state === "error" ||
+            this.state === "empty" ||
+            this.state === "guest");
+        var login = $(".sd-lib-login", this.el);
+        if (login) {
+          login.textContent = Settings.labels.librarySignIn;
+          login.hidden = this.accountState() !== "out";
+        }
+        actions.hidden = !nothing && (!login || login.hidden);
         if (nothing && retry) retry.setAttribute("aria-label", Settings.labels.libraryRetry + " — " + Settings.labels.libraryHint);
       }
       this.filtered().forEach(function (row) {
@@ -4922,6 +5219,8 @@
       if (this.state === "loading") return "chargement";
       if (this.state === "no-token") return "pas de jeton (session fermée ?)";
       if (this.state === "error") return "indisponible (" + Net.describe() + ")";
+      if (this.state === "guest") return "compte non accessible (" + Net.describe() + ")";
+      if (this.fromSidebar) return "lue dans la liste de Spotify (" + this.items.length + " éléments)";
       if (this.state === "empty") return "vide (0 élément)";
       if (this.state === "idle") return "pas encore lue";
       return this.items.length + " éléments";
@@ -5388,6 +5687,14 @@
       return min + " min";
     },
 
+    /** « il y a 2 min », « il y a 1 h » — l'âge d'un jeton, en clair. */
+    sinceText: function (ts) {
+      var sec = Math.max(0, Math.round((Date.now() - (ts || 0)) / 1000));
+      if (sec < 90) return "il y a " + sec + " s";
+      if (sec < 5400) return "il y a " + Math.round(sec / 60) + " min";
+      return "il y a " + Math.round(sec / 3600) + " h";
+    },
+
     /** « 25/09 » — et l'année seulement si ce n'est pas celle en cours. */
     dayLabel: function (ts) {
       var d = new Date(ts);
@@ -5458,7 +5765,11 @@
           XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
             try {
               var key = String(name).toLowerCase();
-              if (key === "authorization" && value) Api.authToken = value;
+              if (key === "authorization" && value && value !== Api.authToken) {
+                Api.authToken = value;
+                Api.tokenAt = Date.now();
+                Api.tokenHost = "";
+              }
               if (key === "client-token" && value) Api.clientToken = value;
             } catch (e) {
               /* une requête ne doit jamais échouer parce qu'on l'observe */
@@ -5496,6 +5807,72 @@
         return p;
       };
     },
+    /* Quand le jeton a été capté, et sur quel hôte : un jeton **anonyme** du
+       lecteur déconnecté n'ouvre pas la bibliothèque du compte, et il faut
+       pouvoir le dire au lieu de prétendre que le compte est vide. */
+    tokenAt: 0,
+    tokenHost: "",
+    /* Pourquoi un renouvellement a échoué, s'il a échoué : « refusé »,
+       « anonyme », « illisible ». Dit dans le journal de la bibliothèque. */
+    refreshState: "",
+    refreshing: null,
+
+    /** Le jeton n'est plus bon : on l'oublie avant d'en redemander un. */
+    forgetToken: function () {
+      this.authToken = "";
+      this.tokenAt = 0;
+      this.tokenHost = "";
+    },
+
+    /**
+     * **Le jeton, redemandé à la page du lecteur.**
+     *
+     * La capture n'attrape que les requêtes que la page a déjà faites : sur un
+     * téléphone dont la bibliothèque échoue, le jeton manquait ou était refusé —
+     * et il n'y avait alors aucun moyen de s'en sortir sans se reconnecter.
+     * La page du lecteur sait donner son propre jeton (`/get_access_token`,
+     * même origine, donc pas de contrôle d'accès). S'il est **anonyme**, c'est
+     * le lecteur qui n'est pas connecté : on le dit au lieu de faire semblant.
+     */
+    refreshToken: function () {
+      var self = this;
+      if (this.refreshing) return this.refreshing;
+      /* Pas de `fetch` (page nue, vieux moteur) : on ne peut rien demander, et
+         on le dit — plutôt que de lever une exception au milieu du rendu. */
+      if (typeof fetch !== "function") {
+        this.refreshState = "indisponible";
+        return Promise.resolve(false);
+      }
+      this.refreshing = fetch("/get_access_token?reason=transport&productType=web_player", {
+        credentials: "same-origin",
+      }).then(
+        function (r) {
+          return r && r.ok ? r.json() : null;
+        },
+        function () {
+          return null;
+        }
+      ).then(function (data) {
+        self.refreshing = null;
+        if (!data || !data.accessToken) {
+          self.refreshState = "refusé";
+          return false;
+        }
+        if (data.isAnonymous) {
+          self.refreshState = "anonyme";
+          return false;
+        }
+        self.refreshState = "ok";
+        self.authToken = /^Bearer /.test(data.accessToken)
+          ? data.accessToken
+          : "Bearer " + data.accessToken;
+        self.tokenAt = Date.now();
+        self.tokenHost = location.host;
+        return true;
+      });
+      return this.refreshing;
+    },
+
     header: function (h, name) {
       if (!h) return "";
       try {
@@ -5517,7 +5894,11 @@
       var ct = this.header(h, "Client-Token");
       if (ct && ct !== this.clientToken) this.clientToken = ct;
       var at = this.header(h, "Authorization");
-      if (at && at !== this.authToken) this.authToken = at;
+      if (at && at !== this.authToken) {
+        this.authToken = at;
+        this.tokenAt = Date.now();
+        this.tokenHost = (/([a-z0-9.-]+\.spotify\.com)/i.exec(String(url)) || [])[1] || "";
+      }
       var m = this.RE_CONNECT.exec(url);
       if (m && m[2]) {
         this.devId = m[2];
@@ -6344,6 +6725,9 @@
   });
 
   window.SpotiDuckUI = {
+    /* La voie des appels d'API, exposée pour le diagnostic (« pont » ou
+       « navigateur », et la raison du dernier échec). */
+    net: Net,
     version: VERSION,
     state: State,
     settings: Settings,
