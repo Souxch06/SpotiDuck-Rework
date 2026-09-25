@@ -3447,8 +3447,9 @@ likés).
   filtres `12 px` écrasés → `52 px` entiers ; puce rognée `oui` → `non` ;
   sous le bord haut au défilement `div.sd-lib-head` (l'en-tête, et non une
   ligne) ; accroche des filtres `60 px` pour un en-tête de `60 px` ;
-* la capture avant/après (repli « liste de Spotify », le cas de la capture de
-  l'utilisateur) est dans `screenshots/library_board.png` pour l'après ;
+* captures : `screenshots/library_avant_apres.png` (haut de liste **et** après
+  un défilement de 230 px, avant / après) ; `screenshots/library_board.png`
+  montre l'état de repli (« liste de Spotify »), celui de la capture d'origine ;
 * banc jsdom : **138/138**, complété par sept vérifications de propreté —
   journal replié et son compte d'essais, compte de l'en-tête qui suit le filtre,
   puce vide marquée, phrase d'état avec icône et ton, glyphes par type ;
@@ -3459,4 +3460,12 @@ likés).
 * la sonde CI mesure la bibliothèque **en train de défiler** : collage de
   l'en-tête, hauteur des filtres, puce rognée, élément sous le bord, compte,
   état du journal — et alerte si l'un d'eux se dégrade sur la vraie page.
+  Relevé du run `36180880618` (2.11.16) sur la vraie page :
+  `en-tête collé=oui · entête=59px · filtres=52px · collant=sticky/sticky ·
+  accroche=59px pour un en-tête de 59px · sous-le-bord=div.sd-lib-head ·
+  puce rognée=non · journal=replié` — les lignes valent `0` sur le banc CI, qui
+  n'a pas de compte connecté, et la sonde le dit (`état=indisponible`) au lieu
+  d'inventer un chiffre. Le zap se mesure sur la même sonde, mais il faut
+  quelque chose en lecture : sans titre, elle écrit « rien ne joue : le zap
+  n'est pas mesurable ».
 
