@@ -259,30 +259,60 @@ await checkAsync("seek uses the native setter on Spotify's range input", async (
   return `seeked to ${got.toFixed(1)}s of ${window.MockSpotify.track.duration}s`;
 });
 
-await checkAsync("gesture: swipe left on the mini player = next track", async () => {
+await checkAsync("le mini-lecteur est statique : aucun geste ne le déplace", async () => {
+  /* Signalé trois fois : « le lecteur disparaît », « le lecteur a de nouveau
+     disparu », « fais en sorte qu'il soit statique ». Deux versions ont tenté
+     d'apprivoiser les gestes sur le lecteur ; sur le téléphone, un doigt posé
+     pour faire défiler restait pris pour un balayage. Il n'y a donc plus aucun
+     geste : ni balayage latéral (changement de titre), ni glissement vers le
+     haut (ouverture), ni tirage vers le bas (fermeture). */
   const before = window.MockSpotify.track.title;
   const mini = q(".sd-mini");
   const mk = (type, x, y) => new window.MouseEvent(type, { bubbles: true, clientX: x, clientY: y });
+  const startTrack = window.MockSpotify.state.trackIndex;
   mini.dispatchEvent(mk("pointerdown", 300, 400));
   for (let i = 1; i <= 6; i++) mini.dispatchEvent(mk("pointermove", 300 - i * 20, 400));
   mini.dispatchEvent(mk("pointerup", 180, 400));
   await tick(150);
-  assert(window.MockSpotify.track.title !== before, "track did not change");
-  return before + " → " + window.MockSpotify.track.title;
+  assert(window.MockSpotify.track.title === before, "un balayage a changé de titre : le lecteur doit être statique");
+  assert(window.MockSpotify.state.trackIndex === startTrack, "l'index de piste a bougé après un balayage");
+  /* Le balayage vers le haut n'ouvre rien non plus : seule une commande
+     explicite (l'appui) ouvre le lecteur plein écran. */
+  assert(!doc.documentElement.classList.contains("sd-player-open"), "un balayage a ouvert le lecteur plein écran");
+  assert(!mini.style.transform, "un geste a laissé un transform sur le mini-lecteur : il pourrait sortir de l'écran");
+  /* L'appui, lui, ouvre toujours le lecteur plein écran. */
+  mini.dispatchEvent(mk("click", 180, 400));
+  await tick(120);
+  assert(doc.documentElement.classList.contains("sd-player-open"), "l'appui n'ouvre plus le lecteur");
+  SD.closePlayer();
+  await tick(120);
+  return "balayage ignoré · appui → lecteur ✓";
 });
 
-await checkAsync("full player opens, drag down closes it", async () => {
+await checkAsync("le lecteur plein écran s'ouvre et se ferme par commande (pas par glissement)", async () => {
   q(".sd-mini").click();
   await tick(60);
   assert(doc.documentElement.classList.contains("sd-player-open"), "player did not open");
+  /* **Un glissement ne ferme plus rien.** Le geste de fermeture était le même
+     que celui du défilement : le doigt posé sur la pochette pour faire défiler
+     fermait le lecteur. Ne reste que la commande explicite : le bouton
+     « Fermer » (et le retour d'Android, qui l'appelle). */
   const head = q(".sd-player-head");
   const mk = (type, y) => new window.MouseEvent(type, { bubbles: true, clientX: 180, clientY: y });
   head.dispatchEvent(mk("pointerdown", 100));
   for (let i = 1; i <= 6; i++) head.dispatchEvent(mk("pointermove", 100 + i * 40));
   head.dispatchEvent(mk("pointerup", 340));
-  await tick(80);
-  assert(!doc.documentElement.classList.contains("sd-player-open"), "player did not close on drag");
-  return "open → drag 240px → closed";
+  await tick(120);
+  assert(
+    doc.documentElement.classList.contains("sd-player-open"),
+    "un glissement a fermé le lecteur plein écran : le geste de défilement le fera encore"
+  );
+  const close = q(".sd-player-close");
+  assert(close, "le bouton « Fermer » du lecteur est introuvable");
+  close.click();
+  await tick(140);
+  assert(!doc.documentElement.classList.contains("sd-player-open"), "le bouton « Fermer » ne ferme plus le lecteur");
+  return "glissement ignoré · bouton Fermer → fermé ✓";
 });
 
 await checkAsync("queue sheet uses Spotify's own panel", async () => {
@@ -740,16 +770,56 @@ await checkAsync("le lecteur plein écran ne se ferme plus quand on fait défile
   await tick(120);
   assert(doc.documentElement.classList.contains("sd-player-open"), "un petit mouvement a fermé le lecteur");
 
-  /* Et un vrai tirage vers le bas, relâché, ferme bien le lecteur. */
+  /* Et même un vrai tirage relâché ne ferme rien : le lecteur est statique, il
+     ne se ferme que par commande (bouton « Fermer », retour d'Android). */
   gesture("pointerup", [80, 160, 280], 300);
   await tick(420);
   assert(
-    !doc.documentElement.classList.contains("sd-player-open"),
-    "le tirage vers le bas ne ferme plus le lecteur : le geste d'origine est perdu"
+    doc.documentElement.classList.contains("sd-player-open"),
+    "un tirage ferme encore le lecteur : le défilement le fermera aussi"
   );
   /* Le mini-lecteur est revenu avec la fermeture (il ne reste pas traduit). */
   assert(doc.documentElement.classList.contains("sd-mini-on"), "le mini-lecteur n'est pas revenu après la fermeture");
   return "défilement : lecteur gardé · tirage décidé : fermé ✓";
+});
+
+await checkAsync("le lecteur reste à l'écran pendant le défilement (statique)", async () => {
+  /* **La demande explicite du 25/09 : « fais en sorte qu'il soit statique ».**
+     Le mini-lecteur est en position fixe, sans transform ni animation : il ne
+     peut ni sortir de l'écran ni se décaler. Ce test descend la page comme le
+     font les navigateurs (Échap annule le défilement, donc la position revient :
+     on relève pendant), puis vérifie que le lecteur n'a pas bougé d'un pixel et
+     qu'aucun geste ne l'a déplacé. */
+  const mini = q(".sd-mini");
+  assert(mini, "mini-lecteur introuvable");
+  const styles = window.getComputedStyle(mini);
+  assert(styles.position === "fixed", "le mini-lecteur n'est plus en position fixe : " + styles.position);
+  assert(styles.transform === "none" || styles.transform === "", "le mini-lecteur porte un transform : " + styles.transform);
+  assert(
+    styles.animationName === "none" || !styles.animationName,
+    "le mini-lecteur est animé : " + styles.animationName
+  );
+
+  /* Un défilement de la page entière, celui qui le faisait disparaître. */
+  const main = doc.getElementById("main-view") || doc.body;
+  const before = { class: doc.documentElement.className.includes("sd-mini-on"), transform: mini.style.transform || "" };
+  for (let i = 1; i <= 8; i++) {
+    if (main.scrollTo) main.scrollTo(0, i * 200);
+    main.scrollTop = i * 200;
+    window.dispatchEvent(new window.Event("scroll"));
+    await tick(30);
+    assert(
+      doc.documentElement.classList.contains("sd-mini-on"),
+      "le lecteur a disparu pendant le défilement (étape " + i + ")"
+    );
+    assert(!mini.style.transform, "un transform est apparu sur le lecteur pendant le défilement (étape " + i + ")");
+  }
+  main.scrollTop = 0;
+  window.dispatchEvent(new window.Event("scroll"));
+  await tick(80);
+  assert(doc.documentElement.classList.contains("sd-mini-on"), "le lecteur a disparu après le défilement");
+  assert(doc.documentElement.className.includes("sd-mini-on") === before.class, "l'état du lecteur a changé après le défilement");
+  return "fixe · sans transform · présent à chaque étape du défilement ✓";
 });
 
 await checkAsync("le mini-lecteur se remet tout seul s'il a été poussé hors de l'écran", async () => {
@@ -1571,7 +1641,7 @@ await checkAsync("a tall, narrow page is not 'nothing displayed', and the diagno
     const width = isMain ? 29 : hasText ? 24 : 0;
     return { width, height, top: 0, left: 0, right: width, bottom: height, x: 0, y: 0 };
   };
-  w.AndBridge = { version: () => "2.11.10", session: () => false };
+  w.AndBridge = { version: () => "2.11.11", session: () => false };
   w.eval(await read("dist/spotiduck-ui.js"));
   await tick(250);
 
@@ -1801,6 +1871,107 @@ await checkAsync("the library shows the account's playlists, albums, artists and
   return "6 lignes lues à la source · filtres, compteurs, adresses, masquage ✓";
 });
 
+await checkAsync("la bibliothèque s'affiche sans attendre le réseau", async () => {
+  /* Signalé : « ça prend du temps à charger pour afficher ». La page attendait
+     six appels réseau avant de montrer quoi que ce soit, alors que les lignes de
+     Spotify sont déjà dans la page et qu'un cache local peut les rendre
+     immédiatement. Ici le réseau ne répond **jamais** : si la page affiche
+     quelque chose, elle ne l'a pas attendu. */
+  const dom = new JSDOM(
+    "<!doctype html><html><body><div id='Desktop_LeftSidebar_Id'>" +
+      "<a href='/playlist/p1' aria-label='Mes tubes'></a>" +
+      "<a href='/playlist/p2' aria-label='Découvertes'></a>" +
+      "</div><main></main></body></html>",
+    { url: "https://open.spotify.com/intl-fr/", pretendToBeVisual: true, runScripts: "dangerously" }
+  );
+  /* Un réseau qui ne répond jamais : ni `fetch`, ni pont. */
+  dom.window.fetch = () => new Promise(() => {});
+  dom.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => undefined }));
+  dom.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(200);
+  const api = dom.window.SpotiDuckUI;
+  const page = dom.window.document;
+  api.state.tab = "library";
+  api.library.load(true);
+  /* **Aucune attente** : ni `tick`, ni requête. Ce qui est à l'écran doit y être
+     déjà. */
+  const rows = page.querySelectorAll(".sd-lib-row");
+  assert(rows.length === 2, `2 lignes attendues sans aucune attente réseau, ${rows.length} affichée(s)`);
+  assert(api.library.state === "ready", `état attendu « ready » immédiatement, obtenu « ${api.library.state} »`);
+  const title = page.querySelector(".sd-lib-title").textContent;
+  assert(title === "Bibliothèque", "le titre de la page n'est pas posé : " + title);
+  assert(
+    api.library.note() === "" || /liste de Spotify|Actualisation/.test(api.library.note()),
+    "la page affiche un état de chargement alors qu'elle a déjà des lignes : " + api.library.note()
+  );
+  dom.window.close();
+  return "2 lignes affichées sans le moindre appel réseau ✓";
+});
+
+await checkAsync("la bibliothèque relit son cache avant même la page de Spotify", async () => {
+  /* Deuxième ouverture : les lignes lues la dernière fois sont dans le stockage
+     local. Elles doivent apparaître **avant** toute lecture de la page — c'est
+     ce qui rend l'onglet instantané après un rechargement de la WebView. */
+  const dom = new JSDOM("<!doctype html><html><body><main></main></body></html>", {
+    url: "https://open.spotify.com/intl-fr/",
+    pretendToBeVisual: true,
+    runScripts: "dangerously",
+  });
+  dom.window.localStorage.setItem(
+    "sd.library.cache",
+    JSON.stringify({
+      at: Date.now() - 60 * 1000,
+      items: [
+        { type: "playlist", name: "Cache A", sub: "", href: "/playlist/c1", img: "" },
+        { type: "playlist", name: "Cache B", sub: "", href: "/playlist/c2", img: "" },
+        { type: "album", name: "Cache C", sub: "", href: "/album/c3", img: "" },
+      ],
+    })
+  );
+  dom.window.fetch = () => new Promise(() => {});
+  dom.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => undefined }));
+  dom.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(200);
+  const api = dom.window.SpotiDuckUI;
+  const page = dom.window.document;
+  api.state.tab = "library";
+  api.library.load(true);
+  const rows = [...page.querySelectorAll(".sd-lib-row")];
+  assert(rows.length === 3, `3 lignes du cache attendues, ${rows.length} affichée(s)`);
+  assert(
+    rows.map((r) => r.getAttribute("href")).join(",") === "/playlist/c1,/playlist/c2,/album/c3",
+    "le cache n'est pas celui qui est affiché : " + rows.map((r) => r.getAttribute("href")).join(",")
+  );
+  assert(api.library.cached === true, "les lignes ne sont pas marquées comme venant du cache");
+  /* Et quand l'API répond, ses lignes (plus complètes) prennent la place. */
+  dom.window.fetch = (url, init) => {
+    void init;
+    const key = String(url).replace("https://api.spotify.com/v1", "");
+    const body =
+      key === "/me"
+        ? { id: "moi", display_name: "Moi" }
+        : key === "/me/playlists?limit=50"
+          ? { total: 1, items: [{ id: "p1", name: "Fraîche", owner: { display_name: "Moi" }, images: [] }] }
+          : { total: 0, items: [] };
+    return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
+  };
+  const xhr = new dom.window.XMLHttpRequest();
+  xhr.open("GET", "https://api.spotify.com/v1/me");
+  xhr.setRequestHeader("Authorization", "Bearer jeton-cache");
+  api.library.load(true);
+  for (let i = 0; i < 60 && api.library.refreshing; i++) await tick(25);
+  assert(api.library.fromSidebar === false, "l'API a répondu mais les lignes du repli sont restées");
+  assert(
+    api.library.items.some((r) => r.name === "Fraîche"),
+    "les lignes de l'API n'ont pas remplacé le cache : " + JSON.stringify(api.library.items.slice(0, 2))
+  );
+  /* Le cache a été mis à jour avec ce que l'API a donné. */
+  const stored = JSON.parse(dom.window.localStorage.getItem("sd.library.cache") || "null");
+  assert(stored && stored.items && stored.items.some((r) => r.name === "Fraîche"), "le cache n'a pas été mis à jour après une lecture réussie");
+  dom.window.close();
+  return "cache affiché d'abord · API ensuite · cache mis à jour ✓";
+});
+
 await checkAsync("la bibliothèque lit la liste de Spotify quand l'API ne répond pas", async () => {
   /* Signalé le 25/09 : « la bibliothèque est toujours buguée, il n'arrive pas à
      reconnaître mes playlists ». L'API du lecteur peut refuser le jeton, se
@@ -1832,7 +2003,15 @@ await checkAsync("la bibliothèque lit la liste de Spotify quand l'API ne répon
   xhr.setRequestHeader("Authorization", "Bearer jeton-perime");
   api.state.tab = "library";
   api.library.load(true);
-  for (let i = 0; i < 40 && api.library.state === "loading"; i++) await tick(25);
+  /* Les lignes sont là **tout de suite** (aucune attente réseau) : c'est le
+     premier point que ce test verrouille. */
+  assert(
+    api.library.items.length === 3 && page.querySelectorAll(".sd-lib-row").length === 3,
+    "les lignes de Spotify ne sont pas affichées immédiatement : " + api.library.items.length
+  );
+  /* Puis on laisse le rafraîchissement par l'API se terminer (il échoue, il
+     doit échouer) pour lire son journal. */
+  for (let i = 0; i < 60 && api.library.refreshing; i++) await tick(25);
 
   assert(api.library.items.length === 3, `3 lignes de la liste de Spotify attendues, ${api.library.items.length} lue(s)`);
   assert(api.library.fromSidebar === true, "les lignes ne sont pas marquées comme lues dans la liste de Spotify");

@@ -1077,24 +1077,54 @@ if (!/linkName: function/.test(libraryCode)) {
   errors.push("les lignes de Spotify seraient lues sans leur nom");
 }
 
-/* **Le lecteur ne se ferme pas sur un défilement.** Le geste de défilement et
-   le geste de fermeture sont le même : sans cette garde, faire défiler depuis
-   la pochette fermait le lecteur plein écran — « le lecteur disparaît quand je
-   scroll vers le bas ». */
-if (!/var released = ev\.type !== "pointercancel"/.test(libraryCode)) {
-  errors.push("un défilement peut de nouveau fermer le lecteur plein écran (le geste repris par le navigateur est pris pour un tirage)");
+/* **Le lecteur est statique.** Deux versions ont tenté d'apprivoiser les gestes
+   (défilement ≠ tirage, relâchement exigé) : le défilement continuait de fermer
+   le lecteur ou de changer de titre sur le téléphone. Il n'y a donc plus aucun
+   geste sur le mini-lecteur ni sur la feuille : ils ne bougent et ne se ferment
+   que sur une commande explicite. */
+if (/miniSwipe: function|sheetDrag: function/.test(libraryCode)) {
+  errors.push("des gestes sont revenus sur le lecteur : c'est ce qui le faisait disparaître au défilement");
 }
-if (!/var flick = velocity > 0\.8 && dy > 64/.test(libraryCode)) {
-  errors.push("un frôlement rapide fermerait le lecteur : le lancer doit avoir parcouru de quoi être vu");
+if (!/this\.seekDrag\(\);/.test(libraryCode)) {
+  errors.push("le curseur de lecture n'est plus glissant : on ne peut plus se déplacer dans le morceau");
 }
-if (!/if \(ev\.type === "pointercancel"\) return;/.test(libraryCode)) {
-  errors.push("un défilement commencé sur le mini-lecteur peut de nouveau changer de titre ou ouvrir la feuille");
+if (!/transform: none !important/.test(css)) {
+  errors.push("le mini-lecteur n'est plus figé en CSS : une transition pourrait de nouveau le déplacer");
+}
+if (!/html\.sd-mobile\.sd-player-open \.sd-player \{[^}]*transform: none/.test(css)) {
+  errors.push("la feuille du lecteur peut de nouveau être tirée : le geste de fermeture se confond avec le défilement");
+}
+if (/translate3d\(0, 120%, 0\)/.test(css)) {
+  errors.push("le mini-lecteur est de nouveau poussé hors de l'écran par un transform (un transform resté en place le fait disparaître)");
 }
 if (!/reassertMini: function/.test(libraryCode) || !/UI\.reassertMini\(\)/.test(libraryCode)) {
   errors.push("le mini-lecteur n'est plus réaffirmé : une classe restée en place le laisserait hors de l'écran");
 }
 if (!/html\.classList\.toggle\("sd-player-open", Player\.open\)/.test(libraryCode)) {
   errors.push("la classe du lecteur plein écran n'est plus posée au même endroit que l'état qui la décide");
+}
+
+/* **La bibliothèque s'affiche d'abord, interroge ensuite.** Signalé : « ça
+   prend du temps à charger pour afficher ». La page attendait six appels réseau
+   avant de montrer quoi que ce soit, alors que les lignes de Spotify sont déjà
+   dans la page et qu'un cache local peut les rendre tout de suite. */
+if (!/showNow: function/.test(libraryCode) || !/var shown = this\.showNow\(\);/.test(libraryCode)) {
+  errors.push("la bibliothèque n'affiche plus d'abord ce qu'elle a sous la main : elle attendrait de nouveau le réseau");
+}
+if (!/readCache: function/.test(libraryCode) || !/writeCache: function/.test(libraryCode)) {
+  errors.push("la bibliothèque n'a plus de cache local : chaque ouverture repartirait de zéro");
+}
+if (!/LIBRARY_CACHE_KEY/.test(libraryCode) || !/LIBRARY_CACHE_TTL/.test(libraryCode)) {
+  errors.push("le cache de la bibliothèque n'a plus de clé ni de durée de vie");
+}
+if (!/refresh: function \(haveRows\)/.test(libraryCode) || !/self\.keep\.length/.test(libraryCode)) {
+  errors.push("un rafraîchissement raté viderait la bibliothèque au lieu de garder ce qui est affiché");
+}
+if (!/renderedSignature/.test(libraryCode)) {
+  errors.push("les lignes sont de nouveau reconstruites à chaque repeint : la page redevient saccadée (82 lignes et leurs pochettes)");
+}
+if (!/libraryRefreshing/.test(runtime)) {
+  errors.push("la page ne dit plus qu'une actualisation est en cours : on ne saurait pas si l'API a répondu");
 }
 
 /* Le repli qui rend la page utile même sans API : la liste de Spotify. */
@@ -1278,6 +1308,9 @@ if (!/lignes-spotify=/.test(probeTool) || !/en-têtes=/.test(probeTool)) {
 }
 if (!/document=\$\{scroll\.document\}/.test(probeTool)) {
   errors.push("la sonde ne fait plus défiler le document entier : le défilement du téléphone n'aurait plus de témoin");
+}
+if (!/dessus-du-lecteur=/.test(probeTool) || !/beforeTop/.test(probeTool)) {
+  errors.push("la sonde ne dit plus ce qui recouvre le lecteur : « le lecteur a disparu » ne se distinguerait plus d'un élément posé dessus");
 }
 if (!/plein-écran=/.test(probeTool) || !/transform=/.test(probeTool)) {
   errors.push("la sonde ne dit plus si la feuille du lecteur est ouverte ni si le mini-lecteur porte un transform : un lecteur « disparu » ne se verrait pas");

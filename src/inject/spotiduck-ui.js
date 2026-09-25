@@ -197,6 +197,7 @@
       libraryFromSpotify: "%s playlists lues dans Spotify",
       libraryHeaders: "En-têtes de la page : %s",
       libraryScan: "Lignes trouvées — %s",
+      libraryRefreshing: "Actualisation en cours…",
       librarySidebar: "Lues dans la liste de Spotify (%s éléments) : l'API du lecteur n'a pas répondu.",
       libraryLog: "Derniers essais",
       libraryTokenAge: "Jeton capté %s · /me → %s",
@@ -4654,6 +4655,11 @@
   /** Combien de temps une lecture de la bibliothèque reste bonne. */
   var LIBRARY_TTL = 10 * 60 * 1000;
   var LIBRARY_PAGE = 50;
+  /* Les dernières lignes lues, gardées sur l'appareil : c'est ce qui affiche la
+     bibliothèque **tout de suite** à la deuxième ouverture (et après un
+     rechargement de page), sans attendre le réseau. */
+  var LIBRARY_CACHE_KEY = "sd.library.cache";
+  var LIBRARY_CACHE_TTL = 7 * 24 * 60 * 60 * 1000;
 
   var Library = {
     el: null,
@@ -4668,6 +4674,13 @@
     scan: [],
     woke: "",
     woken: false,
+    /* Le rafraîchissement par l'API tourne-t-il ? Ce qu'on montre avant qu'il
+       réponde, et ce qu'on a lu du cache. */
+    refreshing: false,
+    keep: [],
+    cached: false,
+    cache: [],
+    cacheRead: false,
     /* Le compte est-il bien celui du jeton ? (`/me`) */
     account: "",
     loading: false,
@@ -4878,7 +4891,10 @@
     retrySidebar: function (delay) {
       var self = this;
       setTimeout(function () {
-        if (self.loading || self.items.length) return;
+        /* Ne remplace jamais des lignes déjà affichées : quand elles viennent du
+           cache, la relecture sert seulement à les rafraîchir si la liste de
+           Spotify en montre plus. */
+        if (self.items.length && !self.cached) return;
         var rows = self.fromSpotifyList();
         if (!rows.length) return;
         self.items = rows;
@@ -4916,44 +4932,114 @@
      * d'une session fermée, et il n'y a alors rien à dire : la page de connexion
      * ou l'écran d'accueil maison sont déjà là.
      */
+    /**
+     * **Afficher d'abord, interroger ensuite.**
+     *
+     * Signalé : « ça prend du temps à charger pour afficher ». La page attendait
+     * la fin de six appels réseau avant de montrer quoi que ce soit — alors que
+     * les lignes de Spotify sont **déjà dans la page** et qu'un cache local peut
+     * les rendre tout de suite. On montre donc immédiatement ce qu'on a
+     * (cache, puis liste de Spotify), et l'API ne sert plus qu'à *enrichir*
+     * en arrière-plan. La page n'attend jamais le réseau.
+     */
     load: function (force) {
-      var self = this;
       if (!Settings.libraryBoard) {
         this.items = [];
         this.state = "idle";
         return false;
       }
-      if (this.loading) return false;
       if (!force && this.loadedAt && Date.now() - this.loadedAt < LIBRARY_TTL) return false;
-      if (!Api.authToken) {
-        /* Pas de jeton : l'API est hors jeu, mais la liste de Spotify est
-           peut-être là, remplie par le lecteur. La lire coûte une lecture de
-           page — et vaut mieux qu'un message quand des playlists existent. */
-        var noTokenRows = this.fromSpotifyList();
-        this.fromSidebar = !!noTokenRows.length;
-        this.items = noTokenRows;
-        this.counts = this.tallyRows(noTokenRows);
-        this.state = noTokenRows.length ? "ready" : "no-token";
-        this.loadedAt = Date.now();
+      /* 1. Ce qu'on peut montrer **maintenant**, sans réseau. */
+      var shown = this.showNow();
+      /* 2. Le rafraîchissement par l'API, en arrière-plan. */
+      this.refresh(shown);
+      return false;
+    },
+
+    /** Ce qu'on a sous la main : ce qui est déjà lu, le cache, puis Spotify. */
+    showNow: function () {
+      if (this.items.length) return true;
+      var cached = this.readCache();
+      if (cached.length) {
+        this.items = cached;
+        this.counts = this.tallyRows(cached);
+        this.fromSidebar = true;
+        this.cached = true;
+        this.state = "ready";
+        this.scan = ["cache " + cached.length];
         this.apply();
-        /* La liste de Spotify est peut-être là sans être rendue (barre latérale
-           repliée) : on la déplie et on relit — sans jeton aussi, puisque c'est
-           Spotify qui l'affiche. */
-        if (!noTokenRows.length && this.wake()) this.retrySidebar(1200);
-        /* **Et on va chercher le jeton là où il est.** La page du lecteur sait
-           le donner (même origine) : sans ça, un téléphone dont la capture a
-           manqué le jeton ne pouvait plus jamais lire sa bibliothèque — il
-           fallait se reconnecter. S'il arrive, on relit. */
+        return true;
+      }
+      var rows = this.fromSpotifyList();
+      if (rows.length) {
+        this.items = rows;
+        this.counts = this.tallyRows(rows);
+        this.fromSidebar = true;
+        this.state = "ready";
+        this.apply();
+        return true;
+      }
+      /* Rien de visible : la liste de Spotify est peut-être repliée (téléphone).
+         On la déplie une fois — c'est un appui que l'utilisateur ferait — et on
+         relit dans la foulée. */
+      if (this.wake()) this.retrySidebar(1200);
+      return false;
+    },
+
+    /** Les dernières lignes connues, gardées d'une visite à l'autre. */
+    readCache: function () {
+      if (this.cacheRead) return this.cache || [];
+      this.cacheRead = true;
+      try {
+        var raw = window.localStorage.getItem(LIBRARY_CACHE_KEY);
+        var data = raw ? JSON.parse(raw) : null;
+        if (data && data.items && data.items.length && Date.now() - (data.at || 0) < LIBRARY_CACHE_TTL) {
+          this.cache = data.items.slice(0, 120);
+        }
+      } catch (e) {
+        this.cache = [];
+      }
+      return this.cache || [];
+    },
+
+    writeCache: function () {
+      if (!this.items.length || this.fromSidebar) return false;
+      try {
+        window.localStorage.setItem(
+          LIBRARY_CACHE_KEY,
+          JSON.stringify({ at: Date.now(), items: this.items.slice(0, 120) })
+        );
+        return true;
+      } catch (e) {
+        return false;
+      }
+    },
+
+    /**
+     * Le rafraîchissement par l'API : jamais bloquant. S'il aboutit, ses lignes
+     * (plus complètes : totaux, pochettes, sous-titres) remplacent celles qu'on
+     * montrait ; s'il échoue, ce qu'on montrait reste à l'écran, avec la raison.
+     */
+    refresh: function (haveRows) {
+      var self = this;
+      if (this.refreshing) return false;
+      if (!Api.authToken) {
+        if (!haveRows) {
+          /* Rien à montrer et pas de jeton : le dire, puis aller le chercher. */
+          this.state = "no-token";
+          this.apply();
+        }
         if (!Api.refreshState) {
           Api.refreshToken().then(function (ok) {
-            if (ok) self.load(true);
+            if (ok) self.refresh(haveRows);
           });
         }
         return false;
       }
-      this.loading = true;
-      this.state = "loading";
-      this.apply();
+      this.refreshing = true;
+      this.keep = this.items.slice();
+      this.state = haveRows ? "ready" : "loading";
+      if (!haveRows) this.apply();
       /* **Une requête à la fois.** Le pont natif répond de façon bloquante (le
          fil JavaScript attend le réseau) : cinq requêtes lancées d'un coup
          gèleraient l'écran le temps de toutes les attendre. On les enchaîne en
@@ -4993,17 +5079,40 @@
         clearTimeout(self.deadline);
         self.deadline = 0;
         self.loading = false;
+        self.refreshing = false;
         self.loadedAt = Date.now();
         var profile = res[0];
         /* Le nom, pas l'identifiant : c'est ce que l'utilisateur reconnaît
            (« il arrive pas à reconnaître mes playlists »). */
         self.account = profile ? profile.display_name || profile.id || "" : "";
         var sources = res.slice(1);
-        self.items = self.parse(sources);
-        self.counts = self.tally(sources);
+        var fresh = self.parse(sources);
         var answered = sources.some(function (r) {
           return !!r;
         });
+        if (fresh.length) {
+          /* L'API a répondu : ses lignes sont plus complètes que le repli, on
+             les prend — et on les garde pour la prochaine ouverture. */
+          self.items = fresh;
+          self.counts = self.tally(sources);
+          self.fromSidebar = false;
+          self.cached = false;
+          self.writeCache();
+          self.state = "ready";
+          self.apply();
+          return;
+        }
+        /* **L'API n'a rien donné : ce qu'on montrait reste.** C'est tout l'objet
+           du repli — une page qui se vide alors qu'elle affichait les playlists
+           de Spotify une seconde plus tôt serait le pire des comportements. */
+        if (self.keep.length) {
+          self.items = self.keep;
+          self.state = "ready";
+          self.apply();
+          return;
+        }
+        self.items = [];
+        self.counts = self.tally(sources);
         self.fromSidebar = false;
         if (self.items.length) {
           self.state = "ready";
@@ -5168,7 +5277,10 @@
     /** Ce qu'il y a à dire quand la liste est vide (jamais un écran muet). */
     note: function () {
       if (this.state === "loading") {
-        /* Où en est la lecture, en clair : « (2/5) ». */
+        /* Où en est la lecture, en clair : « (2/6) ». Cet état ne dure que si
+           la page n'avait **rien** à montrer : dès qu'il y a des lignes (cache
+           ou liste de Spotify), elles sont affichées et la note est celle du
+           repli. */
         return this.step
           ? Settings.labels.libraryLoadingProgress.replace("%s", String(this.step)).replace("%s", String(this.steps))
           : Settings.labels.libraryLoading;
@@ -5195,7 +5307,11 @@
       if (this.state === "empty") return Settings.labels.libraryEmpty;
       if (this.items.length && !this.filtered().length) return Settings.labels.homeEmptyCategory;
       if (this.fromSidebar) {
-        return Settings.labels.librarySidebar.replace("%s", String(this.items.length));
+        var base = Settings.labels.librarySidebar.replace("%s", String(this.items.length));
+        /* Et si l'API travaille encore en arrière-plan, on le dit — sans que
+           cela retarde quoi que ce soit à l'écran. */
+        if (this.refreshing) base += " " + Settings.labels.libraryRefreshing;
+        return base;
       }
       return "";
     },
@@ -5228,7 +5344,21 @@
         chip.setAttribute("aria-selected", active ? "true" : "false");
       });
       var list = $(".sd-lib-list", this.el);
-      list.textContent = "";
+      /* **Ne pas reconstruire 82 lignes à chaque repeint.** `render` est appelé
+         à chaque changement de vue et à chaque relevé de la bibliothèque :
+         recréer toutes les lignes (et redemander toutes les pochettes) à chaque
+         fois, c'est ce qui rendait la page saccadée — « c'est encore bugué ».
+         On ne rebâtit la liste que si elle doit vraiment changer. */
+      var shown = this.filtered();
+      var signature =
+        this.filter +
+        "|" +
+        shown.length +
+        "|" +
+        (shown[0] ? shown[0].href : "") +
+        "|" +
+        (shown[shown.length - 1] ? shown[shown.length - 1].href : "");
+      var sameList = signature === this.renderedSignature;
       /* Le journal : montré seulement quand la page n'a rien à lister. */
       var logBox = $(".sd-lib-log", this.el);
       if (logBox) {
@@ -5297,7 +5427,9 @@
         actions.hidden = !nothing && (!login || login.hidden);
         if (nothing && retry) retry.setAttribute("aria-label", Settings.labels.libraryRetry + " — " + Settings.labels.libraryHint);
       }
-      this.filtered().forEach(function (row) {
+      if (!sameList) list.textContent = "";
+      if (sameList) return shown.length;
+      shown.forEach(function (row) {
         var link = document.createElement("a");
         link.className = "sd-lib-row sd-lib-row-" + row.type;
         link.href = row.href;
@@ -5326,7 +5458,8 @@
         link.appendChild(text);
         list.appendChild(link);
       });
-      return this.filtered().length;
+      this.renderedSignature = signature;
+      return shown.length;
     },
 
     /**
@@ -5379,6 +5512,9 @@
         this.leave();
         return false;
       }
+      /* `load` montre immédiatement ce qu'il a (cache ou liste de Spotify) et
+         lance le rafraîchissement en arrière-plan ; `watch` ne sert que s'il n'y
+         a **rien** à montrer (première visite, page encore vide). */
       this.load();
       if (!this.items.length) this.watch();
       return this.apply();
@@ -6352,8 +6488,14 @@
    * ------------------------------------------------------------------ */
   var Gestures = {
     bind: function () {
-      this.miniSwipe();
-      this.sheetDrag();
+      /* **Plus de gestes sur le lecteur.** Le mini-lecteur ne se déplace plus et
+         la feuille ne se ferme plus au glissement : c'était la même famille de
+         gestes que le défilement, et « le lecteur disparaît quand je scroll vers
+         le bas » venait de là (un doigt posé sur la pochette pour faire défiler
+         était pris pour un tirage de fermeture). Le lecteur est **statique** :
+         il ne bouge et ne se ferme que sur une commande explicite (le bouton
+         « Fermer », ou le retour d'Android). Le curseur de lecture, lui, reste
+         glissant : c'est un curseur, pas le lecteur. */
       this.seekDrag();
       this.miniSeekDrag();
     },
@@ -6411,125 +6553,7 @@
     },
 
     /* mini player: tap → open, swipe ← → next, swipe → → previous, swipe ↑ → open */
-    miniSwipe: function () {
-      var el = UI.el.mini;
-      var start = null;
-      el.addEventListener(
-        "pointerdown",
-        function (ev) {
-          if (ev.target.closest(".sd-iconbtn")) return;
-          start = { x: ev.clientX, y: ev.clientY, t: Date.now() };
-          el.classList.add("is-dragging");
-        },
-        { passive: true }
-      );
-      el.addEventListener(
-        "pointermove",
-        function (ev) {
-          if (!start) return;
-          var dx = ev.clientX - start.x;
-          var dy = ev.clientY - start.y;
-          if (dy < -8 && Math.abs(dy) > Math.abs(dx)) {
-            el.style.transform = "translate3d(0," + Math.max(dy, -40) + "px,0)";
-          } else if (Math.abs(dx) > 8) {
-            el.style.transform = "translate3d(" + clamp(dx, -60, 60) + "px,0,0)";
-          }
-        },
-        { passive: true }
-      );
-      var finish = function (ev) {
-        if (!start) return;
-        var dx = ev.clientX - start.x;
-        var dy = ev.clientY - start.y;
-        var dt = Date.now() - start.t;
-        start = null;
-        el.classList.remove("is-dragging");
-        el.style.transform = "";
-        /* Geste repris par le navigateur (défilement) : on remet tout en place
-           et on ne déclenche rien — sinon un simple défilement qui commence sur
-           le lecteur changeait de titre ou ouvrait la feuille. */
-        if (ev.type === "pointercancel") return;
-        var min = Math.max(48, viewW() * 0.18);
-        if (dy < -32 && Math.abs(dy) > Math.abs(dx)) {
-          Player.openSheet();
-        } else if (dx < -min && dt < 600) {
-          Actions.next();
-        } else if (dx > min && dt < 600) {
-          Actions.prev();
-        }
-        // a plain tap is handled by the click listener
-      };
-      el.addEventListener("pointerup", finish);
-      el.addEventListener("pointercancel", finish);
-    },
     /* full player: drag the header/artwork down to dismiss */
-    sheetDrag: function () {
-      var sheet = UI.el.player;
-      var zones = [UI.el.player.firstChild, UI.el.art];
-      var start = null;
-      var self = this;
-      zones.forEach(function (zone) {
-        if (!zone) return;
-        zone.addEventListener(
-          "pointerdown",
-          function (ev) {
-            if (ev.target.closest("button")) return;
-            start = { y: ev.clientY, t: Date.now() };
-            sheet.style.transition = "none";
-            sheet.classList.add("is-dragging");
-          },
-          { passive: true }
-        );
-        zone.addEventListener(
-          "pointermove",
-          function (ev) {
-            if (!start) return;
-            var dy = Math.max(0, ev.clientY - start.y);
-            sheet.style.setProperty("--sd-drag", dy + "px");
-          },
-          { passive: true }
-        );
-        var end = function (ev) {
-          if (!start) return;
-          var dy = Math.max(0, ev.clientY - start.y);
-          var dt = Date.now() - start.t;
-          var velocity = dy / Math.max(1, dt);
-          start = null;
-          sheet.classList.remove("is-dragging");
-          /* **Un défilement n'est pas un geste de fermeture.**
-             Signalé deux fois : « le lecteur disparaît quand je scroll vers le
-             bas ». Le lecteur plein écran se ferme en le tirant vers le bas —
-             mais le geste de défilement est le même, et la pochette occupe
-             l'écran : dès que le doigt partait de là pour faire défiler, le
-             navigateur reprenait le geste (`pointercancel`) et notre code le
-             prenait pour un tirage décidé — le lecteur se fermait. On ne ferme
-             donc plus que sur un **relâchement** (`pointerup`), après un
-             mouvement franc, et jamais quand le geste a servi à faire défiler. */
-          var released = ev.type !== "pointercancel";
-          /* Un geste franc : soit un vrai tirage (22 % de l'écran), soit un
-             **lancer** — mais un lancer qui a tout de même parcouru de quoi
-             être vu (64 px). Sans cette distance, un frôlement rapide fermait
-             le lecteur. */
-          var far = dy > viewH() * 0.22;
-          var flick = velocity > 0.8 && dy > 64;
-          var shouldClose = released && dy > 24 && (far || flick);
-          // The inline `transition: none` set on pointerdown must be cleared in
-          // BOTH branches, otherwise the snap-back is an instant jump.
-          sheet.style.transition = "";
-          sheet.style.removeProperty("--sd-drag");
-          if (shouldClose) {
-            Player.closeSheet();
-          } else {
-            sheet.classList.add("is-settling");
-            setTimeout(function () {
-              sheet.classList.remove("is-settling");
-            }, 340);
-          }
-        };
-        zone.addEventListener("pointerup", end);
-        zone.addEventListener("pointercancel", end);
-      });
-    },
     /* seek bar: real touch scrubbing (the old layer had none — it only sent
        a synthetic `change` on the desktop <input type=range> from Android) */
     seekDrag: function () {

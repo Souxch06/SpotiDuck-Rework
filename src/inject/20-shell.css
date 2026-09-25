@@ -103,7 +103,8 @@ html.sd-mobile .sd-iconbtn[hidden] {
   display: none !important;
 }
 
-/* Generic slide-in animation used by the mini player and the top bars. */
+/* Animation d'apparition des barres du haut. Le mini-lecteur, lui, n'anime
+   plus rien : il est statique (voir plus bas). */
 @keyframes sd-slide-up {
   from {
     transform: translate3d(0, 100%, 0);
@@ -178,9 +179,13 @@ html.sd-mobile .sd-mini {
   padding: 0 8px 0 8px;
   background: var(--sd-mini-bg, #1f1f1f);
   border-top: 1px solid var(--sd-border);
-  transform: translate3d(0, 0, 0);
-  transition: transform var(--sd-dur) var(--sd-ease), background-color 400ms linear;
-  will-change: transform;
+  /* **Le lecteur est statique.** Il ne glisse plus, ne se décale plus, ne
+     s'anime plus : il est posé là, en bas, et rien ne le déplace. « Le lecteur
+     disparaît quand je scroll vers le bas » (deux fois signalé) venait de
+     gestes et de transitions sur cette barre ; il n'y en a plus. */
+  transform: none !important;
+  animation: none !important;
+  transition: background-color 400ms linear;
   cursor: pointer;
   overscroll-behavior: contain;
 }
@@ -191,17 +196,13 @@ html.sd-mobile .sd-mini {
 html.sd-mobile.sd-mini-on .sd-mini,
 html.sd-mobile.sd-has-track .sd-mini {
   display: flex;
-  animation: sd-slide-up 260ms var(--sd-ease);
 }
+/* La feuille du lecteur recouvre le mini-lecteur : inutile de le pousser hors
+   de l'écran (un transform laissé en place le faisait « disparaître »), il
+   suffit qu'il ne reçoive plus les appuis pendant ce temps. */
 html.sd-mobile.sd-player-open .sd-mini,
 html.sd-mobile.sd-queue-open .sd-mini {
-  /* While a sheet is open the mini player is hidden, not merely covered, so
-     it can never steal a tap meant for the sheet. */
-  transform: translate3d(0, 120%, 0);
   pointer-events: none;
-}
-html.sd-mobile .sd-mini.is-dragging {
-  transition: none;
 }
 
 html.sd-mobile .sd-mini-art {
@@ -385,7 +386,10 @@ html.sd-mobile .sd-player {
   overscroll-behavior: contain;
 }
 html.sd-mobile.sd-player-open .sd-player {
-  transform: translate3d(0, var(--sd-drag, 0px), 0);
+  /* **Elle s'ouvre et se ferme, mais ne se tire pas.** Le glissement vers le
+     bas pour fermer était le même geste que le défilement : c'est ce qui
+     faisait « disparaître » le lecteur quand on faisait défiler la page. */
+  transform: none;
   visibility: visible;
 }
 /* Transitions are only killed while a finger is down, so the sheet still

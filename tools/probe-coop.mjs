@@ -563,6 +563,23 @@ const TABMEASURE = () => {
     /* Le lecteur, tel qu'il est à cet instant : c'est lui qui « disparaît ». */
     lecteur: state(".sd-mini"),
     lecteurOn: document.documentElement.classList.contains("sd-mini-on") ? "oui" : "non",
+    /* **Qui est au-dessus du lecteur, à son centre ?** Un lecteur « disparu »
+       peut simplement être recouvert : ce relevé le dit sans ambiguïté. */
+    dessus: (function () {
+      const mini = document.querySelector(".sd-mini");
+      if (!mini) return "absent";
+      const r = mini.getBoundingClientRect();
+      if (r.width < 2 || r.height < 2) return "hors écran";
+      try {
+        const el = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        if (!el) return "rien";
+        if (mini.contains(el)) return "le lecteur";
+        const who = el.closest && el.closest(".sd-layer > *");
+        return (who ? who.className.split(" ")[0] : el.tagName.toLowerCase()) + "";
+      } catch (e) {
+        return "non mesurable";
+      }
+    })(),
     /* Ce que la page dit — la raison, en clair (une capture doit suffire). */
     dire: ((document.querySelector(".sd-lib-note") || {}).textContent || "").trim().slice(0, 110),
     /* **Combien de lignes de Spotify sont dans la page** (barre latérale,
@@ -602,7 +619,23 @@ const SCROLLPROBE = async () => {
     return (gone ? "caché" : "visible") + " " + Math.round(r.width) + "x" + Math.round(r.height);
   };
   const coque = document.querySelector(".sd-layer") ? "coque posée" : "coque absente";
+  const onTop = () => {
+    const mini = document.querySelector(".sd-mini");
+    if (!mini) return "absent";
+    const r = mini.getBoundingClientRect();
+    if (r.width < 2) return "hors écran";
+    try {
+      const el = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      if (!el) return "rien";
+      if (mini.contains(el)) return "le lecteur";
+      const who = el.closest && el.closest(".sd-layer > *");
+      return who ? who.className.split(" ")[0] : el.tagName.toLowerCase();
+    } catch (e) {
+      return "non mesurable";
+    }
+  };
   const before = size(".sd-mini");
+  const beforeTop = onTop();
   const node = document.querySelector(".main-view-container__scroll-node, #main-view");
   const start = node ? node.scrollTop : window.scrollY;
   if (node) node.scrollTop = start + 900;
@@ -613,6 +646,7 @@ const SCROLLPROBE = async () => {
      premier relevé (rendu différé de Spotify). */
   await new Promise((r) => setTimeout(r, 900));
   const after2 = size(".sd-mini");
+  const afterTop = onTop();
   if (node) node.scrollTop = start;
   window.scrollTo(0, window.scrollY - 900);
   await new Promise((r) => setTimeout(r, 400));
@@ -627,6 +661,8 @@ const SCROLLPROBE = async () => {
     coque: coque,
     document: docScroll,
     before: before,
+    beforeTop: beforeTop,
+    afterTop: afterTop,
     after: after,
     after2: after2,
     lecteurPlein: document.documentElement.classList.contains("sd-player-open") ? "ouvert" : "fermé",
@@ -966,7 +1002,7 @@ async function main() {
               `onglets-visibles=${m.ongletsVisibles} barre-titre=${m.barreTitre} barre-laterale=${m.barreLaterale} ` +
               `texte=${m.textePage} car. · classes="${m.classes}"` +
               ` · barre-spotify=${m.barreSpotify} · lecteur=${m.lecteur} (${m.lecteurOn})` +
-              ` · lignes-spotify=${m.lignesSpotify} · en-têtes=${m.enTetes}` +
+              ` · lignes-spotify=${m.lignesSpotify} · en-têtes=${m.enTetes} · dessus-du-lecteur=${m.dessus}` +
               (m.dire ? ` · dit="${m.dire}"` : "") +
               (m.journal ? ` · journal="${m.journal}"` : "")
           );
@@ -995,7 +1031,8 @@ async function main() {
         if (scroll) {
           const line =
             `${scroll.coque} · haut=${scroll.before} · bas=${scroll.after} · bas+900ms=${scroll.after2} · ` +
-            ` · document=${scroll.document} · ${scroll.classe} · place réservée=${scroll.bas || "—"}` +
+            ` · document=${scroll.document} · ${scroll.classe} · dessus : ${scroll.beforeTop}→${scroll.afterTop}` +
+            ` · place réservée=${scroll.bas || "—"}` +
             ` · plein-écran=${scroll.lecteurPlein} · transform=${scroll.transform}`;
           if (scroll.before === "absent" || scroll.after === "absent" || scroll.after2 === "absent") {
             warn(`Lecteur au défilement — ${target.label}`, line);

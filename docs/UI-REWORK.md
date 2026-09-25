@@ -2973,3 +2973,84 @@ disparu ».
 * sonde : `lignes-spotify=` (la source de repli), `en-têtes=` (ce qui a été
   gardé), `document=` (défilement du document entier), `plein-écran=` et
   `transform=` (un lecteur « disparu » se voit dans l'annotation).
+
+## §46 — La bibliothèque s'affiche d'abord, le lecteur ne bouge plus (v2.11.11)
+
+Message du 25/09 (11:20), après la 2.11.10 :
+
+> « Il affiche les icônes de les playlist mais c'est encore bugué, et ça prend du
+> temps à charger pour afficher et le lecteur disparaît toujours. Fais en sorte
+> qu'il soit statique. »
+
+Trois constats, trois corrections de fond.
+
+### 1. « Ça prend du temps à charger pour afficher »
+
+La lecture attendait la fin de **six appels réseau** avant de montrer quoi que ce
+soit — alors que les lignes de Spotify sont **déjà dans la page** et qu'un cache
+local peut les rendre tout de suite. L'ordre est inversé :
+
+* `Library.load()` appelle `showNow()` : ce qui est **déjà** là (les lignes en
+  mémoire, sinon le cache local, sinon la liste de Spotify lue dans la page) est
+  affiché **immédiatement**, sans une seule requête ;
+* puis `refresh()` interroge l'API **en arrière-plan**. S'il aboutit, ses lignes
+  (totaux, pochettes, sous-titres) prennent la place ; s'il échoue, **ce qui est
+  affiché reste** (`self.keep`) au lieu que la page se vide ;
+* l'état « Chargement… (n/6) » ne subsiste que s'il n'y a **rien** à montrer :
+  c'est le seul cas où attendre a un sens ;
+* les lignes lues par l'API sont **gardées sur l'appareil**
+  (`sd.library.cache`, 7 jours) : à la deuxième ouverture — et après un
+  rechargement de la WebView — l'onglet est instantané.
+
+### 2. « C'est encore bugué » : 82 lignes reconstruites à chaque repeint
+
+`render()` rebâtissait **toutes** les lignes à chaque appel, et `render` est
+appelé à chaque changement de vue et à chaque relevé : 82 lignes recréées, 82
+pochettes redemandées, plusieurs fois par seconde pendant un défilement. D'où la
+saccade. Le rendu est maintenant **mémoïsé** (`renderedSignature` : filtre +
+nombre + première et dernière adresse) : la liste n'est reconstruite que si elle
+doit vraiment changer.
+
+### 3. « Fais en sorte qu'il soit statique »
+
+Deux versions ont tenté d'apprivoiser les gestes sur le lecteur (un défilement
+n'est pas un tirage ; il faut un relâchement ; un geste repris par le navigateur
+ne compte pas). Sur le téléphone, ça ne suffisait pas : un doigt posé sur la
+pochette pour faire défiler restait interprété comme un balayage.
+
+**Il n'y a plus aucun geste sur le lecteur.**
+
+* le balayage latéral du mini-lecteur (changement de titre) est supprimé ;
+* le glissement vers le haut (ouverture de la feuille) est supprimé ;
+* le tirage vers le bas de la feuille (fermeture) est supprimé — c'est **le même
+  geste** que le défilement ;
+* restent : l'appui (ouvre le lecteur plein écran), les boutons, et le retour
+  d'Android (média, fermeture) ;
+* en CSS, le mini-lecteur est `transform: none !important`, sans animation, et la
+  feuille ne se traduit plus (`transform: none`) ; elle recouvre simplement le
+  mini-lecteur, sans le pousser hors de l'écran (`pointer-events: none` au lieu
+  de `translate3d(0,120%,0)` — un transform resté en place était exactement ce
+  qui le faisait « disparaître ») ;
+* le curseur de lecture reste glissant : c'est un curseur, pas le lecteur.
+
+### Mesures
+
+La sonde relève désormais **qui est au-dessus du lecteur** à son centre
+(`dessus-du-lecteur`, et `dessus : avant→après` pendant le défilement) : un
+lecteur « disparu » se distingue d'un lecteur **recouvert**, sans ambiguïté, dans
+l'annotation CI.
+
+### Vérifications
+
+* banc : la bibliothèque affiche ses lignes **sans aucune attente réseau** (le
+  réseau ne répond jamais dans ce test) ;
+* banc : le cache local est affiché d'abord, puis remplacé par les lignes de
+  l'API, et mis à jour après une lecture réussie ;
+* banc : un balayage ne change plus de titre et n'ouvre plus la feuille ; l'appui
+  ouvre toujours ; un glissement ne ferme plus la feuille (seul le bouton
+  « Fermer » ferme) ;
+* banc : pendant un défilement de huit crans, le lecteur est présent à chaque
+  étape, sans transform ;
+* audit : affichage d'abord, cache (clé + durée), conservation du repli après un
+  échec, mémoïsation du rendu, aucun geste sur le lecteur, `transform: none`
+  côté feuille comme côté mini, curseur toujours glissant.
