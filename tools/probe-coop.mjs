@@ -835,6 +835,24 @@ async function main() {
         );
       }
 
+      /* **L'appui sur l'onglet Bibliothèque, mesuré.** Signalé le 25/09 :
+         « quand on clique sur l'onglet bibliothèque, la barre en haut disparaît
+         et rien d'autre n'apparaît ; je reste bloqué sur l'écran d'accueil ».
+         Le relevé ci-dessus est pris **avant** tout appui (`State.tab` vaut
+         « accueil ») : il ne pouvait donc pas voir ce bug. On ouvre l'onglet,
+         on mesure, puis on revient à l'accueil. */
+      let libraryOnTab = "";
+      if (hasNav === true) {
+        await safely(() => page.evaluate(CLICK, '.sd-nav-item[data-tab="library"]'));
+        await sleep(900);
+        const m = await safely(() => page.evaluate(MEASURE));
+        libraryOnTab = (m && m.library) || "?";
+        /* On revient à l'accueil : l'appui suivant se mesure sur la page de
+           départ, et les captures aussi. */
+        await safely(() => page.evaluate(CLICK, '.sd-nav-item[data-tab="home"]'));
+        await sleep(600);
+      }
+
       /* Un résumé court par page : le détail complet va dans le rapport et
          dans la console, l'annotation ne portant que ce qui décide. */
       if (target.mode === "notre") {
@@ -949,6 +967,7 @@ async function main() {
       if (after && after.home) pageLines.push(`Accueil maison - ${target.label} : ${after.home}`);
       if (after && after.library) pageLines.push(`Bibliothèque - ${target.label} : ${after.library}`);
       if (after && after.bottom) pageLines.push(`Bas de page - ${target.label} : ${after.bottom}`);
+      if (libraryOnTab) pageLines.push(`Onglet Bibliothèque ouvert - ${target.label} : ${libraryOnTab}`);
       lines.push(summary, ...pageLines);
       console.log(`[Sonde coque] ${summary}`);
       note(`Mesure — ${target.label}`, summary);
