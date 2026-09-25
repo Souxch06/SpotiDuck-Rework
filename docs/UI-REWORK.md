@@ -3318,3 +3318,73 @@ pieds** (jamais de chargement sans fin).
   demande de jeton, file d'attente du mini-lecteur qui bascule ;
 * la sonde CI et ses relevés restent ceux de la 2.11.13 (« une seule capture
   suffit »), la 2.11.14 ne changeant pas la mesure.
+
+## §50 — Le zap, et une bibliothèque plus propre (v2.11.15)
+
+Demande : « Rends l'onglet bibliothèque plus propre. Le système de lecture est
+toujours bugué, impossible de zapper la musique. »
+
+### 1. Pourquoi le zap ne marchait pas
+
+Quatre causes, toutes **mesurées** — et aucune ne se voyait dans un banc où la
+page est celle du bureau :
+
+1. **Les repères ne visaient pas la bonne copie.** La mesure CI sur la page du
+   téléphone (`/intl-fr/`, WebView simulée) relève les commandes du lecteur
+   présentes **et désactivées** : `skip-forward 32×32 DÉSACTIVÉ`. Or `pick()`
+   rendait le **premier** élément trouvé : si la barre de la disposition bureau
+   est restée dans la page, l'appui partait sur elle et rien ne se passait.
+   C'est très exactement « impossible de zapper ». La coque classe désormais les
+   candidats : les **désactivés sont écartés** (le navigateur ne leur envoie
+   aucun gestionnaire), et parmi les utilisables ceux qui ont une boîte à
+   l'écran passent d'abord.
+2. **Un bouton caché n'est pas un bouton mort.** Le premier essai de correctif
+   refusait aussi les éléments cachés par le CSS — deux contrôles valides du
+   banc sont tombés : notre propre feuille masque la barre du bureau, et
+   l'appui dessus agit quand même. Seul `disabled` est un signal fiable.
+3. **Les repères par libellé se trompaient de voisin.** « Suivant » est aussi
+   le libellé du bouton d'avance de la **navigation** de Spotify ; « Lecture »
+   celui de nos propres boutons et le début de « Activer la lecture aléatoire »
+   (le bouton du mode aléatoire). Chercher ces mots dans la page entière
+   appuyait sur la mauvaise commande — relevé au banc par un « lecture/pause »
+   qui ne changeait rien. Les repères par libellé sont maintenant **limités aux
+   conteneurs du lecteur** (`aside`, `player-controls`, `now-playing-bar`,
+   `now-playing-widget`), et notre propre couche est écartée partout.
+4. **Un abandon muet.** Quand aucun bouton vivant n'existe, la commande
+   n'essayait rien d'autre et ne disait rien. Elle envoie maintenant le
+   **raccourci du lecteur** (`Espace`, `Ctrl` + flèches) — c'est le seul chemin
+   qui reste quand la page n'expose pas ses boutons — puis **vérifie** que
+   quelque chose a bougé avant de parler : silence si la piste a changé,
+   message franc sinon. Et le message est le bon : « Rien ne joue en ce
+   moment » quand c'est la vraie raison (les commandes de Spotify sont alors
+   désactivées), « ces commandes ne répondent pas sur cette page » sinon.
+
+### 2. Une bibliothèque plus propre
+
+* Les puces portent leur **compte** (« Tout 12 », « Playlists 8 »…) : l'onglet
+  se lit sans compter les lignes ;
+* en-tête et filtres **collants** : on garde le titre et les filtres sous les
+  yeux en faisant défiler ;
+* des **séparateurs** de lignes discrets, une entrée « titres likés » mise en
+  valeur, des actions alignées et un journal **borné** (il ne pousse plus la
+  page) ;
+* un filtre qui ne montre rien **s'explique** (note centrée) au lieu de laisser
+  une liste vide.
+
+### Vérifications
+
+* banc : **138/138**, dont trois essais nouveaux écrits pour ces pannes —
+  « un doublon désactivé ne vole pas *suivant* » (un leurre désactivé est posé
+  devant le vrai bouton : la piste doit changer), « nos propres libellés ne
+  volent pas la commande » (nos boutons reçoivent une boîte à l'écran : l'appui
+  doit quand même atteindre celui de Spotify) et « zapper sans bouton vivant »
+  (le raccourci part ; la coque se tait quand il agit, parle quand il ne fait
+  rien, et dit « rien ne joue » quand c'est la raison) ;
+* audit : garde-fous sur les quatre causes — `dead()` ne juge que `disabled`,
+  notre couche est écartée des candidats, les repères par libellé passent par
+  `inPlayer()`, le repli clavier et sa vérification existent, les deux messages
+  gardent leur sens, et la sonde doit relever le **nombre de candidats** ;
+* trois régressions volontaires (une par invariant) sont détectées par l'audit ;
+* la sonde CI relève désormais, pour chaque commande, **toutes** les copies
+  trouvées (bureau + page), leur taille et leur état, ainsi que nos huit boutons
+  (taille et élément réellement au centre).

@@ -800,46 +800,128 @@ const SUBPAGE_PROBE = () => {
    lecture : un appui sur notre « aléatoire » ou notre « j'aime » doit changer
    l'état du bouton de Spotify (`aria-checked`). */
 const TRANSPORT_PROBE = () => {
-  const SELS = {
-    playPause: ['aside button[data-testid="control-button-playpause"]', 'button[data-testid="control-button-playpause"]'],
-    next: ['aside button[data-testid="control-button-skip-forward"]', 'button[data-testid="control-button-skip-forward"]'],
-    prev: ['aside button[data-testid="control-button-skip-back"]', 'button[data-testid="control-button-skip-back"]'],
-    shuffle: ['aside button[data-testid="control-button-shuffle"]', 'button[data-testid="control-button-shuffle"]'],
-    repeat: ['aside button[data-testid="control-button-repeat"]', 'button[data-testid="control-button-repeat"]'],
-    like: ['aside button[data-testid="add-button"]', 'button[data-testid="add-button"]', 'button[data-testid="now-playing-widget-add-button"]'],
+  /* **Mêmes familles de repères que la coque** (`SEL`, src/inject/spotiduck-ui.js)
+     — identifiants de test *et* libellés. Une famille qui ne trouve rien sur la
+     disposition réelle, c'est une commande qui ne fait rien. */
+  const FAMILLES = {
+    playPause: [
+      'aside button[data-testid="control-button-playpause"]',
+      'button[data-testid="control-button-playpause"]',
+      'button[data-testid="control-button-play"]',
+      'button[data-testid="control-button-pause"]',
+      'button[aria-label="Lecture"]',
+      'button[aria-label="Pause"]',
+      'button[aria-label="Play"]',
+    ],
+    next: [
+      'aside button[data-testid="control-button-skip-forward"]',
+      'button[data-testid="control-button-skip-forward"]',
+      'button[data-testid="control-button-next"]',
+      'button[aria-label="Suivant"]',
+      'button[aria-label="Next"]',
+      'button[aria-label="Next track"]',
+    ],
+    prev: [
+      'aside button[data-testid="control-button-skip-back"]',
+      'button[data-testid="control-button-skip-back"]',
+      'button[data-testid="control-button-previous"]',
+      'button[aria-label="Précédent"]',
+      'button[aria-label="Previous"]',
+      'button[aria-label="Previous track"]',
+    ],
+    shuffle: [
+      'aside button[data-testid="control-button-shuffle"]',
+      'button[data-testid="control-button-shuffle"]',
+      'button[aria-label^="Activer la lecture aléatoire"]',
+      'button[aria-label^="Shuffle"]',
+    ],
+    repeat: [
+      'aside button[data-testid="control-button-repeat"]',
+      'button[data-testid="control-button-repeat"]',
+      'button[aria-label^="Activer la répétition"]',
+      'button[aria-label^="Repeat"]',
+    ],
+    like: [
+      'aside button[data-testid="add-button"]',
+      'button[data-testid="add-button"]',
+      'button[data-testid="now-playing-widget-like-button"]',
+      'button[aria-label^="Ajouter aux Titres likés"]',
+      'button[aria-label^="Save to your Liked"]',
+    ],
   };
-  const target = (nom) => {
-    const list = SELS[nom] || [];
-    for (let i = 0; i < list.length; i++) {
-      const el = document.querySelector(list[i]);
-      if (!el) continue;
-      const r = el.getBoundingClientRect();
-      return {
-        sel: list[i],
-        taille: Math.round(r.width) + "x" + Math.round(r.height),
-        disabled: el.disabled === true,
-        label: el.getAttribute("aria-label") || "",
-      };
-    }
-    return null;
+
+  /* **Toutes les copies**, pas seulement la première : le lecteur garde parfois
+     deux barres dans la page (bureau + téléphone), et l'appui partait sur celle
+     qui est désactivée. C'est la mesure qui dit si la disposition du téléphone a
+     un doublon — et lequel est utilisable. */
+  const candidats = (nom) => {
+    const vus = [];
+    const out = [];
+    (FAMILLES[nom] || []).forEach((sel) => {
+      let list = [];
+      try {
+        list = document.querySelectorAll(sel);
+      } catch (e) {
+        list = [];
+      }
+      list.forEach((el) => {
+        if (vus.indexOf(el) >= 0) return;
+        vus.push(el);
+        const r = el.getBoundingClientRect();
+        out.push({
+          sel,
+          nous: !!(el.closest && el.closest(".sd-layer")),
+          taille: Math.round(r.width) + "x" + Math.round(r.height),
+          disabled: el.disabled === true,
+        });
+      });
+    });
+    return out;
+  };
+  /* Ce que la coque choisirait : un candidat **utilisable**, de préférence avec
+     une boîte à l'écran. Le relevé doit dire si ce choix existe. */
+  const choisirait = (liste) => {
+    const vivants = liste.filter((c) => !c.disabled);
+    const avecBoite = vivants.filter((c) => c.taille !== "0x0");
+    if (avecBoite.length) return avecBoite[0];
+    if (vivants.length) return vivants[0];
+    return liste[0] || null;
   };
   const out = {};
-  Object.keys(SELS).forEach((k) => {
-    const t = target(k);
-    out[k] = t ? `${t.sel.replace("aside ", "")} ${t.taille}${t.disabled ? " DÉSACTIVÉ" : ""}` : "AUCUN";
+  Object.keys(FAMILLES).forEach((nom) => {
+    const tous = candidats(nom).filter((c) => !c.nous);
+    if (!tous.length) {
+      out[nom] = "AUCUN";
+      return;
+    }
+    const choix = choisirait(tous);
+    const detail = tous
+      .map((c) => (c.sel.indexOf("aside") === 0 ? "bureau " : "page ") + c.taille + (c.disabled ? " DÉSACTIVÉ" : ""))
+      .join(" + ");
+    out[nom] =
+      tous.length + " candidat(s)" +
+      (tous.length > 1 ? " [" + detail + "]" : "") +
+      " → choisi " + choix.taille + (choix.disabled ? " DÉSACTIVÉ" : " actif");
   });
   const etat = (sel) => {
     const el = document.querySelector(sel);
     return el ? el.getAttribute("aria-checked") : "?";
   };
   const titre = document.querySelector('[data-testid="context-item-link"], [data-testid="now-playing-widget"] a');
+  const utilisable = Object.keys(FAMILLES).some((nom) => {
+    const tous = candidats(nom).filter((c) => !c.nous);
+    return tous.some((c) => !c.disabled);
+  });
   return {
     cibles: out,
+    /* De quoi lire le relevé sans se tromper : une page où **rien ne joue**
+       laisse ses commandes désactivées, ce n'est pas une panne de la coque. */
     page: {
       shuffle: etat('button[data-testid="control-button-shuffle"]'),
       repeat: etat('button[data-testid="control-button-repeat"]'),
       like: etat('button[data-testid="add-button"]'),
       titre: titre ? (titre.textContent || "").trim().slice(0, 40) : "(aucun)",
+      utilisable: utilisable ? "oui" : "non",
     },
     /* **Nos boutons, et ce qui se trouve réellement à leur place.** Un bouton
        couvert par autre chose ne reçoit aucun appui : c'est « le bouton ne fait
@@ -1263,7 +1345,7 @@ async function main() {
           const manquants = Object.keys(transport.cibles).filter((k) => transport.cibles[k] === "AUCUN");
           const line =
             `cibles : ${Object.keys(transport.cibles).map((k) => k + "=" + transport.cibles[k]).join(" · ")}` +
-            ` · page : shuffle=${transport.page.shuffle} repeat=${transport.page.repeat} like=${transport.page.like} titre="${transport.page.titre}"` +
+            ` · page : shuffle=${transport.page.shuffle} repeat=${transport.page.repeat} like=${transport.page.like} titre="${transport.page.titre}" utilisable=${transport.page.utilisable}` +
             ` · nos boutons : ${Object.keys(transport.nous).map((k) => k.replace(".sd-mini-", "") + "=" + transport.nous[k]).join(" · ")}` +
             (canary
               ? ` · nos appuis : aléatoire ${canary.avant.shuffle}→${canary.apresShuffle}${canary.appuyeShuffle ? "" : " (bouton absent)"}` +
@@ -1272,7 +1354,14 @@ async function main() {
           /* Un bouton introuvable, ou un appui qui ne change rien côté Spotify,
              est exactement « impossible de zapper la musique ». */
           const muet = canary && ((canary.appuyeShuffle && canary.avant.shuffle === canary.apresShuffle) || (canary.appuyeLike && canary.avant.like === canary.apresLike));
-          if (manquants.length || muet) warn(`Lecture — ${target.label}`, line);
+          /* **Rien ne joue sur cette page** : les commandes sont désactivées par
+             Spotify, ce n'est pas un défaut de la coque. On le dit au lieu de
+             faire une alerte — une alarme à tort est un défaut. */
+          const rienNeJoue = transport.page.utilisable === "non";
+          if (manquants.length || muet) {
+            if (rienNeJoue && !manquants.length) note(`Lecture — ${target.label} (rien ne joue)`, line);
+            else warn(`Lecture — ${target.label}`, line);
+          }
           else note(`Lecture — ${target.label}`, line);
           report.pages.push({ label: `${target.label} (lecture)`, transport, canary });
         } else {

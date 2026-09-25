@@ -193,6 +193,114 @@ await checkAsync("mini play/pause drives Spotify's own button", async () => {
   return "playing=" + state.playing;
 });
 
+await checkAsync("un doublon désactivé ne vole pas « suivant »", async () => {
+  /* **La page du téléphone garde deux barres de lecture.** Relevé en CI : le
+     bouton trouvé était bien là, à sa taille (32×32), mais `DÉSACTIVÉ` — appuyer
+     dessus ne fait rien, et c'est « impossible de zapper la musique ». On pose
+     donc un leurre désactivé **avant** le vrai bouton : l'appui doit aller au
+     vrai, et la piste doit changer. */
+  const bar = doc.querySelector('aside[data-testid="now-playing-bar"]');
+  const vrai = bar.querySelector('button[data-testid="control-button-skip-forward"]');
+  const leurre = doc.createElement("button");
+  leurre.setAttribute("data-testid", "control-button-skip-forward");
+  leurre.disabled = true;
+  vrai.parentElement.insertBefore(leurre, vrai);
+  let surLeurre = 0;
+  leurre.addEventListener("click", () => {
+    surLeurre++;
+  });
+  window.MockSpotify.play(1);
+  await tick(120);
+  const avant = window.MockSpotify.state.trackIndex;
+  q(".sd-mini-next").click();
+  for (let i = 0; i < 12 && window.MockSpotify.state.trackIndex === avant; i++) await tick(60);
+  assert(surLeurre === 0, "l'appui est parti sur le bouton désactivé");
+  assert(window.MockSpotify.state.trackIndex !== avant, "« suivant » n'a pas changé de piste");
+  leurre.remove();
+  return "le désactivé est écarté, la piste avance ✓";
+});
+
+await checkAsync("nos propres libellés ne volent pas la commande", async () => {
+  /* Nos boutons portent les mêmes libellés que ceux de Spotify (« Lecture »,
+     « Pause », « Suivant »). Un repère par libellé les attrapait eux-mêmes :
+     l'appui repartait sur notre bouton, qui rappelait la commande — deux
+     bascules qui s'annulent, et « le bouton ne fait rien ». */
+  const miniPlay = q(".sd-mini-play");
+  miniPlay.getBoundingClientRect = () => ({ width: 44, height: 44, top: 0, left: 0, right: 44, bottom: 44 });
+  let surNous = 0;
+  miniPlay.addEventListener("click", () => {
+    surNous++;
+  }, true);
+  const avant = window.MockSpotify.state.playing;
+  q(".sd-mini-play").click();
+  await tick(90);
+  assert(window.MockSpotify.state.playing !== avant, "l'appui n'a pas atteint le lecteur de Spotify");
+  assert(surNous === 1, `l'appui est reparti sur notre propre bouton (${surNous} fois)`);
+  return "「Lecture/Pause」 reste le bouton de Spotify ✓";
+});
+
+await checkAsync("zapper sans bouton vivant : le clavier du lecteur, puis la vérité", async () => {
+  /* Cas mesuré en CI : sur la page du téléphone, les commandes du lecteur sont
+     là mais **désactivées** (rien ne joue) — et sur certaines dispositions elles
+     ne sont pas là du tout. La notification passe alors par le clavier du
+     lecteur, et la coque **vérifie** que ça a bougé avant de parler : une alarme
+     à tort est un défaut, un bouton muet aussi. */
+  const bench = new JSDOM("<!doctype html><html><head></head><body></body></html>", {
+    url: "https://open.spotify.com/",
+    pretendToBeVisual: true,
+    runScripts: "dangerously",
+  });
+  bench.window.eval("window.AndBridge = new Proxy({}, { get: () => () => undefined });");
+  bench.window.eval(await read("demo/mock/spotify.js"));
+  bench.window.eval(`
+    document.querySelectorAll('[data-testid^="control-button"]').forEach(function (b) { b.disabled = true; });
+    window.__clavier = [];
+    window.__agit = true;
+    document.addEventListener("keydown", function (e) {
+      window.__clavier.push(e.key + (e.ctrlKey ? "+ctrl" : ""));
+      if (!window.__agit || !e.ctrlKey) return;
+      /* Le lecteur répond à ses propres raccourcis : ici, il change de piste. */
+      var b = document.querySelector('[data-testid="control-button-skip-forward"]');
+      if (b) b.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    }, true);
+  `);
+  bench.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(220);
+  const api = bench.window.SpotiDuckUI;
+  const d = bench.window.document;
+  const toast = () => ((d.querySelector(".sd-layer .sd-toast") || {}).textContent || "").trim();
+  const touches = () => bench.window.__clavier || [];
+
+  /* 1. Le raccourci part **et le lecteur y répond** : la coque doit se taire. */
+  const pisteAvant = bench.window.MockSpotify.state.trackIndex;
+  api.next();
+  await tick(1100);
+  assert(
+    touches().some((k) => k === "ArrowRight+ctrl"),
+    "le raccourci « suivant » du lecteur n'a pas été envoyé : " + JSON.stringify(touches())
+  );
+  assert(
+    bench.window.MockSpotify.state.trackIndex !== pisteAvant,
+    "le lecteur n'a pas reçu le raccourci (le banc ne l'a pas vu passer)"
+  );
+  assert(toast() === "", `la coque parle alors que la piste a changé : « ${toast()} »`);
+
+  /* 2. Le raccourci ne fait rien : la coque le dit. */
+  bench.window.__agit = false;
+  api.next();
+  await tick(1100);
+  assert(/ne répondent pas/.test(toast()), `la panne n'est pas annoncée : « ${toast()} »`);
+
+  /* 3. Rien ne joue : c'est la vraie raison, et elle est dite telle quelle. */
+  d.querySelector(".sd-layer .sd-toast").textContent = "";
+  api.state.title = "";
+  api._internals.Actions.blame();
+  await tick(60);
+  assert(/Rien ne joue/.test(toast()), `le message ne dit pas que rien ne joue : « ${toast()} »`);
+  bench.window.close();
+  return "clavier du lecteur · silencieux si ça marche · franc si ça ne marche pas ✓";
+});
+
 await checkAsync("like button reflects the real aria-checked", async () => {
   const mockLike = q('div[data-testid="now-playing-widget"] > div:last-child > button');
   const before = mockLike.getAttribute("aria-checked");
@@ -1665,7 +1773,7 @@ await checkAsync("a tall, narrow page is not 'nothing displayed', and the diagno
     const width = isMain ? 29 : hasText ? 24 : 0;
     return { width, height, top: 0, left: 0, right: width, bottom: height, x: 0, y: 0 };
   };
-  w.AndBridge = { version: () => "2.11.14", session: () => false };
+  w.AndBridge = { version: () => "2.11.15", session: () => false };
   w.eval(await read("dist/spotiduck-ui.js"));
   await tick(250);
 
@@ -2169,6 +2277,28 @@ await checkAsync("onglet bibliothèque : chaque commande fait quelque chose", as
     assert((row.querySelector(".sd-lib-name") || {}).textContent, "une ligne sans nom");
     assert(row.querySelector(".sd-lib-art"), "une ligne sans pochette");
   }
+  /* **Chaque ligne mène au bon endroit** : le type annoncé et l'adresse doivent
+     se répondre (une « playlist » qui ouvre un album serait un piège). */
+  const attendu = {
+    liked: /^\/collection\/tracks$/,
+    playlist: /^\/playlist\//,
+    album: /^\/album\//,
+    artist: /^\/artist\//,
+    show: /^\/show\//,
+  };
+  for (const row of rows) {
+    const type = [...row.classList].filter((c) => c.indexOf("sd-lib-row-") === 0).map((c) => c.slice(11))[0];
+    const href = row.getAttribute("href") || "";
+    assert(type && attendu[type], `ligne sans type lisible : ${row.className}`);
+    assert(attendu[type].test(href), `une ligne « ${type} » mène à « ${href} »`);
+  }
+  const typesVus = new Set(rows.map((r) => [...r.classList].filter((c) => c.indexOf("sd-lib-row-") === 0).map((c) => c.slice(11))[0]));
+  assert(typesVus.has("liked") && typesVus.has("playlist"), "les titres likés et les playlists doivent être listés : " + [...typesVus].join(","));
+
+  /* **Le journal reste rangé quand tout va bien.** */
+  const journal = lib.querySelector(".sd-lib-log");
+  assert(journal.hidden === true, "le journal s'affiche alors que la lecture a réussi");
+
   const titre = lib.querySelector(".sd-lib-title").textContent.trim();
   assert(titre.length > 0, "le titre de la page est vide");
   const resume = lib.querySelector(".sd-lib-sum").textContent;

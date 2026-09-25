@@ -62,12 +62,91 @@
     return Array.prototype.slice.call((root || document).querySelectorAll(sel));
   }
   /** First element matching any selector of the list (ordered by priority). */
-  function pick(selectors) {
-    for (var i = 0; i < selectors.length; i++) {
-      var el = $(selectors[i]);
-      if (el) return el;
+  /**
+   * **Un candidat sur lequel un appui ne peut rien faire.**
+   *
+   * Le seul signal fiable est `disabled` : sur un bouton désactivé, le
+   * navigateur ne déclenche aucun gestionnaire — l'appui est perdu, et c'est
+   * très exactement « impossible de zapper ». Un bouton **caché**, lui, reste
+   * branché : notre propre feuille masque la barre de la disposition bureau, et
+   * un appui dessus agit quand même. Le refuser serait se priver d'un chemin
+   * qui marche (relevé au banc : c'est ce qui a fait tomber deux contrôles
+   * valides). On ne juge donc que sur `disabled`, à quoi s'ajoute, pour le
+   * classement seulement, la présence d'une boîte à l'écran.
+   */
+  function dead(el) {
+    return !el || el.disabled === true;
+  }
+
+  /**
+   * **Un élément de notre propre couche, jamais une commande de Spotify.**
+   *
+   * Nos boutons portent les mêmes libellés que ceux du lecteur (« Lecture »,
+   * « Pause », « Suivant ») : les repères par libellé ajoutés au pass 50 les
+   * attrapaient donc eux-mêmes. L'appui partait sur notre bouton, qui rappelait
+   * la même commande — deux bascules qui s'annulent, et « le bouton ne fait
+   * rien ». Le reste du code écarte déjà notre couche (`never ours`) ; les
+   * repères le font maintenant aussi.
+   */
+  function ours(el) {
+    try {
+      return !!(el && el.closest && el.closest(".sd-layer"));
+    } catch (e) {
+      return false;
     }
-    return null;
+  }
+
+  /** Les candidats, **les utilisables d'abord** — et parmi eux, ceux qui ont
+   *  vraiment une boîte à l'écran (c'est celui-là que l'utilisateur voit). */
+  function ranked(list) {
+    var alive = [];
+    var seen = 0;
+    for (var i = 0; i < list.length; i++) {
+      if (!list[i]) continue;
+      seen++;
+      if (!dead(list[i])) alive.push(list[i]);
+    }
+    /* Tout est mort : on rend la liste telle quelle, l'appelant décide (refuser,
+       se rabattre sur le clavier, le dire). Ne jamais rendre *moins* qu'avant. */
+    if (!alive.length) return list.slice();
+    var onscreen = [];
+    var other = [];
+    for (var j = 0; j < alive.length; j++) {
+      var box = null;
+      try {
+        box = alive[j].getBoundingClientRect();
+      } catch (e) {
+        box = null;
+      }
+      if (box && (box.width > 1 || box.height > 1)) onscreen.push(alive[j]);
+      else other.push(alive[j]);
+    }
+    return onscreen.concat(other);
+  }
+
+  /**
+   * **Le bon élément parmi les candidats.**
+   *
+   * `pick` rendait le **premier** trouvé ; sur une page qui contient deux copies
+   * de la barre de lecture (bureau + téléphone), c'était celle du bureau, cachée
+   * ou désactivée. Il rend maintenant le premier candidat *utilisable*, et à
+   * défaut — aucun candidat utilisable, ou environnement sans mise en page —
+   * le premier trouvé, exactement comme avant.
+   */
+  function pick(selectors) {
+    var all = [];
+    var list = typeof selectors === "string" ? [selectors] : selectors || [];
+    for (var i = 0; i < list.length; i++) {
+      var found;
+      try {
+        found = document.querySelectorAll(list[i]);
+      } catch (e) {
+        found = [];
+      }
+      for (var j = 0; j < found.length; j++) if (!ours(found[j])) all.push(found[j]);
+    }
+    if (!all.length) return null;
+    return ranked(all)[0];
   }
   function viewW() {
     return document.documentElement.clientWidth || 360;
@@ -154,6 +233,13 @@
       friends: "Activité des amis",
       profile: "Profil",
       notAvailable: "Indisponible ici — Spotify ne propose pas cet écran sur cette page",
+      /* Les commandes de lecture passent par les boutons de Spotify ; quand
+         cette version de la page ne les expose pas (disposition téléphone,
+         repères renommés), on le dit au lieu de laisser un bouton muet. */
+      transportMissing: "Ces commandes ne répondent pas sur cette page : le lecteur de Spotify ne les expose pas ici",
+      /* Quand rien ne joue, les commandes de Spotify sont **désactivées** :
+         appuyer ne peut rien faire, et c'est la vraie raison. */
+      transportNoTrack: "Rien ne joue en ce moment — lancez une musique d'abord",
       progress: "Position de lecture",
       shuffle: "Lecture aléatoire",
       repeat: "Répéter",
@@ -356,6 +442,33 @@
   /* ------------------------------------------------------------------ *
    * 2. Spotify adapter — the only place that touches the web player's DOM
    * ------------------------------------------------------------------ */
+  /**
+   * **Les repères par libellé, toujours dans le lecteur.**
+   *
+   * « Suivant » et « Précédent » sont aussi les libellés des boutons d'avance et
+   * de retour de la **navigation** de Spotify ; « Lecture » est celui de nos
+   * propres boutons et le début de « Activer la lecture aléatoire ». Un repère
+   * global par libellé appuie donc sur la mauvaise commande (relevé au banc :
+   * un « lecture/pause » qui ne changeait rien, et une commande « suivant » qui
+   * ne changeait pas de piste). On ne cherche ces libellés que dans les
+   * conteneurs du lecteur.
+   */
+  var PLAYER_SCOPE = [
+    "aside ",
+    '[data-testid="player-controls"] ',
+    '[data-testid="now-playing-bar"] ',
+    '[data-testid="now-playing-widget"] ',
+  ];
+  function inPlayer(labels) {
+    var list = [];
+    PLAYER_SCOPE.forEach(function (scope) {
+      labels.forEach(function (label) {
+        list.push(scope + "button[" + label + "]");
+      });
+    });
+    return list;
+  }
+
   var SEL = {
     mainView: ["#main-view", "main", ".main-view-container__scroll-node"],
     sidebar: ["#Desktop_LeftSidebar_Id"],
@@ -386,15 +499,80 @@
       'div[data-testid="now-playing-widget"] > div:last-child > button',
       'button[data-testid="add-button"]',
       'button[data-testid="now-playing-widget-like-button"]',
-    ],
+    ].concat(
+      inPlayer([
+        'aria-label^="Retirer des Titres likés"',
+        'aria-label^="Ajouter aux Titres likés"',
+        'aria-label^="Enregistrer dans vos Titres"',
+        'aria-label^="Retirer des Titres"',
+        'aria-label^="Remove from Liked"',
+        'aria-label^="Save to your Liked"',
+        'aria-label^="Add to Liked"',
+      ])
+    ),
     play: [
       'aside button[data-testid="control-button-playpause"]',
       'button[data-testid="control-button-playpause"]',
-    ],
-    next: ['aside button[data-testid="control-button-skip-forward"]', 'button[data-testid="control-button-skip-forward"]'],
-    prev: ['aside button[data-testid="control-button-skip-back"]', 'button[data-testid="control-button-skip-back"]'],
-    shuffle: ['aside button[data-testid="control-button-shuffle"]', 'button[data-testid="control-button-shuffle"]'],
-    repeat: ['aside button[data-testid="control-button-repeat"]', 'button[data-testid="control-button-repeat"]'],
+      'button[data-testid="control-button-play"]',
+      'button[data-testid="control-button-pause"]',
+    ].concat(
+      /* Les libellés **commencent** par ces mots : `*=` attrapait « Activer la
+         lecture aléatoire » (le bouton du mode aléatoire). */
+      inPlayer([
+        'aria-label="Lecture"',
+        'aria-label^="Reprendre la lecture"',
+        'aria-label="Pause"',
+        'aria-label^="Mettre en pause"',
+        'aria-label="Play"',
+        'aria-label="Resume"',
+      ])
+    ),
+    next: [
+      'aside button[data-testid="control-button-skip-forward"]',
+      'button[data-testid="control-button-skip-forward"]',
+      'button[data-testid="control-button-next"]',
+    ].concat(
+      inPlayer([
+        'aria-label="Suivant"',
+        'aria-label^="Passer à la piste suivante"',
+        'aria-label="Next"',
+        'aria-label="Next track"',
+      ])
+    ),
+    prev: [
+      'aside button[data-testid="control-button-skip-back"]',
+      'button[data-testid="control-button-skip-back"]',
+      'button[data-testid="control-button-previous"]',
+    ].concat(
+      inPlayer([
+        'aria-label="Précédent"',
+        'aria-label^="Passer à la piste précédente"',
+        'aria-label="Previous"',
+        'aria-label="Previous track"',
+      ])
+    ),
+    shuffle: [
+      'aside button[data-testid="control-button-shuffle"]',
+      'button[data-testid="control-button-shuffle"]',
+    ].concat(
+      inPlayer([
+        'aria-label^="Activer la lecture aléatoire"',
+        'aria-label^="Désactiver la lecture aléatoire"',
+        'aria-label^="Shuffle"',
+      ])
+    ),
+    repeat: [
+      'aside button[data-testid="control-button-repeat"]',
+      'button[data-testid="control-button-repeat"]',
+    ].concat(
+      inPlayer([
+        'aria-label^="Activer la répétition"',
+        'aria-label^="Désactiver la répétition"',
+        'aria-label^="Répéter"',
+        'aria-label^="Repeat"',
+        'aria-label^="Enable repeat"',
+      ])
+    ),
     progress: [
       'div[data-testid="playback-progressbar"] input[type="range"]',
       'aside input[type="range"][max]',
@@ -602,10 +780,56 @@
      * and report whether it worked so the UI can roll back.
      * ---------------------------------------------------------------- */
     click: function (selectors) {
-      var el = pick(selectors);
-      if (!el) return false;
+      /* **Le meilleur candidat**, pas le premier : sur la page du téléphone, la
+         barre de bureau est encore là, désactivée ou hors écran. On interroge
+         les survivants dans l'ordre d'utilité et on s'arrête au premier que
+         l'appui ne peut pas perdre. */
+      var list = typeof selectors === "string" ? [selectors] : selectors || [];
+      var all = [];
+      for (var i = 0; i < list.length; i++) {
+        var found;
+        try {
+          found = document.querySelectorAll(list[i]);
+        } catch (e) {
+          found = [];
+        }
+        for (var j = 0; j < found.length; j++) if (!ours(found[j])) all.push(found[j]);
+      }
+      var order = ranked(all);
+      for (var k = 0; k < order.length; k++) {
+        if (dead(order[k])) continue;
+        try {
+          order[k].click();
+          return true;
+        } catch (e) {
+          /* on essaie le suivant */
+        }
+      }
+      return false;
+    },
+
+    /**
+     * **Le clavier du lecteur.** Le lecteur web écoute ses propres raccourcis
+     * (`Ctrl` + flèches, espace). Quand la disposition de la page ne laisse pas
+     * trouver les boutons (repères renommés, barre absente), c'est le seul
+     * chemin qui reste — et il vaut mieux qu'un bouton muet.
+     */
+    key: function (key, extra) {
       try {
-        el.click();
+        var init = {
+          key: key,
+          code: key === " " ? "Space" : key,
+          bubbles: true,
+          cancelable: true,
+          ctrlKey: key === " " ? false : true,
+          shiftKey: false,
+          metaKey: false,
+          altKey: false,
+        };
+        if (extra) for (var k in extra) init[k] = extra[k];
+        var target = document.body || document.documentElement;
+        target.dispatchEvent(new KeyboardEvent("keydown", init));
+        target.dispatchEvent(new KeyboardEvent("keyup", init));
         return true;
       } catch (e) {
         return false;
@@ -2276,6 +2500,44 @@
         syncFromDom("settle");
       }, delay || 700);
     },
+    /**
+     * **Ce qu'on dit quand la commande n'a pas trouvé de bouton vivant.**
+     *
+     * Deux cas très différents, et un seul message juste : si rien ne joue, les
+     * commandes de Spotify sont désactivées — le dire est exact et actionnable ;
+     * si une musique joue, c'est la page qui n'expose pas la commande.
+     */
+    blame: function () {
+      Toast.show(State.title ? Settings.labels.transportMissing : Settings.labels.transportNoTrack, 2800);
+    },
+    /**
+     * **Dernier recours : le clavier du lecteur.**
+     *
+     * Le lecteur web écoute ses propres raccourcis (`Espace`, `Ctrl` + flèches) :
+     * c'est le seul chemin qui reste quand la disposition de la page ne laisse
+     * pas trouver ses boutons — et il vaut mieux qu'un bouton muet. On ne parle
+     * qu'ensuite, et seulement si rien ne joue (le raccourci n'aurait alors rien
+     * pu faire).
+     */
+    fallback: function (key, watch, avant) {
+      var self = this;
+      var ref = typeof avant === "string" ? avant : this.snapshot(watch);
+      Spotify.key(key);
+      /* **Vérifier, comme partout ailleurs.** Le raccourci a très bien pu agir :
+         on relit le lecteur peu après, et on ne parle que si rien n'a bougé —
+         une alarme à tort est un défaut, un bouton muet aussi. */
+      setTimeout(function () {
+        syncFromDom("fallback");
+        if (self.snapshot(watch) === ref) self.blame();
+      }, 800);
+    },
+    /** Ce qu'on regarde pour savoir si la commande a fait quelque chose. */
+    snapshot: function (watch) {
+      if (watch === "playing") return String(State.playing);
+      if (watch === "shuffle") return String(State.shuffle);
+      if (watch === "repeat") return State.repeat;
+      return (State.title || "") + "|" + (State.artist || "");
+    },
     playPause: function () {
       var want = !State.playing;
       Auto.wantPlay = want;
@@ -2286,8 +2548,13 @@
       }
       emit({ playing: want }, "optimistic");
       buzz(Settings.labels.buzzTap);
+      /* Le bouton de Spotify d'abord ; s'il n'y en a pas de vivant, le clavier
+         du lecteur — et on ne revient sur l'affichage optimiste que si rien ne
+         joue, seule situation où l'on sait que rien n'a pu se passer. */
       if (!Spotify.playPause()) {
-        emit({ playing: !want }, "rollback");
+        /* La référence est la **vérité du DOM avant l'affichage optimiste** :
+           c'est avec elle qu'on jugera si le raccourci a changé quelque chose. */
+        this.fallback(" ", "playing", String(!want));
       } else if (want) {
         /* Starting playback may require the "Écouter sur cet appareil"
            hand-off first, and Spotify sometimes swallows the first request
@@ -2321,7 +2588,10 @@
       buzzer();
       Auto.wantPlay = true;
       Auto.selfPaused = false;
-      if (!Spotify.next()) return;
+      if (!Spotify.next()) {
+        this.fallback("ArrowRight", "track");
+        return;
+      }
       setTimeout(function () {
         Auto.maybeTakeover();
       }, 400);
@@ -2332,7 +2602,10 @@
       buzzer();
       // Native behaviour: restart the track first if we're past 3 seconds.
       if (livePosition() > 3000) Spotify.seek(0);
-      else if (!Spotify.prev()) return;
+      else if (!Spotify.prev()) {
+        this.fallback("ArrowLeft", "track");
+        return;
+      }
       emit({ anchorPos: 0, position: 0, anchorAt: performance.now() }, "optimistic");
       Actions.settle(900);
     },
@@ -2340,7 +2613,10 @@
       buzzer();
       var want = !State.shuffle;
       emit({ shuffle: want }, "optimistic");
-      if (!Spotify.toggleShuffle()) emit({ shuffle: !want }, "rollback");
+      if (!Spotify.toggleShuffle()) {
+        emit({ shuffle: !want }, "rollback");
+        this.blame();
+      }
       this.settle(500);
     },
     repeat: function () {
@@ -2348,7 +2624,10 @@
       var order = { off: "context", context: "track", track: "off" };
       var want = order[State.repeat] || "context";
       emit({ repeat: want }, "optimistic");
-      if (!Spotify.cycleRepeat()) emit({ repeat: State.repeat }, "rollback");
+      if (!Spotify.cycleRepeat()) {
+        emit({ repeat: State.repeat }, "rollback");
+        this.blame();
+      }
       this.settle(500);
     },
     /** Ouvre un écran de Spotify depuis la barre de navigation supérieure. */

@@ -1409,6 +1409,69 @@ if (!/out\.verdict/.test(probeTool) || !/homePath/.test(probeTool)) {
   errors.push("la sonde ne relève plus ce que la coque conclut de la page (état, chemin d'accueil, ancre)");
 }
 
+/* **Pass 50 — le zap, et la bibliothèque plus propre.**
+
+   « Le système de lecture est toujours bugué, impossible de zapper la musique » :
+   les repères du lecteur sont désormais par libellé **dans le lecteur**, un
+   bouton désactivé n'est plus choisi, notre propre couche est écartée, et le
+   repli clavier **vérifie** avant de parler. Ce qui suit empêche d'y revenir en
+   silence. */
+const deadBody = (stripComments(runtime).match(/function dead\(el\)\s*\{[\s\S]*?\n  \}/) || [""])[0];
+if (!/function dead\(el\)/.test(stripComments(runtime)) || !/disabled === true/.test(deadBody)) {
+  errors.push("le test « bouton inutilisable » ne reconnaît plus un bouton désactivé : « impossible de zapper » reviendrait");
+}
+if (/getComputedStyle|display === "none"|visibility === "hidden"/.test(deadBody)) {
+  errors.push("un bouton caché est de nouveau refusé : notre propre feuille masque la barre du bureau, et l'appui dessus agit quand même");
+}
+if (!/function ours\(el\)/.test(stripComments(runtime))) {
+  errors.push("plus rien n'écarte nos propres boutons des repères du lecteur : « Lecture » et « Suivant » se cliqueraient eux-mêmes (deux bascules qui s'annulent)");
+}
+if ((runtime.match(/if \(!ours\(found\[j\]\)\) all\.push/g) || []).length < 2) {
+  errors.push("la collecte des candidats ne les écarte plus de notre couche (pick et click)");
+}
+if (!/if \(dead\(order\[k\]\)\) continue;/.test(stripComments(runtime))) {
+  errors.push("un appui peut de nouveau partir sur un bouton désactivé (le premier trouvé) au lieu du premier utilisable");
+}
+if (!/function inPlayer\(labels\)/.test(stripComments(runtime)) || !/PLAYER_SCOPE = \[/.test(runtime)) {
+  errors.push("les repères par libellé ne sont plus limités au lecteur : « Suivant » viserait le bouton d'avance de la navigation");
+}
+if ((runtime.match(/inPlayer\(\[/g) || []).length < 6) {
+  errors.push("toutes les commandes du lecteur n'ont plus leurs repères par libellé (lecture, suivant, précédent, aléatoire, répétition, j'aime)");
+}
+if (!/key: function \(key, extra\)/.test(stripComments(runtime))) {
+  errors.push("le clavier du lecteur (dernier recours quand ses boutons manquent) a disparu : un bouton muet reviendrait");
+}
+if (!/fallback: function \(key, watch, avant\)/.test(stripComments(runtime)) || !/snapshot: function \(watch\)/.test(stripComments(runtime))) {
+  errors.push("le repli ne **vérifie** plus que la commande a agi : la coque parlerait à tort, ou resterait muette");
+}
+if (!/blame: function \(\)/.test(stripComments(runtime)) || !/State\.title \? Settings\.labels\.transportMissing : Settings\.labels\.transportNoTrack/.test(runtime)) {
+  errors.push("le message ne distingue plus « rien ne joue » de « cette page n'expose pas la commande »");
+}
+for (const [appel, quoi] of [
+  ['this.fallback(" ", "playing", String(!want));', "lecture/pause"],
+  ['this.fallback("ArrowRight", "track");', "suivant"],
+  ['this.fallback("ArrowLeft", "track");', "précédent"],
+]) {
+  if (!runtime.includes(appel)) errors.push(`${quoi} n'a plus de repli clavier : sur une page sans bouton vivant, le bouton ne ferait rien`);
+}
+if (!/transportNoTrack: "Rien ne joue/.test(runtime) || !/transportMissing: "Ces commandes ne répondent pas/.test(runtime)) {
+  errors.push("les deux messages du transport ont changé de sens : l'utilisateur n'apprendrait plus pourquoi ça ne répond pas");
+}
+if (!/candidat\(s\)/.test(probeTool) || !/utilisable=/.test(probeTool)) {
+  errors.push("la sonde ne relève plus le nombre de candidats ni si l'un d'eux est utilisable : le zap ne serait plus mesuré sur la vraie page");
+}
+if (!/\.sd-mini-next/.test(probeTool) || !/nos boutons/.test(probeTool)) {
+  errors.push("la sonde ne mesure plus nos propres boutons (taille et élément au centre) : un bouton recouvert ne se verrait plus");
+}
+/* La bibliothèque « plus propre » : les compteurs des puces et la note de filtre
+   vide sont ce qui rend l'onglet lisible — leur disparition doit se voir. */
+if (!/\.sd-lib-chip-n/.test(css) || !/sd-lib-chip-n/.test(runtime)) {
+  errors.push("les puces de la bibliothèque n'affichent plus leur compte (feuille ou script) : l'onglet redevient une liste muette");
+}
+if (!/\.sd-lib-nofilter/.test(css) || !/sd-lib-nofilter/.test(runtime)) {
+  errors.push("un filtre qui ne montre rien ne s'explique plus : la bibliothèque paraîtrait vide");
+}
+
 /* Rapport ------------------------------------------------------------------ */
 const size = (n) => String(n).padStart(2);
 console.log(`\nSpotiDuck — liens internes\n`);
