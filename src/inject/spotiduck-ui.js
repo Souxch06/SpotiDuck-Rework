@@ -198,6 +198,12 @@
       libraryHeaders: "En-têtes de la page : %s",
       libraryScan: "Lignes trouvées — %s",
       libraryRefreshing: "Actualisation en cours…",
+      libraryMine: "Votre playlist",
+      libraryFollowed: "Suivie · %s",
+      libraryInYours: "Dans votre bibliothèque",
+      libraryLikedHint: "Vos titres likés",
+      libraryIgnored: "%s playlists recommandées ignorées (elles ne sont pas au compte)",
+      libraryIgnoredOne: "1 playlist recommandée ignorée (elle n'est pas au compte)",
       librarySidebar: "Lues dans la liste de Spotify (%s éléments) : l'API du lecteur n'a pas répondu.",
       libraryLog: "Derniers essais",
       libraryTokenAge: "Jeton capté %s · /me → %s",
@@ -4660,6 +4666,11 @@
      rechargement de page), sans attendre le réseau. */
   var LIBRARY_CACHE_KEY = "sd.library.cache";
   var LIBRARY_CACHE_TTL = 7 * 24 * 60 * 60 * 1000;
+  /* **Version du cache.** La 2.11.11 y a écrit les playlists ramassées dans
+     toute la page (recommandations comprises) : « il y a des playlists qui ne
+     sont pas les miennes ». Un cache d'avant cette version est donc ignoré —
+     sinon il réafficherait exactement ce qu'on vient de retirer. */
+  var LIBRARY_CACHE_VERSION = 2;
 
   var Library = {
     el: null,
@@ -4683,6 +4694,10 @@
     cacheRead: false,
     /* Le compte est-il bien celui du jeton ? (`/me`) */
     account: "",
+    accountId: "",
+    /* Playlists et albums de la page écartés parce qu'ils ne sont pas au
+       compte (recommandations de l'accueil). */
+    ignored: 0,
     loading: false,
     loadedAt: 0,
     filter: "all",
@@ -4717,6 +4732,7 @@
     parse: function (res) {
       var rows = [];
       var liked = res[4];
+      var me = this.accountId;
       if (liked && liked.total) {
         rows.push({
           type: "liked",
@@ -4728,12 +4744,23 @@
       }
       ((res[0] && res[0].items) || []).forEach(function (pl) {
         if (!pl || !pl.id) return;
+        /* **À qui est cette playlist ?** `/me/playlists` rend celles du compte
+           (les vôtres) **et** celles que vous suivez. On le dit sur la ligne au
+           lieu de laisser croire que tout est à soi — c'est la demande du
+           25/09 : « qu'il n'y ait que mes playlists ». */
+        var owner = (pl.owner && pl.owner.id) || "";
+        var mine = !!(me && owner && owner === me);
         rows.push({
           type: "playlist",
           name: pl.name || "",
-          sub: (pl.owner && pl.owner.display_name) || Settings.labels.libraryPlaylists,
+          sub: mine
+            ? Settings.labels.libraryMine
+            : (pl.owner && pl.owner.display_name
+                ? Settings.labels.libraryFollowed.replace("%s", pl.owner.display_name)
+                : Settings.labels.libraryPlaylists),
           href: "/playlist/" + pl.id,
           img: Library.cover(pl),
+          mine: mine,
         });
       });
       ((res[1] && res[1].items) || []).forEach(function (entry) {
@@ -4780,23 +4807,53 @@
      * adresse, pochette) — moins complètes que l'API, mais **vraies**, et elles
      * mènent au bon endroit.
      */
+    /**
+     * **La bibliothèque de l'utilisateur, pas la page.**
+     *
+     * Signalé : « les playlists sont beaucoup trop nombreuses, il y a des
+     * playlists qui ne sont pas les miennes ». La lecture avait été élargie à
+     * toute la page (rangées de l'accueil, recommandations, « Écoutés
+     * récemment ») : elle ramassait donc les playlists **de Spotify** en même
+     * temps que celles du compte. On ne lit plus que les zones qui portent la
+     * bibliothèque : la barre latérale du lecteur et le panneau latéral, tous
+     * deux intitulés « Votre bibliothèque ». Le reste de la page est ignoré —
+     * et on le compte, pour pouvoir le dire.
+     */
     fromSpotifyList: function () {
-      /* **Toute la page, pas seulement la barre latérale.** Spotify affiche la
-         bibliothèque du compte à plusieurs endroits (la barre latérale, le
-         panneau latéral, et les rangées de l'accueil : « Vos playlists »,
-         « Écoutés récemment »). Chercher dans un seul de ces endroits, c'était
-         dépendre de la mise en page de Spotify à un instant donné. */
+      /* Trois endroits peuvent porter vos playlists : les surfaces de la
+         bibliothèque (barre latérale, panneau) — tout y est au compte —, les
+         **rangées « Vos playlists »** de l'accueil, et, ailleurs dans la page,
+         les cartes qui **disent** qu'elles sont à vous ou qui mènent à vos
+         titres likés. Tout le reste est écarté : une playlist recommandée par
+         Spotify n'est pas une playlist de votre compte, et « il y en a qui ne
+         sont pas les miennes » ne doit plus arriver. */
+      var self = this;
+      var page = pick(SEL.mainView);
+      this.ignored = 0;
       var scopes = [];
-      [pick(SEL.sidebar), pick(SEL.panel), pick(SEL.mainView), document.body].forEach(function (node) {
+      [pick(SEL.sidebar), pick(SEL.panel)].forEach(function (node) {
         if (node && scopes.indexOf(node) < 0) scopes.push(node);
       });
+      var trusted = scopes.slice();
+      var shelves = this.mineShelves();
+      this.shelves = shelves.length;
+      shelves.forEach(function (node) {
+        if (scopes.indexOf(node) < 0) scopes.push(node);
+      });
+      /* La page entière est parcourue, mais **seuls** y sont prises les lignes
+         qui prouvent qu'elles sont à vous ; les autres sont comptées. */
+      if (page) scopes.push(page);
       var rows = [];
       var seen = {};
       this.scan = [];
-      var self = this;
       scopes.forEach(function (scope) {
         if (rows.length >= 100) return;
         var before = rows.length;
+        /* `scopeIsMine` : la zone est une rangée « Vos playlists » repérée par
+           son titre — tout ce qu'elle contient est à vous. */
+        var scopeIsMine = !!(scope.getAttribute && scope.getAttribute("data-sd-mine") === "1");
+        var fromLibrary = trusted.indexOf(scope) >= 0 || scopeIsMine;
+        var fromPage = scope === page;
         var links = scope.querySelectorAll(
           'a[href^="/playlist/"], a[href^="/album/"], a[href^="/artist/"], a[href^="/show/"], a[href^="/collection"]'
         );
@@ -4804,6 +4861,7 @@
           var a = links[i];
           /* Jamais les nôtres : notre page mène aussi aux playlists. */
           if (a.closest && a.closest(".sd-layer")) continue;
+          if (fromPage && a.closest && a.closest("#Desktop_LeftSidebar_Id, #Desktop_PanelContainer_Id")) continue;
           var href = (a.getAttribute("href") || "").split("?")[0];
           if (!href || seen[href]) continue;
           var type = "";
@@ -4813,6 +4871,13 @@
           else if (/^\/show\//.test(href)) type = "show";
           else if (/collection/.test(href)) type = "liked";
           if (!type) continue;
+          /* Hors des surfaces de la bibliothèque, il faut une preuve : la rangée
+             est à vous, la carte porte le nom du compte, ou ce sont vos titres
+             likés. Sans preuve → écartée (et comptée si elle vient de la page). */
+          if (!fromLibrary && type !== "liked" && !self.isMineCard(a)) {
+            if (fromPage) self.ignored++;
+            continue;
+          }
           var name = self.linkName(a, type);
           if (!name) continue;
           seen[href] = 1;
@@ -4820,16 +4885,74 @@
           rows.push({
             type: type,
             name: name.split("\n")[0].slice(0, 80),
-            sub: (name.split("\n")[1] || "").trim().slice(0, 80),
+            /* Lues dans **votre** bibliothèque : c'est ce que dit le sous-titre
+               quand la page ne donne pas mieux (l'API, elle, nomme l'auteur). */
+            sub: (name.split("\n")[1] || "").trim().slice(0, 80) || Settings.labels.libraryInYours,
             href: href,
             img: img ? img.currentSrc || img.src || "" : "",
           });
         }
+        /* Le journal doit dire **d'où** vient chaque ligne : une source mal
+           nommée (« corps ») ferait croire à une lecture large qui n'existe
+           plus. */
         var label =
-          scope === pick(SEL.sidebar) ? "barre latérale" : scope === pick(SEL.panel) ? "panneau" : scope === pick(SEL.mainView) ? "page" : "corps";
+          scope === pick(SEL.sidebar)
+            ? "barre latérale"
+            : scope === pick(SEL.panel)
+            ? "panneau"
+            : fromPage
+            ? "page (à vous)"
+            : scopeIsMine
+            ? "rangée à vous"
+            : "corps";
         if (rows.length > before) self.scan.push(label + " " + (rows.length - before));
       });
       return rows;
+    },
+
+    /**
+     * **Les rangées de *vos* playlists.** Spotify met en avant vos propres
+     * playlists dans une rangée de l'accueil (« Vos playlists », « Your
+     * playlists ») — celle-là est à vous, contrairement aux rangées de
+     * recommandations qui l'entourent. On la repère par son titre et on la
+     * marque (`data-sd-mine`) ; le reste de l'accueil reste dehors.
+     */
+    mineShelves: function () {
+      var root = pick(SEL.mainView);
+      if (!root) return [];
+      var found = [];
+      var heads = root.querySelectorAll("h2, h3, [role='heading'], span, div");
+      var max = 0;
+      for (var i = 0; i < heads.length && max < 400; i++, max++) {
+        var text = (heads[i].textContent || "").trim();
+        if (!text || text.length > 40) continue;
+        if (!/^(vos|tes|mes|your|my)\s+(playlists?|titres lik[eé]s|liked songs)/i.test(text)) continue;
+        /* La rangée, c'est le plus proche ancêtre qui la contient en entier. */
+        var node = heads[i];
+        var walk = 0;
+        while (node && node !== root && walk < 6) {
+          if (node.querySelector && node.querySelector("a[href^='/playlist/'], a[href^='/collection/tracks']")) break;
+          node = node.parentElement;
+          walk++;
+        }
+        if (node && node !== root && found.indexOf(node) < 0) {
+          node.setAttribute("data-sd-mine", "1");
+          found.push(node);
+        }
+      }
+      return found;
+    },
+
+    /** Cette carte dit-elle qu'elle est à vous ? Le nom du compte y figure. */
+    isMineCard: function (a) {
+      var href = (a.getAttribute("href") || "").split("?")[0];
+      if (/^\/collection\/tracks/.test(href)) return true;
+      var who = this.account || this.accountId || "";
+      if (!who) return false;
+      /* Le nom du compte, tel que la page l'écrit (la carte se termine souvent
+         par « Playlist · Votre nom », la rangée par « Vos playlists »). */
+      var hay = ((a.getAttribute("aria-label") || "") + " " + (a.textContent || "")).toLowerCase();
+      return hay.indexOf(String(who).toLowerCase()) >= 0;
     },
 
     /**
@@ -4846,7 +4969,12 @@
         name = (title || (inner ? inner.textContent : "") || a.textContent || "").replace(/\s+/g, " ").trim();
       }
       if (!name && type === "liked") name = Settings.labels.libraryLiked;
-      return name;
+      /* Spotify écrit le nom accessible en entier — « Mes tubes · Playlist ·
+         Moi », « Album Un · Album · Artiste » — alors que le titre est la
+         première partie : sans ce nettoyage, la bibliothèque afficherait la
+         phrase complète à la place du nom. */
+      name = name.replace(/\s*[·•|]\s*(playlist|album|artiste|artist|podcast|émission|show|single|compilation|titre|song)\b.*$/i, "").trim();
+      return name || (a.getAttribute("aria-label") || "").trim();
     },
 
     /**
@@ -4887,6 +5015,34 @@
       return false;
     },
 
+    /**
+     * **« Le truc avec mes titres likés » — toujours en tête.**
+     *
+     * L'entrée des titres likés vient du total annoncé par l'API ; quand elle
+     * manque (API muette, ou liste lue dans la page), la ligne existait quand
+     * même chez Spotify et l'utilisateur l'attend : on la pose, en tête, sans
+     * chiffre plutôt que de la faire disparaître.
+     */
+    ensureLiked: function (rows) {
+      var list = rows || [];
+      for (var i = 0; i < list.length; i++) if (list[i].type === "liked") return list;
+      /* Rien à compléter sur une liste vide, et pas de « vos titres likés » pour
+         un lecteur dont on **sait** qu'il n'est pas connecté. Mais quand la page
+         montre déjà votre bibliothèque, cette entrée en fait partie : on ne la
+         laisse pas manquer sous prétexte que l'API n'a pas répondu (c'est
+         exactement le cas où l'on vient de lire vos playlists dans la page). */
+      if (!list.length) return list;
+      if (!this.account && this.accountState() === "out") return list;
+      list.unshift({
+        type: "liked",
+        name: Settings.labels.libraryLiked,
+        sub: Settings.labels.libraryLikedHint,
+        href: "/collection/tracks",
+        img: "",
+      });
+      return list;
+    },
+
     /** Relit la liste de Spotify après un rendu, sans bloquer la page. */
     retrySidebar: function (delay) {
       var self = this;
@@ -4897,7 +5053,7 @@
         if (self.items.length && !self.cached) return;
         var rows = self.fromSpotifyList();
         if (!rows.length) return;
-        self.items = rows;
+        self.items = self.ensureLiked(rows);
         self.counts = self.tallyRows(rows);
         self.fromSidebar = true;
         self.state = "ready";
@@ -4972,7 +5128,7 @@
       }
       var rows = this.fromSpotifyList();
       if (rows.length) {
-        this.items = rows;
+        this.items = this.ensureLiked(rows);
         this.counts = this.tallyRows(rows);
         this.fromSidebar = true;
         this.state = "ready";
@@ -4983,7 +5139,49 @@
          On la déplie une fois — c'est un appui que l'utilisateur ferait — et on
          relit dans la foulée. */
       if (this.wake()) this.retrySidebar(1200);
+      /* La barre latérale se remplit **après** notre lecture sur un téléphone :
+         sans cela on montrerait « aucune playlist » alors que les vôtres
+         arrivent une seconde plus tard (mesuré en CI : 14 liens dans la barre,
+         0 ligne chez nous). */
+      this.watchList();
       return false;
+    },
+
+    /**
+     * **Les vôtres arrivent parfois après nous.** La liste de Spotify se remplit
+     * avec son propre chargement ; on observe donc les zones de la bibliothèque
+     * le temps de les voir se remplir, et on relit à ce moment-là — jamais en
+     * boucle (douze relectures au plus, puis on rend la main, et l'observation
+     * s'arrête dès qu'il y a des lignes à l'écran).
+     */
+    watchList: function () {
+      if (!window.MutationObserver || this.obsList) return false;
+      var self = this;
+      var nodes = [pick(SEL.sidebar), pick(SEL.panel), pick(SEL.mainView)].filter(Boolean);
+      if (!nodes.length) return false;
+      this.rearms = 0;
+      this.obsList = new MutationObserver(
+        debounce(function () {
+          if (State.tab !== "library" || self.items.length) {
+            /* C'est rempli : plus rien à observer pour cette visite. */
+            if (self.items.length && self.obsList) {
+              self.obsList.disconnect();
+              self.obsList = 0;
+            }
+            return;
+          }
+          if (self.rearms++ >= 12) {
+            self.obsList.disconnect();
+            self.obsList = 0;
+            return;
+          }
+          self.load(true);
+        }, 1200)
+      );
+      nodes.forEach(function (node) {
+        self.obsList.observe(node, { childList: true, subtree: true });
+      });
+      return true;
     },
 
     /** Les dernières lignes connues, gardées d'une visite à l'autre. */
@@ -4993,8 +5191,21 @@
       try {
         var raw = window.localStorage.getItem(LIBRARY_CACHE_KEY);
         var data = raw ? JSON.parse(raw) : null;
-        if (data && data.items && data.items.length && Date.now() - (data.at || 0) < LIBRARY_CACHE_TTL) {
+        if (
+          data &&
+          data.v === LIBRARY_CACHE_VERSION &&
+          data.items &&
+          data.items.length &&
+          Date.now() - (data.at || 0) < LIBRARY_CACHE_TTL
+        ) {
           this.cache = data.items.slice(0, 120);
+        } else if (data) {
+          /* Cache d'une autre version : on le jette au lieu de réafficher des
+             playlists qui ne sont pas au compte. */
+          this.cache = [];
+          try {
+            window.localStorage.removeItem(LIBRARY_CACHE_KEY);
+          } catch (e) {}
         }
       } catch (e) {
         this.cache = [];
@@ -5007,7 +5218,7 @@
       try {
         window.localStorage.setItem(
           LIBRARY_CACHE_KEY,
-          JSON.stringify({ at: Date.now(), items: this.items.slice(0, 120) })
+          JSON.stringify({ v: LIBRARY_CACHE_VERSION, at: Date.now(), items: this.items.slice(0, 120) })
         );
         return true;
       } catch (e) {
@@ -5085,6 +5296,7 @@
         /* Le nom, pas l'identifiant : c'est ce que l'utilisateur reconnaît
            (« il arrive pas à reconnaître mes playlists »). */
         self.account = profile ? profile.display_name || profile.id || "" : "";
+        self.accountId = profile && profile.id ? profile.id : "";
         var sources = res.slice(1);
         var fresh = self.parse(sources);
         var answered = sources.some(function (r) {
@@ -5093,7 +5305,7 @@
         if (fresh.length) {
           /* L'API a répondu : ses lignes sont plus complètes que le repli, on
              les prend — et on les garde pour la prochaine ouverture. */
-          self.items = fresh;
+          self.items = self.ensureLiked(fresh);
           self.counts = self.tally(sources);
           self.fromSidebar = false;
           self.cached = false;
@@ -5106,7 +5318,7 @@
            du repli — une page qui se vide alors qu'elle affichait les playlists
            de Spotify une seconde plus tôt serait le pire des comportements. */
         if (self.keep.length) {
-          self.items = self.keep;
+          self.items = self.ensureLiked(self.keep);
           self.state = "ready";
           self.apply();
           return;
@@ -5380,6 +5592,14 @@
             lines.push(Settings.labels.libraryScan.replace("%s", this.scan.join(" · ")));
           }
           if (this.woke) lines.push(Settings.labels.libraryScan.replace("%s", "barre latérale ouverte : " + this.woke));
+          if (this.ignored) {
+            lines.push(
+              (this.ignored === 1 ? Settings.labels.libraryIgnoredOne : Settings.labels.libraryIgnored).replace(
+                "%s",
+                String(this.ignored)
+              )
+            );
+          }
         }
         var withToken = !apiTrouble
           ? []

@@ -3054,3 +3054,73 @@ l'annotation CI.
 * audit : affichage d'abord, cache (clé + durée), conservation du repli après un
   échec, mémoïsation du rendu, aucun geste sur le lecteur, `transform: none`
   côté feuille comme côté mini, curseur toujours glissant.
+
+## §47 — Seulement vos playlists, et vos titres likés (v2.11.12)
+
+Retour du 25/09 (12:05), après la 2.11.11 :
+
+> « Les playlist sont bcp trop nombreuses, y'a des playlist qui ne sont pas les
+> miennes. Fais en sorte qu'il y a que mes playlist et le truc avec mes titres
+> likés »
+
+La faute était dans la 2.11.10 : pour rendre la bibliothèque utile même sans API,
+la lecture de secours avait été **élargie à toute la page** — barre latérale,
+panneau, vue principale, corps. Sur l'accueil, cela ramassait les rangées de
+recommandations de Spotify (« Today's Top Hits », « RapCaviar », « Écoutés
+récemment ») et les mélangeait avec les playlists du compte : 82 lignes, dont la
+plupart n'étaient pas à l'utilisateur.
+
+Quatre règles désormais, et des garde-fous pour qu'elles ne se perdent pas :
+
+1. **Ce qui est à vous, et rien d'autre.** La lecture prend trois sortes
+   d'endroits : les surfaces de la bibliothèque (barre latérale, panneau) où tout
+   est au compte ; les **rangées « Vos playlists »** de l'accueil, repérées par
+   leur titre (`data-sd-mine`) ; et, ailleurs dans la page, **seulement** les
+   cartes qui disent qu'elles sont à vous (le nom du compte y figure) ou qui
+   mènent à vos titres likés. Les autres lignes de la page sont **écartées et
+   comptées** : le journal écrit « 3 playlists recommandées ignorées (elles ne
+   sont pas au compte) ».
+2. **On dit à qui est chaque playlist.** `/me/playlists` rend celles du compte
+   **et** celles que l'on suit : la sous-ligne le dit — « Votre playlist » pour
+   les vôtres, « Suivie · Spotify » pour les autres. Plus d'ambiguïté possible, et
+   l'information vient de l'API (`owner.id` comparé à l'identifiant du compte),
+   pas d'une supposition.
+3. **Vos titres likés, toujours, et en tête.** L'entrée venait du total annoncé
+   par l'API ; quand l'API ne le donne pas (ou qu'on lit la page), elle est posée
+   quand même — en première ligne, avec « Vos titres likés » en sous-titre. Seul
+   un lecteur dont on **sait** qu'il n'est pas connecté n'y a pas droit.
+4. **Les vôtres arrivent parfois après nous.** Mesuré en CI : la barre latérale
+   était vide au moment de notre lecture et contenait 14 liens une seconde plus
+   tard — l'utilisateur voyait alors « aucune playlist » alors que les siennes
+   étaient là. La bibliothèque observe donc les zones le temps de les voir se
+   remplir et relit à ce moment-là : sans rien toucher, la liste apparaît.
+
+Deux détails qui comptent : les noms accessibles de Spotify (« Mes tubes ·
+Playlist · Moi ») sont **nettoyés** pour n'afficher que le titre, et le cache
+porte une **version** (`v: 2`) — la 2.11.11 y avait écrit les 82 lignes de la
+lecture large, et un cache d'une autre version est ignoré **et effacé**, sinon la
+mise à jour réafficherait exactement ce qu'on retire.
+
+### Vérifications
+
+* banc : seules les lignes de la bibliothèque sont lues ; trois playlists
+  recommandées placées dans la page ne sont **ni** listées **ni** affichées, et le
+  journal dit « 3 playlists recommandées ignorées » ;
+* banc : les playlists d'une rangée « Vos playlists » sont lues, une carte portant
+  le nom du compte aussi, et les recommandations qui les entourent sont écartées ;
+* banc : une playlist du compte est dite « Votre playlist », une playlist suivie
+  « Suivie · Spotify », et l'entrée des titres likés est présente **et en tête**
+  même quand l'API ne donne aucun total ;
+* banc : une liste de Spotify qui arrive **après** notre lecture est relue toute
+  seule, sans que l'utilisateur touche à rien ;
+* banc : un cache écrit par la version précédente est jeté et effacé — aucune
+  ligne ne s'affiche ;
+* banc : la bibliothèque affiche toujours ses lignes sans aucune attente réseau,
+  et garde ce qu'elle montrait si l'API échoue ;
+* audit : lecture limitée aux zones et cartes qui sont à vous, recommandations
+  comptées et dites, appartenance marquée, titres likés garantis, rangées « vos
+  playlists » reconnues, arrivée tardive surveillée, cache versionné ;
+* sonde : `contenu=total n · à-vous n · suivies n · likés n · écartées n` et le
+  détail par zone (`barre n · panneau n · page n · rangées-à-vous n · lues …`)
+  dans l'annotation CI — la composition de la bibliothèque est vérifiable sans
+  capture.

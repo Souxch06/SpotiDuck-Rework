@@ -589,6 +589,31 @@ const TABMEASURE = () => {
     lignesSpotify: document.querySelectorAll(
       "#Desktop_LeftSidebar_Id a[href^='/playlist/'], #Desktop_PanelContainer_Id a[href^='/playlist/'], #main-view a[href^='/playlist/']"
     ).length,
+    /* Le détail par zone, pour savoir d'où vient (ou ne vient pas) la liste. */
+    zones: (function () {
+      const c = (sel) => document.querySelectorAll(sel).length;
+      const lib = window.SpotiDuckUI && window.SpotiDuckUI.library;
+      return (
+        `barre ${c("#Desktop_LeftSidebar_Id a[href^='/playlist/']")}` +
+        ` · panneau ${c("#Desktop_PanelContainer_Id a[href^='/playlist/']")}` +
+        ` · page ${c("#main-view a[href^='/playlist/']")}` +
+        ` · rangées-à-vous ${c("[data-sd-mine]")}` +
+        ` · lues ${lib ? (lib.scan || []).join("+") || 0 : "?"}`
+      );
+    })(),
+    /* **Ce que la bibliothèque contient, par provenance.** La demande du 25/09 :
+       « qu'il n'y ait que mes playlists et le truc avec mes titres likés ». Le
+       relevé dit combien de lignes sont au compte, combien sont suivies, et
+       combien de playlists recommandées ont été écartées. */
+    contenu: (function () {
+      const lib = window.SpotiDuckUI && window.SpotiDuckUI.library;
+      if (!lib || !lib.items) return "?";
+      const items = lib.items;
+      const mine = items.filter((r) => r.sub === "Votre playlist").length;
+      const suivies = items.filter((r) => /^Suivie · /.test(r.sub || "")).length;
+      const likés = items.filter((r) => r.type === "liked").length;
+      return `total ${items.length} · à-vous ${mine} · suivies ${suivies} · likés ${likés} · écartées ${lib.ignored || 0}`;
+    })(),
     /* Les en-têtes que la coque a gardés de la page : sans `client-token`,
        Spotify refuse les appels d'API alors que le jeton est bon. */
     enTetes:
@@ -1002,7 +1027,7 @@ async function main() {
               `onglets-visibles=${m.ongletsVisibles} barre-titre=${m.barreTitre} barre-laterale=${m.barreLaterale} ` +
               `texte=${m.textePage} car. · classes="${m.classes}"` +
               ` · barre-spotify=${m.barreSpotify} · lecteur=${m.lecteur} (${m.lecteurOn})` +
-              ` · lignes-spotify=${m.lignesSpotify} · en-têtes=${m.enTetes} · dessus-du-lecteur=${m.dessus}` +
+              ` · lignes-spotify=${m.lignesSpotify} (${m.zones}) · contenu=${m.contenu} · en-têtes=${m.enTetes} · dessus-du-lecteur=${m.dessus}` +
               (m.dire ? ` · dit="${m.dire}"` : "") +
               (m.journal ? ` · journal="${m.journal}"` : "")
           );

@@ -22,8 +22,8 @@ android {
         targetSdk = 34
         // Overridable from the command line (CI passes the run number and the
         // version from package.json).
-        versionCode = (findProperty("sdVersionCode") as String?)?.toIntOrNull() ?: 32
-        versionName = (findProperty("sdVersionName") as String?)?.takeIf { it.isNotBlank() } ?: "2.11.11"
+        versionCode = (findProperty("sdVersionCode") as String?)?.toIntOrNull() ?: 33
+        versionName = (findProperty("sdVersionName") as String?)?.takeIf { it.isNotBlank() } ?: "2.11.12"
     }
 
     /**

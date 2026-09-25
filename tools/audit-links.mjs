@@ -1061,11 +1061,24 @@ if (!/window\.fetch\(url, \{ headers: this\.requestHeaders\(true\) \}\)/.test(li
 if (!/headerNames: function/.test(libraryCode) || !/libraryHeaders/.test(runtime)) {
   errors.push("le journal ne dit plus quels en-têtes ont été gardés : une capture ne suffirait plus à diagnostiquer un refus");
 }
-/* **La liste de Spotify, cherchée partout.** Elle n'est pas qu'une barre
-   latérale : les rangées de l'accueil la portent aussi, et la barre est repliée
-   sur un téléphone (donc vide dans le document). */
-if (!/pick\(SEL\.mainView\), document\.body/.test(libraryCode)) {
-  errors.push("la liste de Spotify n'est plus cherchée que dans la barre latérale : les rangées de l'accueil seraient ignorées");
+/* **La bibliothèque de l'utilisateur, pas la page.** Élargir la lecture à toute
+   la page avait ramassé les playlists recommandées par Spotify : « les playlists
+   sont beaucoup trop nombreuses, il y en a qui ne sont pas les miennes »
+   (25/09). La lecture ne sort donc plus des zones qui portent la bibliothèque. */
+if (/pick\(SEL\.mainView\), document\.body/.test(libraryCode)) {
+  errors.push("la lecture ramasse de nouveau toute la page : les playlists recommandées par Spotify reviendraient dans la bibliothèque");
+}
+if (!/\[pick\(SEL\.sidebar\), pick\(SEL\.panel\)\]/.test(libraryCode)) {
+  errors.push("la lecture ne se limite plus aux zones de la bibliothèque (barre latérale + panneau)");
+}
+if (!/self\.ignored\+\+/.test(libraryCode) || !/libraryIgnored/.test(runtime)) {
+  errors.push("les playlists écartées ne sont plus comptées ni dites : une bibliothèque courte serait suspecte sans explication");
+}
+if (!/mine: mine/.test(libraryCode) || !/libraryMine/.test(runtime) || !/libraryFollowed/.test(runtime)) {
+  errors.push("l'appartenance d'une playlist n'est plus dite : on ne saurait plus lesquelles sont les vôtres");
+}
+if (!/ensureLiked: function/.test(libraryCode)) {
+  errors.push("l'entrée des titres likés n'est plus garantie : elle peut disparaître quand l'API se tait");
 }
 if (!/a\.closest && a\.closest\("\.sd-layer"\)/.test(libraryCode)) {
   errors.push("la lecture de la liste de Spotify ne s'exclut plus elle-même : elle pourrait lire sa propre page");
@@ -1075,6 +1088,18 @@ if (!/wake: function/.test(libraryCode) || !/retrySidebar: function/.test(librar
 }
 if (!/linkName: function/.test(libraryCode)) {
   errors.push("les lignes de Spotify seraient lues sans leur nom");
+}
+if (!/isMineCard/.test(libraryCode) || !/fromLibrary/.test(libraryCode)) {
+  errors.push("la lecture hors bibliothèque n'exige plus de preuve d'appartenance : les playlists recommandées de l'accueil reviendraient");
+}
+if (!/mineShelves: function/.test(libraryCode) || !/data-sd-mine/.test(libraryCode)) {
+  errors.push("les rangées « Vos playlists » de l'accueil ne sont plus reconnues : vos playlists hors barre latérale disparaîtraient");
+}
+if (!/watchList: function/.test(libraryCode) || !/obsList/.test(libraryCode)) {
+  errors.push("la bibliothèque ne surveille plus l'arrivée tardive de la liste de Spotify : « aucune playlist » alors que les vôtres arrivent une seconde plus tard");
+}
+if (!/LIBRARY_CACHE_VERSION/.test(libraryCode) || !/data\.v === LIBRARY_CACHE_VERSION/.test(libraryCode)) {
+  errors.push("le cache ne porte plus de version : un cache écrit par une lecture large réafficherait des playlists qui ne sont pas au compte");
 }
 
 /* **Le lecteur est statique.** Deux versions ont tenté d'apprivoiser les gestes
@@ -1302,6 +1327,9 @@ if (!/bas\+900ms=/.test(probeTool) || !/after2/.test(probeTool)) {
 }
 if (!/journal=/.test(probeTool) || !/dit=/.test(probeTool)) {
   errors.push("la sonde ne relève plus ce que la page dit (raison, journal) : une capture ne suffirait plus à diagnostiquer");
+}
+if (!/contenu=\$\{m\.contenu\}/.test(probeTool) || !/écartées \$\{lib\.ignored/.test(probeTool)) {
+  errors.push("la sonde ne dit plus ce que la bibliothèque contient par provenance (à vous · suivies · likés · écartées) : la demande « que mes playlists » n'aurait plus de témoin en CI");
 }
 if (!/lignes-spotify=/.test(probeTool) || !/en-têtes=/.test(probeTool)) {
   errors.push("la sonde ne relève plus la source de repli (lignes de Spotify) ni les en-têtes gardés : la prochaine panne de bibliothèque serait de nouveau à l'aveugle");

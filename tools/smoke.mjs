@@ -165,7 +165,11 @@ await checkAsync("tab → Rechercher navigates the web player", async () => {
 
 await checkAsync("tab → Accueil returns home", async () => {
   q('.sd-tab[data-tab="home"]').click();
-  await tick(120);
+  /* Le retour de la page d'accueil dépend d'un rendu de Spotify : on lui laisse
+     le temps d'arriver au lieu de le juger sur un seul relevé (il arrivait que
+     la page soit encore en train de se reposer — banc rouge au hasard, et un
+     banc qui échoue au hasard finit par ne plus être lu). */
+  for (let i = 0; i < 20 && !q('section[data-testid="home-page"]'); i++) await tick(40);
   assert(q('section[data-testid="home-page"]'), "home page missing");
   assert(!q(".sd-topbar").classList.contains("is-visible"), "top bar must be hidden on home");
   return "home ✓";
@@ -1641,7 +1645,7 @@ await checkAsync("a tall, narrow page is not 'nothing displayed', and the diagno
     const width = isMain ? 29 : hasText ? 24 : 0;
     return { width, height, top: 0, left: 0, right: width, bottom: height, x: 0, y: 0 };
   };
-  w.AndBridge = { version: () => "2.11.11", session: () => false };
+  w.AndBridge = { version: () => "2.11.12", session: () => false };
   w.eval(await read("dist/spotiduck-ui.js"));
   await tick(250);
 
@@ -1896,7 +1900,11 @@ await checkAsync("la bibliothèque s'affiche sans attendre le réseau", async ()
   /* **Aucune attente** : ni `tick`, ni requête. Ce qui est à l'écran doit y être
      déjà. */
   const rows = page.querySelectorAll(".sd-lib-row");
-  assert(rows.length === 2, `2 lignes attendues sans aucune attente réseau, ${rows.length} affichée(s)`);
+  /* 3 lignes : votre bibliothèque telle que la page la montre, **plus** l'entrée
+     des titres likés, qui doit toujours être là (« le truc avec mes titres
+     likés »). */
+  assert(rows.length === 3, `3 lignes attendues sans aucune attente réseau, ${rows.length} affichée(s)`);
+  assert(rows[0].getAttribute("href") === "/collection/tracks", "les titres likés ne sont pas en tête dès le premier rendu");
   assert(api.library.state === "ready", `état attendu « ready » immédiatement, obtenu « ${api.library.state} »`);
   const title = page.querySelector(".sd-lib-title").textContent;
   assert(title === "Bibliothèque", "le titre de la page n'est pas posé : " + title);
@@ -1906,6 +1914,45 @@ await checkAsync("la bibliothèque s'affiche sans attendre le réseau", async ()
   );
   dom.window.close();
   return "2 lignes affichées sans le moindre appel réseau ✓";
+});
+
+await checkAsync("un cache écrit par une version qui ramassait toute la page est jeté", async () => {
+  /* La 2.11.11 a écrit dans le cache les playlists ramassées **partout** dans la
+     page (recommandations comprises). Sans version de cache, la mise à jour
+     réafficherait ces playlists-là — exactement « il y en a qui ne sont pas les
+     miennes ». Un cache d'avant est donc ignoré et effacé. */
+  const dom = new JSDOM("<!doctype html><html><body><main></main></body></html>", {
+    url: "https://open.spotify.com/intl-fr/",
+    pretendToBeVisual: true,
+    runScripts: "dangerously",
+  });
+  dom.window.localStorage.setItem(
+    "sd.library.cache",
+    JSON.stringify({
+      at: Date.now() - 60 * 1000,
+      items: [
+        { type: "playlist", name: "Today's Top Hits", sub: "Dans votre bibliothèque", href: "/playlist/editorial1", img: "" },
+        { type: "playlist", name: "RapCaviar", sub: "Dans votre bibliothèque", href: "/playlist/editorial2", img: "" },
+      ],
+    })
+  );
+  dom.window.fetch = () => new Promise(() => {});
+  dom.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => undefined }));
+  dom.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(200);
+  const api = dom.window.SpotiDuckUI;
+  const page = dom.window.document;
+  api.state.tab = "library";
+  api.library.load(true);
+  const rows = [...page.querySelectorAll(".sd-lib-row")];
+  assert(rows.length === 0, `aucune ligne du vieux cache ne doit s'afficher, ${rows.length} affichée(s)`);
+  assert(api.library.cached !== true, "un cache d'une autre version a été utilisé");
+  assert(
+    dom.window.localStorage.getItem("sd.library.cache") === null,
+    "le vieux cache n'a pas été effacé : il reviendrait au prochain lancement"
+  );
+  dom.window.close();
+  return "cache d'avant ignoré et effacé ✓";
 });
 
 await checkAsync("la bibliothèque relit son cache avant même la page de Spotify", async () => {
@@ -1920,6 +1967,7 @@ await checkAsync("la bibliothèque relit son cache avant même la page de Spotif
   dom.window.localStorage.setItem(
     "sd.library.cache",
     JSON.stringify({
+      v: 2,
       at: Date.now() - 60 * 1000,
       items: [
         { type: "playlist", name: "Cache A", sub: "", href: "/playlist/c1", img: "" },
@@ -2006,21 +2054,26 @@ await checkAsync("la bibliothèque lit la liste de Spotify quand l'API ne répon
   /* Les lignes sont là **tout de suite** (aucune attente réseau) : c'est le
      premier point que ce test verrouille. */
   assert(
-    api.library.items.length === 3 && page.querySelectorAll(".sd-lib-row").length === 3,
-    "les lignes de Spotify ne sont pas affichées immédiatement : " + api.library.items.length
+    api.library.items.length === 4 && page.querySelectorAll(".sd-lib-row").length === 4,
+    "les lignes de Spotify (et vos titres likés) ne sont pas affichées immédiatement : " + api.library.items.length
   );
+  assert(api.library.items[0].type === "liked", "les titres likés ne sont pas en tête : " + api.library.items.map((r) => r.name).join(", "));
   /* Puis on laisse le rafraîchissement par l'API se terminer (il échoue, il
      doit échouer) pour lire son journal. */
   for (let i = 0; i < 60 && api.library.refreshing; i++) await tick(25);
 
-  assert(api.library.items.length === 3, `3 lignes de la liste de Spotify attendues, ${api.library.items.length} lue(s)`);
+  assert(api.library.items.length === 4, `3 lignes de la liste de Spotify + vos titres likés attendues, ${api.library.items.length} lue(s)`);
   assert(api.library.fromSidebar === true, "les lignes ne sont pas marquées comme lues dans la liste de Spotify");
   assert(api.library.state === "ready", `état attendu « ready », obtenu « ${api.library.state} »`);
   const rows = [...page.querySelectorAll(".sd-lib-row")];
-  assert(rows.length === 3, `3 lignes attendues à l'écran, ${rows.length} affichée(s)`);
+  assert(rows.length === 4, `4 lignes attendues à l'écran, ${rows.length} affichée(s)`);
   assert(
-    rows.map((r) => r.getAttribute("href")).join(",") === "/playlist/abc,/album/def,/artist/ghi",
+    rows.map((r) => r.getAttribute("href")).join(",") === "/collection/tracks,/playlist/abc,/album/def,/artist/ghi",
     "les adresses lues ne sont pas celles de Spotify : " + rows.map((r) => r.getAttribute("href")).join(",")
+  );
+  assert(
+    rows.every((r) => !/^\/playlist\//.test(r.getAttribute("href")) || /Dans votre bibliothèque/.test(r.textContent)),
+    "une playlist lue dans la page ne dit pas qu'elle est dans la bibliothèque"
   );
   const note = page.querySelector(".sd-lib-note").textContent;
   assert(/liste de Spotify/.test(note), "la page ne dit pas d'où viennent ces lignes : " + note);
@@ -2031,23 +2084,89 @@ await checkAsync("la bibliothèque lit la liste de Spotify quand l'API ne répon
   const journal = [...page.querySelectorAll(".sd-lib-log-list li")].map((li) => li.textContent).join(" | ");
   assert(/\/me/.test(journal) && /401/.test(journal), "le journal ne dit pas que /me a été refusé : " + journal);
   dom.window.close();
-  return "repli sur la liste de Spotify · 3 lignes · refus écrit dans le journal ✓";
+  return "repli sur la liste de Spotify · vos titres likés en tête · 3 lignes · refus écrit dans le journal ✓";
 });
 
-await checkAsync("la bibliothèque lit la liste de Spotify partout où elle est", async () => {
-  /* **« Il n'arrive toujours pas à reconnaître mes playlists » (25/09).**
-     La liste de Spotify n'est pas qu'une barre latérale : elle est aussi dans
-     les rangées de l'accueil (« Vos playlists », « Écoutés récemment ») et dans
-     le panneau latéral. Ne chercher que dans la barre latérale, c'était
-     dépendre de la mise en page de Spotify à un instant donné — et ne rien
-     trouver quand elle est repliée. */
+await checkAsync("la bibliothèque dit ce qui est à vous, et garde vos titres likés en tête", async () => {
+  /* La demande du 25/09 : « fais en sorte qu'il n'y ait que mes playlists et le
+     truc avec mes titres likés ». L'API `/me/playlists` rend les playlists du
+     compte **et** celles que l'on suit : la page le dit ligne par ligne, et
+     l'entrée des titres likés est toujours là, en tête — même quand l'API ne
+     donne aucun total pour elle. */
+  const dom = new JSDOM("<!doctype html><html><body><main></main></body></html>", {
+    url: "https://open.spotify.com/intl-fr/",
+    pretendToBeVisual: true,
+    runScripts: "dangerously",
+  });
+  const answers = {
+    "/me": { id: "moi", display_name: "Moi" },
+    "/me/playlists?limit=50": {
+      total: 3,
+      items: [
+        { id: "mine1", name: "Ma mix", owner: { id: "moi", display_name: "Moi" }, images: [] },
+        { id: "mine2", name: "Rap FR", owner: { id: "moi", display_name: "Moi" }, images: [] },
+        { id: "suivie", name: "Today's Top Hits", owner: { id: "spotify", display_name: "Spotify" }, images: [] },
+      ],
+    },
+    /* Pas de total pour les titres likés : l'entrée doit quand même être là. */
+    "/me/tracks?limit=1": null,
+  };
+  dom.window.fetch = (url, init) => {
+    void init;
+    const key = String(url).replace("https://api.spotify.com/v1", "");
+    const body = answers[key];
+    return Promise.resolve({ ok: !!body, status: body ? 200 : 401, json: () => Promise.resolve(body || {}) });
+  };
+  dom.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => undefined }));
+  dom.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(200);
+  const api = dom.window.SpotiDuckUI;
+  const page = dom.window.document;
+  const xhr = new dom.window.XMLHttpRequest();
+  xhr.open("GET", "https://api.spotify.com/v1/me");
+  xhr.setRequestHeader("Authorization", "Bearer jeton-compte");
+  api.state.tab = "library";
+  api.library.load(true);
+  for (let i = 0; i < 60 && api.library.refreshing; i++) await tick(25);
+
+  const names = api.library.items.map((r) => r.name);
+  assert(names[0] === "Titres likés", "les titres likés ne sont pas en tête : " + names.join(", "));
+  assert(api.library.items[0].href === "/collection/tracks", "l'entrée likés ne mène pas aux titres likés");
+  assert(api.library.items[0].sub === "Vos titres likés", "l'entrée likés ne dit pas ce qu'elle est : " + api.library.items[0].sub);
+  const mine = api.library.items.filter((r) => r.type === "playlist" && r.sub === "Votre playlist");
+  assert(mine.length === 2, `2 playlists à vous attendues, ${mine.length} trouvée(s)`);
+  assert(mine.every((r) => r.mine === true), "les playlists du compte ne sont pas marquées comme les vôtres");
+  const followed = api.library.items.filter((r) => r.type === "playlist" && /^Suivie · /.test(r.sub));
+  assert(followed.length === 1, `1 playlist suivie attendue, ${followed.length} trouvée(s)`);
+  assert(followed[0].name === "Today's Top Hits", "la playlist suivie n'est pas celle attendue : " + followed[0].name);
+  assert(followed[0].sub === "Suivie · Spotify", "l'auteur de la playlist suivie n'est pas dit : " + followed[0].sub);
+  assert(followed[0].mine !== true, "une playlist suivie est marquée comme la vôtre");
+  /* À l'écran aussi : la première ligne est bien les titres likés. */
+  const rows = [...page.querySelectorAll(".sd-lib-row")];
+  assert(rows.length === 4, `4 lignes attendues à l'écran, ${rows.length} affichée(s)`);
+  assert(rows[0].getAttribute("href") === "/collection/tracks", "la première ligne affichée n'est pas les titres likés");
+  assert(/Votre playlist/.test(rows[1].textContent) && /Suivie · Spotify/.test(rows[3].textContent), "l'appartenance n'est pas lisible à l'écran");
+  dom.window.close();
+  return "likés en tête · 2 à vous · 1 suivie nommée ✓";
+});
+
+await checkAsync("la bibliothèque ne lit que VOTRE bibliothèque, pas les recommandations", async () => {
+  /* **« Les playlists sont beaucoup trop nombreuses, il y en a qui ne sont pas
+     les miennes » (25/09).** La lecture élargie à toute la page ramassait les
+     playlists recommandées par Spotify (rangées de l'accueil). Désormais seules
+     comptent les zones de la bibliothèque — la barre latérale et le panneau —
+     et le reste est écarté, en le comptant. */
   const dom = new JSDOM(
     "<!doctype html><html><body>" +
-      "<div id='Desktop_LeftSidebar_Id'><header><h1>Ma bibliothèque</h1></header></div>" +
-      "<main id='main-view'><section>" +
+      "<div id='Desktop_LeftSidebar_Id'><header><h1>Ma bibliothèque</h1></header>" +
       "<a href='/playlist/p1?si=xyz' aria-label='Mes tubes'><img src='https://i.scdn.co/image/p1' alt=''/></a>" +
-      "<a href='/playlist/p2'><div><div><span>Découvertes</span></div></div></a>" +
       "<a href='/album/a1' aria-label='Album Un'></a>" +
+      "</div>" +
+      "<main id='main-view'><section>" +
+      /* Recommandations de Spotify : **jamais** dans la bibliothèque. */
+      "<a href='/playlist/p2' aria-label='Today Top Hits'></a>" +
+      "<a href='/playlist/p3' aria-label='RapCaviar'></a>" +
+      "<a href='/playlist/p4' aria-label='Vos découvertes de la semaine'></a>" +
       "</section></main>" +
       "</body></html>",
     { url: "https://open.spotify.com/intl-fr/", pretendToBeVisual: true, runScripts: "dangerously" }
@@ -2063,23 +2182,127 @@ await checkAsync("la bibliothèque lit la liste de Spotify partout où elle est"
   for (let i = 0; i < 40 && api.library.state === "loading"; i++) await tick(25);
 
   assert(api.library.fromSidebar === true, "les lignes ne sont pas marquées comme lues dans Spotify");
-  assert(api.library.items.length === 3, `3 lignes attendues, ${api.library.items.length} lue(s)`);
+  assert(api.library.items.length === 3, `3 lignes attendues (les titres likés + la bibliothèque), ${api.library.items.length} lue(s)`);
+  assert(api.library.items[0].type === "liked", "les titres likés ne sont pas garantis : " + api.library.items.map((r) => r.name).join(", "));
   assert(
-    api.library.items.map((r) => r.href).join(",") === "/playlist/p1,/playlist/p2,/album/a1",
-    "les adresses lues ne sont pas celles de la page : " + api.library.items.map((r) => r.href).join(",")
+    api.library.items.slice(1).map((r) => r.href).join(",") === "/playlist/p1,/album/a1",
+    "les adresses lues ne sont pas celles de la bibliothèque : " + api.library.items.map((r) => r.href).join(",")
   );
-  assert(api.library.items[0].name === "Mes tubes", "l'aria-label n'est pas lu : " + api.library.items[0].name);
+  assert(api.library.items[1].name === "Mes tubes", "l'aria-label n'est pas lu : " + api.library.items[1].name);
   assert(
-    api.library.items[1].name === "Découvertes",
-    "le texte de la ligne n'est pas lu : " + api.library.items[1].name
+    !api.library.items.some((r) => /Top Hits|RapCaviar|découvertes de la semaine/.test(r.name)),
+    "une playlist recommandée par Spotify est entrée dans la bibliothèque : " + JSON.stringify(api.library.items)
   );
+  assert(api.library.ignored === 3, `3 recommandations attendues dans le journal, ${api.library.ignored} comptée(s)`);
   const rows = [...page.querySelectorAll(".sd-lib-row")];
   assert(rows.length === 3, `3 lignes attendues à l'écran, ${rows.length} affichée(s)`);
+  assert(
+    rows.every((r) => !/p2|p3|p4/.test(r.getAttribute("href") || "")),
+    "une recommandation est affichée à l'écran : " + rows.map((r) => r.getAttribute("href")).join(",")
+  );
   const journal = [...page.querySelectorAll(".sd-lib-log-list li")].map((li) => li.textContent).join(" | ");
-  assert(/Lignes trouvées/.test(journal) && /page 3/.test(journal), "le journal ne dit pas où la liste a été trouvée : " + journal);
+  assert(/Lignes trouvées/.test(journal) && /barre latérale 2/.test(journal), "le journal ne dit pas d'où viennent les lignes : " + journal);
+  assert(/3 playlists recommandées ignorées/.test(journal), "le journal ne dit pas ce qui a été écarté : " + journal);
   assert(/En-têtes de la page/.test(journal), "le journal ne dit pas quels en-têtes la coque a gardés : " + journal);
   dom.window.close();
-  return "3 lignes lues dans la page · adresses, noms, journal ✓";
+  return "bibliothèque seule (2 lignes + vos titres likés) · 3 recommandations écartées ✓";
+});
+
+await checkAsync("hors bibliothèque : vos rangées « Vos playlists » sont lues, les recommandations non", async () => {
+  /* Toutes les playlists de la page ne sont pas à vous, et toutes les vôtres ne
+     sont pas dans la barre latérale : Spotify a une rangée « Vos playlists » sur
+     l'accueil. Celle-là est lue ; les rangées de recommandations qui l'entourent
+     sont écartées et comptées. Une carte qui porte le nom du compte est prise
+     aussi (parfois la rangée n'a pas de titre lisible). */
+  const dom = new JSDOM(
+    "<!doctype html><html><body>" +
+      "<div id='Desktop_LeftSidebar_Id'><header><h1>Ma bibliothèque</h1></header></div>" +
+      "<main id='main-view'>" +
+      "<section><h2>Vos playlists</h2>" +
+      "<a href='/playlist/m1' aria-label='Mes tubes · Playlist · Moi'></a>" +
+      "<a href='/playlist/m2' aria-label='Mix du soir · Playlist · Moi'></a>" +
+      "</section>" +
+      "<section><h2>Écoutés récemment</h2>" +
+      "<a href='/playlist/r1' aria-label=\"Today's Top Hits · Playlist · Spotify\"></a>" +
+      "<a href='/playlist/r2' aria-label='RapCaviar · Playlist · Spotify'></a>" +
+      "<a href='/playlist/m3' aria-label='Ma playlist voyage · Playlist · Moi'></a>" +
+      "</section>" +
+      "</main></body></html>",
+    { url: "https://open.spotify.com/intl-fr/", pretendToBeVisual: true, runScripts: "dangerously" }
+  );
+  dom.window.fetch = (url) => {
+    const key = String(url).replace("https://api.spotify.com/v1", "");
+    const body = key === "/me" ? { id: "moi", display_name: "Moi" } : null;
+    return Promise.resolve({ ok: !!body, status: body ? 200 : 401, json: () => Promise.resolve(body || {}) });
+  };
+  dom.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => undefined }));
+  dom.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(200);
+  const api = dom.window.SpotiDuckUI;
+  /* Un jeton capté comme dans la vraie page : c'est lui qui permet de demander
+     `/me` — donc de connaître le nom du compte. */
+  const xhr = new dom.window.XMLHttpRequest();
+  xhr.open("GET", "https://api.spotify.com/v1/me");
+  xhr.setRequestHeader("Authorization", "Bearer jeton-compte");
+  api.state.tab = "library";
+  api.library.load(true);
+  for (let i = 0; i < 60 && api.library.state === "loading"; i++) await tick(25);
+
+  const names = api.library.items.map((r) => r.name);
+  assert(names.includes("Mes tubes") && names.includes("Mix du soir"), "les playlists de la rangée « Vos playlists » ne sont pas lues : " + names.join(", "));
+  assert(!names.some((n) => /Top Hits|RapCaviar|voyage/.test(n)), "une recommandation est entrée dans la bibliothèque : " + names.join(", "));
+  assert(api.library.ignored >= 2, `2 recommandations au moins attendues au journal, ${api.library.ignored} comptée(s)`);
+  assert(names[0] === "Titres likés", "les titres likés ne sont plus en tête : " + names.join(", "));
+  assert(!names.some((n) => /·/.test(n)), "les noms affichent la phrase entière de Spotify : " + names.join(" / "));
+  /* Une carte **hors rangée** qui porte le nom du compte : elle ne peut être
+     reconnue qu'une fois le compte connu (`/me`) — c'est le cas quand la rangée
+     n'a pas de titre lisible. */
+  /* Le compte arrive avec la réponse à `/me` : on la laisse arriver (les appels
+     sont enchaînés un par un, jamais tous à la fois). */
+  for (let i = 0; i < 200 && !api.library.account; i++) await tick(25);
+  assert(api.library.account === "Moi", "le compte n'a pas été lu depuis /me : " + JSON.stringify(api.library.account));
+  const again = api.library.fromSpotifyList().map((r) => r.href);
+  assert(again.includes("/playlist/m3"), "une playlist portant le nom du compte n'est pas lue : " + again.join(", "));
+  assert(!again.some((h) => /\/playlist\/r[12]/.test(h)), "une recommandation est prise quand le compte est connu : " + again.join(", "));
+  dom.window.close();
+  return "rangée à vous lue · carte au nom du compte lue · recommandations écartées ✓";
+});
+
+await checkAsync("la liste de Spotify arrive après nous : la bibliothèque se remplit d'elle-même", async () => {
+  /* Mesuré en CI : la barre latérale était **vide** au moment de notre lecture
+     et contenait 14 liens une seconde plus tard. Sans relecture, l'utilisateur
+     voyait « aucune playlist » alors que les siennes étaient là — et il n'a rien
+     à toucher pour qu'elles apparaissent. */
+  const dom = new JSDOM(
+    "<!doctype html><html><body>" +
+      "<div id='Desktop_LeftSidebar_Id'><header><h1>Ma bibliothèque</h1></header></div>" +
+      "<main id='main-view'></main></body></html>",
+    { url: "https://open.spotify.com/intl-fr/", pretendToBeVisual: true, runScripts: "dangerously" }
+  );
+  dom.window.fetch = () => Promise.resolve({ ok: false, status: 401, json: () => Promise.resolve({}) });
+  dom.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => undefined }));
+  dom.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(200);
+  const api = dom.window.SpotiDuckUI;
+  const page = dom.window.document;
+  api.state.tab = "library";
+  api.library.load(true);
+  await tick(300);
+  assert(api.library.items.length === 0, "le banc doit commencer avec une bibliothèque vide");
+
+  /* Spotify finit son chargement : la barre latérale se remplit. */
+  const link = page.createElement("a");
+  link.setAttribute("href", "/playlist/tardive");
+  link.setAttribute("aria-label", "Ma playlist tardive");
+  page.getElementById("Desktop_LeftSidebar_Id").appendChild(link);
+
+  for (let i = 0; i < 80 && !api.library.items.length; i++) await tick(50);
+  assert(api.library.items.length >= 1, "la liste arrivée après coup n'est jamais relue");
+  assert(api.library.items[0].name === "Titres likés", "les titres likés ne sont pas en tête : " + api.library.items.map((r) => r.name).join(", "));
+  assert(api.library.items.some((r) => r.name === "Ma playlist tardive"), "la playlist arrivée après coup n'est pas lue : " + api.library.items.map((r) => r.name).join(", "));
+  assert([...page.querySelectorAll(".sd-lib-row")].length >= 1, "rien n'est affiché après la relecture");
+  dom.window.close();
+  return "remplie sans rien toucher ✓";
 });
 
 await checkAsync("la bibliothèque déplie la liste de Spotify quand elle est repliée", async () => {
@@ -2112,11 +2335,12 @@ await checkAsync("la bibliothèque déplie la liste de Spotify quand elle est re
   assert(api.library.items.length === 0, "la liste ne devrait rien donner avant dépliage");
   for (let i = 0; i < 80 && !api.library.items.length; i++) await tick(25);
   assert(api.library.woke, "la coque n'a pas essayé de déplier la liste de Spotify");
-  assert(api.library.items.length === 1, `la playlist est attendue après dépliage, ${api.library.items.length} lue(s)`);
-  assert(api.library.items[0].href === "/playlist/p9", "la mauvaise ligne a été lue : " + api.library.items[0].href);
+  assert(api.library.items.length === 2, `la playlist et vos titres likés sont attendus après dépliage, ${api.library.items.length} lue(s)`);
+  assert(api.library.items[0].type === "liked", "les titres likés ne sont pas en tête : " + api.library.items.map((r) => r.name).join(", "));
+  assert(api.library.items[1].href === "/playlist/p9", "la mauvaise ligne a été lue : " + api.library.items[1].href);
   assert(
-    page.querySelectorAll(".sd-lib-row").length === 1,
-    "la ligne lue n'est pas affichée à l'écran"
+    page.querySelectorAll(".sd-lib-row").length === 2,
+    "la ligne lue (et vos titres likés) n'est pas affichée à l'écran"
   );
   dom.window.close();
   return "liste repliée → dépliée → " + "1 playlist lue ✓";
@@ -2272,10 +2496,14 @@ await checkAsync("without a token the library keeps Spotify's sidebar (never an 
   xhr.setRequestHeader("Authorization", "Bearer jeton-xhr");
   api.library.load(true);
   for (let i = 0; i < 40 && !api.library.items.length; i++) await tick(25);
-  assert(api.library.items.length === 1, "le jeton posé en XHR n'est pas capté : la bibliothèque resterait vide");
-  assert(api.library.items[0].name === "La seule", "l'élément lu par le jeton XHR n'est pas le bon");
+  /* Deux lignes : **les titres likés d'abord** (la demande du 25/09 : « mes
+     playlists et le truc avec mes titres likés »), puis la seule playlist qui a
+     répondu. */
+  assert(api.library.items.length === 2, "le jeton posé en XHR n'est pas capté : la bibliothèque resterait vide");
+  assert(api.library.items[0].type === "liked", "les titres likés ne sont pas en tête : " + api.library.items[0].type);
+  assert(api.library.items[1].name === "La seule", "l'élément lu par le jeton XHR n'est pas le bon");
+  assert(api.library.items[1].sub === "Suivie · Moi", "la playlist devrait être dite « suivie » (elle n'est pas au compte) : " + api.library.items[1].sub);
   api.library.apply();
-  assert(api.library.items.length === 1, `la seule playlist qui a répondu devrait suffire : ${api.library.items.length} ligne(s)`);
   assert(page.querySelector(".sd-lib").hidden === false, "la bibliothèque ne s'affiche pas alors qu'elle a une playlist");
   const chips2 = [...page.querySelectorAll(".sd-lib-chip")];
   chips2[4].dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
