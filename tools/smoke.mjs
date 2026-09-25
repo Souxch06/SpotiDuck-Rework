@@ -634,13 +634,78 @@ await checkAsync("native playback API is idempotent", async () => {
      le temps d'aboutir au lieu de le juger sur un seul relevé (il arrivait que
      la position soit encore celle d'avant le geste). */
   let pos = 0;
-  for (let i = 0; i < 20; i++) {
-    await tick(60);
+  for (let i = 0; i < 30; i++) {
+    await tick(80);
     pos = SD.state.position;
     if (pos >= 4000 && pos <= 9000) break;
   }
   assert(pos >= 4000 && pos <= 9000, "seek() did not move the position, got " + pos + " ms");
   return "play/pause idempotent · seek " + Math.round(pos / 1000) + " s";
+});
+
+await checkAsync("le curseur se lit et s'écrit dans la même unité", async () => {
+  /* Le lecteur de Spotify compte parfois en secondes, parfois en millisecondes
+     (`max` le dit). Lire avec une unité et écrire avec l'autre déplaçait le
+     curseur au 1000e de la position demandée ; et un simple déplacement du
+     curseur faisait basculer l'unité **mesurée** — c'est ce qui faisait échouer
+     le test précédent une fois sur trois en CI (« got 5 ms »). */
+  const spot = SD._internals.Spotify;
+  const input = spot.progressInput();
+  assert(input, "le curseur du faux lecteur est introuvable");
+  const keep = {
+    max: input.getAttribute("max"),
+    value: input.value,
+    unit: spot.unit,
+    pos: window.MockSpotify.state.position,
+    track: window.MockSpotify.state.trackIndex,
+  };
+  const wasPlaying = SD.state.playing;
+
+  input.setAttribute("max", "180");
+  input.value = "90";
+  spot.unit = 0;
+  assert(spot.scale() === 1000, "un lecteur en secondes doit se lire en millisecondes : " + spot.scale());
+  SD._internals.Actions.seek(45000);
+  assert(Math.abs(Number(input.value) - 45) < 0.01, "une seconde écrite devrait valoir 45 : " + input.value);
+
+  input.setAttribute("max", "180000");
+  input.value = "90000";
+  spot.unit = 0;
+  assert(spot.scale() === 1, "un lecteur en millisecondes doit se lire tel quel : " + spot.scale());
+  SD._internals.Actions.seek(45000);
+  assert(Math.abs(Number(input.value) - 45000) < 1, "des millisecondes devraient être écrites telles quelles : " + input.value);
+
+  /* Un **saut** (déplacement du curseur, changement de piste) ne doit pas
+     décider de l'unité ; une avance régulière, si. */
+  if (!SD.state.playing) {
+    SD.play();
+    await tick(80);
+  }
+  const read = SD._internals.Spotify;
+  input.setAttribute("max", "180");
+  read.unit = 0;
+  read.sample = { v: 5, t: Date.now() - 1000 };
+  input.value = "90";
+  read.calibrate();
+  assert(read.unit === 0, "un saut de curseur a décidé de l'unité (" + read.unit + ")");
+  input.setAttribute("max", "180000");
+  read.sample = { v: 90000, t: Date.now() - 1000 };
+  input.value = "91000";
+  read.calibrate();
+  assert(read.unit === 1000, "une avance régulière en millisecondes n'a pas été reconnue : " + read.unit);
+
+  /* Restauration : les tests suivants retrouvent la maquette telle quelle — y
+     compris la position du faux lecteur, que `seek` a déplacée. */
+  input.setAttribute("max", keep.max);
+  input.value = keep.value;
+  spot.unit = keep.unit;
+  window.MockSpotify.state.position = keep.pos;
+  window.MockSpotify.state.trackIndex = keep.track;
+  if (!wasPlaying) {
+    SD.pause();
+    await tick(80);
+  }
+  return "secondes ↔ millisecondes · saut ignoré ✓";
 });
 
 await checkAsync("tab bar can be disabled without leaving a floating mini player", async () => {

@@ -2839,6 +2839,23 @@ Enfin, « Réessayer » sans session ne pouvait rien donner : la page propose
 maintenant **« Se connecter à Spotify »** à côté, qui mène à la connexion
 classique (`?allow_password=1`), la même que l'écran d'accueil maison.
 
+### Le curseur : une seule unité, et pas de saut qui décide
+
+Deux chemins touchent au curseur de lecture : la **lecture** (`Spotify.read`, qui
+déduit l'unité de la page — secondes ou millisecondes, selon `max`) et
+l'**écriture** (`Actions.seek`, pour le mini-lecteur, la feuille et la
+notification Android). L'écriture supposait des secondes pendant que la lecture
+mesurait l'unité : sur un lecteur qui compte en millisecondes, se déplacer à 45 s
+visait 45 ms — et l'unité **mesurée** pouvait basculer sur un simple déplacement
+du curseur, la position se lisant alors 1000 fois trop petite.
+
+Tout passe maintenant par la même graduation (`Spotify.scale()`), et la
+calibration n'accepte que deux bandes franches (~1 graduation par seconde, ou
+~1000) : entre les deux, c'est un **saut** — déplacement, changement de piste —,
+il ne décide de rien. C'est aussi ce qui faisait échouer le banc une fois sur
+trois en CI (« seek() did not move the position, got 5 ms »), et un banc qui
+échoue au hasard finit par ne plus être lu.
+
 ### Mesures (CI, ce commit)
 
 * « Lecteur au défilement — page-fr » : `coque posée · avant=visible 412x192 ·

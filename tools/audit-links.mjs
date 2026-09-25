@@ -1177,6 +1177,25 @@ if (!/excerpt: function \(\)/.test(stripComments(runtime)) || !/describe: functi
 if (!/@JavascriptInterface\s+fun session\(\): Boolean/.test(netBridgeKt) || !/fun sessionPresent\(\): Boolean/.test(activity)) {
   errors.push("le diagnostic ne peut plus dire si un compte est réellement connecté (session du lecteur)");
 }
+/* **Le curseur : lire et écrire dans la même unité.** La page de Spotify compte
+   parfois en secondes, parfois en millisecondes ; lire avec l'une et écrire avec
+   l'autre déplaçait le curseur au 1000e de la position demandée, et un simple
+   déplacement faisait basculer l'unité mesurée (vu en CI : « seek() did not move
+   the position, got 5 ms »). */
+if (!/scale: function/.test(libraryCode)) {
+  errors.push("la graduation du curseur n'a plus de repère commun : lire et écrire pourraient diverger d'un facteur 1000");
+}
+if (!/var value = this\.scale\(\) === 1 \? ms : ms \/ 1000;/.test(libraryCode)) {
+  errors.push("le déplacement du curseur n'utilise plus la graduation lue : il viserait la mauvaise position sur un lecteur en millisecondes");
+}
+if (
+  !/var secondsBand = /.test(libraryCode) ||
+  !/var msBand = /.test(libraryCode) ||
+  /speed >= 60 \? 1000 : 1/.test(libraryCode)
+) {
+  errors.push("la calibration du curseur accepte encore les sauts : un déplacement du curseur ferait basculer l'unité et la position se lirait 1000 fois trop petite");
+}
+
 if (
   !/Onglet Bibliothèque — /.test(probeTool) ||
   !/const TABMEASURE = /.test(probeTool) ||

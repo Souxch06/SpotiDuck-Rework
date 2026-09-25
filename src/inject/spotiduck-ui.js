@@ -455,6 +455,19 @@
       var max = input ? parseFloat(input.getAttribute("max")) : 0;
       return isFinite(max) && max > 10000 ? 1000 : 1;
     },
+
+    /**
+     * Ce que vaut **une graduation** du curseur, en millisecondes : 1000 si la
+     * page compte en millisecondes, 1 si elle compte en secondes.
+     *
+     * Les deux chemins qui touchent au curseur doivent lire **la même**
+     * graduation : lire avec l'une et écrire avec l'autre donnait un
+     * déplacement faux d'un facteur 1000 — le genre d'à-peu-près qu'on ne voit
+     * qu'à l'oreille, une fois sur dix.
+     */
+    scale: function () {
+      return this.unitFactor() === 1000 ? 1 : 1000;
+    },
     calibrate: function () {
       var input = this.progressInput();
       if (!input) return this.unit;
@@ -470,7 +483,18 @@
          déguisée, publicité, mise en mémoire tampon). */
       if (elapsed < 0.6 || advanced <= 0) return this.unit;
       var speed = advanced / elapsed;
-      if (speed >= 0.4 && speed <= 1e6) this.unit = speed >= 60 ? 1000 : 1;
+      /* **Deux bandes, pas de milieu.** Un lecteur qui compte en secondes
+         avance de ~1 graduation par seconde ; en millisecondes, de ~1000. Une
+         valeur entre les deux n'est ni l'un ni l'autre : c'est un **saut** —
+         un déplacement du curseur, un changement de piste — et il ne doit pas
+         décider de l'unité. C'est ce saut qui faisait basculer la lecture en
+         millisecondes sur un lecteur en secondes, et la position se lisait
+         alors 1000 fois trop petite (« seek() did not move the position,
+         got 5 ms »). */
+      var secondsBand = speed >= 0.4 && speed <= 4;
+      var msBand = speed >= 400 && speed <= 4000;
+      if (secondsBand) this.unit = 1;
+      else if (msBand) this.unit = 1000;
       return this.unit;
     },
 
@@ -608,7 +632,12 @@
       var input = this.progressInput();
       if (!input) return false;
       var max = parseFloat(input.getAttribute("max")) || 0;
-      var seconds = clamp(ms / 1000, 0, max);
+      /* La graduation du curseur, celle avec laquelle on **lit** : on écrit
+         donc la même. (Écrire toujours des secondes déplaçait le curseur au
+         1000e de la position demandée sur un lecteur qui compte en
+         millisecondes.) */
+      var value = this.scale() === 1 ? ms : ms / 1000;
+      var seconds = clamp(value, 0, max);
       try {
         var proto = window.HTMLInputElement && window.HTMLInputElement.prototype;
         var desc = proto && Object.getOwnPropertyDescriptor(proto, "value");
