@@ -1286,7 +1286,7 @@ await checkAsync("a tall, narrow page is not 'nothing displayed', and the diagno
     const width = isMain ? 29 : hasText ? 24 : 0;
     return { width, height, top: 0, left: 0, right: width, bottom: height, x: 0, y: 0 };
   };
-  w.AndBridge = { version: () => "2.11.1" };
+  w.AndBridge = { version: () => "2.11.2", session: () => false };
   w.eval(await read("dist/spotiduck-ui.js"));
   await tick(250);
 
@@ -1304,8 +1304,15 @@ await checkAsync("a tall, narrow page is not 'nothing displayed', and the diagno
   );
   const diag = api.content.diagnose();
   assert(!/2\.9\.0/.test(diag), "le diagnostic annonce encore une version figée : " + diag);
-  assert(/SpotiDuck 2\.11\.1/.test(diag), "le diagnostic n'annonce pas la version de l'application : " + diag);
+  assert(/SpotiDuck 2\.11\.2/.test(diag), "le diagnostic n'annonce pas la version de l'application : " + diag);
   assert(/page \/intl-fr\//.test(diag), "le diagnostic ne dit pas sur quelle page il a été pris : " + diag);
+  /* Le diagnostic doit porter **les mots de la page** (« Choisissez votre
+     langue ») et l'état réel de la session : sans ça, une capture ne dit pas ce
+     que l'utilisateur avait sous les yeux — ce qui a coûté deux allers-retours. */
+  assert(/extrait "Choisissez votre langue/.test(diag), "le diagnostic ne cite pas la page : " + diag);
+  assert(/session non/.test(diag), "le diagnostic ne dit pas si un compte est connecté : " + diag);
+  assert(/accueil masqué \(session fermée\)|accueil masqué/.test(diag), "le diagnostic ne dit pas pourquoi l'accueil est absent : " + diag);
+  assert(!/coque \?/.test(diag), "le diagnostic ne sait pas quelle version est installée : " + diag);
   /* Et cette page est bien un chemin d'accueil : sans ça, l'accueil maison ne
      s'afficherait jamais là où l'utilisateur arrive. */
   assert(api.home.isHomePath() === true, "/intl-fr/ n'est pas reconnu comme l'accueil");

@@ -2300,6 +2300,26 @@
     },
 
     /**
+     * Un extrait de ce que la page **dit** (ses propres mots, rendus).
+     *
+     * Sans lui, une remontée de bug dit « ça ne marche pas » et il faut deviner
+     * quelle page l'utilisateur avait sous les yeux. Avec lui, la capture
+     * contient la réponse : « Choisissez votre langue », « Connectez-vous pour
+     * écouter », ou les titres des rangées de son accueil.
+     */
+    excerpt: function () {
+      var anchor = pick(CONTENT_ANCHORS);
+      if (!anchor) return "";
+      var raw = "";
+      try {
+        raw = typeof anchor.innerText === "string" ? anchor.innerText : anchor.textContent;
+      } catch (e) {
+        raw = anchor.textContent || "";
+      }
+      return String(raw || "").replace(/\s+/g, " ").trim().slice(0, 60);
+    },
+
+    /**
      * La version à montrer : celle de **l'application** (par le pont) et celle
      * de la **coque** (estampillée au build). Les deux doivent coïncider ; si
      * elles diffèrent, c'est que l'APK installé n'est pas celui qu'on croit — et
@@ -2315,12 +2335,19 @@
     diagnose: function () {
       var s = this.state();
       var vp = Viewport.measure();
+      var extrait = this.excerpt();
       return (
         "SpotiDuck " + this.version() +
         " · interface " + (Bridge.has("uiMode") ? Bridge.call("uiMode") : "coque SpotiDuck") +
         " · vue " + vp.layout + "×" + viewH() + " px (écran " + (vp.device || "?") + ")" +
         " · unité " + Device.base.toFixed(2) +
         " · contenu " + s.why +
+        (extrait ? ' · extrait \"' + extrait + '\"' : "") +
+        /* La session **réelle** (cookie du lecteur), qui ne se devine pas dans
+           le DOM : la page peut afficher un accueil sans qu'un compte soit
+           connecté (Spotify le fait), et l'utilisateur, lui, veut ses playlists. */
+        " · session " + (Bridge.has("session") ? (Bridge.call("session") ? "oui" : "non") : "?") +
+        " · accueil " + Home.describe() +
         " · " + Content.describe() +
         " · page " + location.pathname +
         " · lecteur " + (Spotify.ready() ? "prêt" : "absent")
@@ -3462,6 +3489,25 @@
          s'affichait pas là où l'utilisateur arrive. Une sous-page (playlist,
          album, artiste, `/section/…`) n'est jamais un chemin d'accueil. */
       return /^\/(?:intl-)?[a-z]{2}(?:-[a-z]{2})?$/i.test(path);
+    },
+
+    /**
+     * L'état de l'accueil, en une phrase, pour le diagnostic.
+     *
+     * « Rien n'a changé » a coûté deux versions parce que le diagnostic ne
+     * disait pas **pourquoi** l'accueil ne s'affichait pas : il fallait deviner
+     * entre les données, le chemin, la session et le réglage. Cette phrase
+     * nomme la raison, et le nombre de rangées quand il s'affiche.
+     */
+    describe: function () {
+      if (!Settings.homeBoard) return "désactivé (réglage)";
+      if (!this.built) return "pas construit";
+      if (!this.data.length && !Stats.hasData()) return "masqué (aucune donnée)";
+      if (!this.isHomePath()) return "masqué (hors accueil)";
+      if (LoginState.isLoginPage()) return "masqué (page de connexion)";
+      if (!LoginState.signedIn()) return "masqué (session fermée)";
+      var cards = this.el ? this.el.querySelectorAll(".sd-home-card").length : 0;
+      return (this.el && this.el.hidden ? "masqué" : "affiché") + " " + this.data.length + " rangées/" + cards + " cartes";
     },
 
     shouldShow: function () {

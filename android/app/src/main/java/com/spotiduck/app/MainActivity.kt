@@ -1331,6 +1331,9 @@ class MainActivity : AppCompatActivity() {
         else -> R.string.ui_mode_original_toast
     }
 
+    /** Vrai si le lecteur porte une session (cookie `sp_dc`). */
+    fun sessionPresent(): Boolean = hasSessionCookie()
+
     /** La version installée (celle de l'APK) — pour le diagnostic. */
     fun appVersion(): String = runCatching {
         packageManager.getPackageInfo(packageName, 0).versionName ?: ""
@@ -1557,7 +1560,8 @@ class MainActivity : AppCompatActivity() {
      de largeur (200 px) la déclarait vide. Une page haute et étroite s'affiche :
      elle n'a rien d'une panne, et le repli d'interface n'a rien à corriger. */
   if (t.length < 20 && n === 0) return 'vide ' + Math.round(r.width) + 'x' + Math.round(r.height);
-  return 'ok ' + Math.round(r.width) + 'x' + Math.round(r.height) + ' t' + t.length + '/e' + n;
+  return 'ok ' + Math.round(r.width) + 'x' + Math.round(r.height) + ' t' + t.length + '/e' + n +
+    ' \"' + t.slice(0, 50) + '\"';
 })()"""
 
         const val MODE_DEFAULT = MODE_INJECT

@@ -900,6 +900,12 @@ const probeTool = read("tools/probe-coop.mjs");
 if (!/label: "page-fr", url: "https:\/\/open\.spotify\.com\/intl-fr\/"/.test(probeTool)) {
   errors.push("la sonde ne mesure plus la page /intl-fr/ du téléphone (celle de la capture du 25/09)");
 }
+if (!/excerpt: function \(\)/.test(stripComments(runtime)) || !/describe: function \(\)/.test(stripComments(runtime))) {
+  errors.push("le diagnostic ne peut plus dire ce que la page raconte ni pourquoi l'accueil est absent");
+}
+if (!/@JavascriptInterface\s+fun session\(\): Boolean/.test(bridgeKt) || !/fun sessionPresent\(\): Boolean/.test(activity)) {
+  errors.push("le diagnostic ne peut plus dire si un compte est réellement connecté (session du lecteur)");
+}
 if (!/out\.verdict/.test(probeTool) || !/homePath/.test(probeTool)) {
   errors.push("la sonde ne relève plus ce que la coque conclut de la page (état, chemin d'accueil, ancre)");
 }

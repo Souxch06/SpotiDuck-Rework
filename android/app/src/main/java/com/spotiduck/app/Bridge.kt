@@ -314,6 +314,18 @@ class Bridge(activity: MainActivity) {
     @JavascriptInterface
     fun version(): String = activity.get()?.appVersion() ?: ""
 
+    /**
+     * Y a-t-il une **session** sur le lecteur (cookie `sp_dc`) ?
+     *
+     * Le DOM ne le dit pas : Spotify sert un accueil complet aux visiteurs sans
+     * compte, donc « la page montre un accueil » ne veut pas dire « un compte
+     * est connecté ». Le diagnostic l'affichait jusqu'ici sans jamais le
+     * mesurer ; il le mesure désormais, et c'est cette réponse qui départage
+     * « il faut se connecter » et « il y a quelque chose à afficher ».
+     */
+    @JavascriptInterface
+    fun session(): Boolean = activity.get()?.sessionPresent() ?: false
+
     @JavascriptInterface
     fun setUiMode(mode: String?) {
         val act = activity.get() ?: return

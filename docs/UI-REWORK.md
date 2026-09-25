@@ -2394,3 +2394,24 @@ un troisième caché dessous.
   densité, écran tactile) — qui relève l'ancre choisie, sa boîte, ce qu'elle
   rend, le verdict de la coque, le chemin d'accueil et l'état de session ; le
   résumé s'affiche en annotation.
+
+### Le diagnostic doit suffire à lui seul
+
+Une capture d'écran est la seule chose que l'utilisateur peut envoyer ; elle
+doit donc porter **tout** ce qu'il faut pour trancher. La ligne de diagnostic
+contient désormais, en plus de l'état du contenu :
+
+* **l'extrait** des mots de la page (`extrait "Choisissez votre langue"`), donc
+  on sait quelle page il avait sous les yeux sans le deviner ;
+* **la session réelle** (`session oui/non`), lue sur le cookie du lecteur par le
+  pont : Spotify sert un accueil complet aux visiteurs **sans compte**, donc
+  « la page montre un accueil » ne veut pas dire « un compte est connecté » — et
+  c'est justement ce qui départage « il faut se connecter » de « il y a quelque
+  chose à afficher » ;
+* **la raison de l'absence de l'accueil** (`accueil masqué (aucune donnée)`,
+  `(hors accueil)`, `(session fermée)`, `désactivé (réglage)`, ou `affiché 5
+  rangées/46 cartes`) : « rien n'a changé » a coûté deux versions parce qu'il
+  fallait deviner laquelle de ces causes s'appliquait.
+
+La sonde Android (`CONTENT_PROBE_JS`) joint le même extrait à son verdict, pour
+que les journaux d'un téléphone disent aussi ce que la page racontait.
