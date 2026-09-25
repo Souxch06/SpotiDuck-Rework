@@ -182,6 +182,8 @@
       libraryTracks: "%s titres",
       librarySummary: "Votre bibliothèque",
       libraryLoading: "Chargement de votre bibliothèque…",
+      libraryLoadingProgress: "Chargement de votre bibliothèque… (%s/%s)",
+      libraryTimeout: "Votre bibliothèque n'a pas répondu à temps.",
       libraryEmpty: "Aucune playlist, aucun album ni artiste enregistré pour ce compte.",
       libraryNoToken: "Connectez-vous à Spotify pour retrouver votre bibliothèque.",
       libraryError: "Votre bibliothèque n'a pas répondu pour l'instant.",
@@ -4240,9 +4242,101 @@
     status: 0,
     reason: "",
     at: 0,
+    /* Les requêtes en attente d'une réponse du pont : `id` → résolveur. */
+    pending: {},
+    ids: 0,
+    /* Sans réponse du pont, on rend la main au bout de ce délai. */
+    timeoutMs: 12000,
+    /* Le pont s'est tu : inutile de refaire attendre chaque appel suivant. */
+    asyncDead: false,
 
     hasBridge: function () {
       return Bridge.has("nFetch");
+    },
+
+    /* La voie **non bloquante** : c'est celle que la coque utilise. `nFetch`
+       s'exécute sur le fil JavaScript de la WebView — la page entière attend le
+       réseau, les boutons du lecteur ne répondent plus. */
+    hasAsync: function () {
+      return Bridge.has("nFetchAsync");
+    },
+
+    /** Android rappelle ici : `window.__sdNet(id, {status, body})`. */
+    install: function () {
+      var self = this;
+      window.__sdNet = function (id, raw) {
+        return self.answer(id, raw);
+      };
+    },
+
+    answer: function (id, raw) {
+      var finish = this.pending[id];
+      if (!finish) return false;
+      var answer = null;
+      try {
+        answer = typeof raw === "string" ? JSON.parse(raw) : raw;
+      } catch (e) {
+        answer = null;
+      }
+      if (!answer || typeof answer !== "object") {
+        finish({ status: 0, data: null, why: "réponse du pont illisible", bridge: true });
+        return true;
+      }
+      var status = Number(answer.status) || 0;
+      if (status !== 200) {
+        finish({ status: status, data: null, why: Net.statusWhy(status), bridge: true });
+        return true;
+      }
+      var data = null;
+      try {
+        data = JSON.parse(answer.body || "null");
+      } catch (e) {
+        data = null;
+      }
+      if (!data || typeof data !== "object") {
+        finish({ status: status, data: null, why: "réponse illisible (JSON)", bridge: true });
+        return true;
+      }
+      finish({ status: status, data: data, why: "", bridge: true });
+      return true;
+    },
+
+    throughBridgeAsync: function (url, token) {
+      var self = this;
+      var id = "n" + ++this.ids + "-" + this.at;
+      return new Promise(function (resolve) {
+        var settled = false;
+        var finish = function (r) {
+          if (settled) return;
+          settled = true;
+          delete self.pending[id];
+          resolve(r);
+        };
+        self.pending[id] = finish;
+        setTimeout(function () {
+          if (!self.pending[id]) return;
+          /* Muet : on le retient, pour que les appels suivants ne fassent pas
+             attendre à leur tour. */
+          self.asyncDead = true;
+          finish({
+            status: 0,
+            data: null,
+            why: "le pont n'a pas répondu (" + Math.round(self.timeoutMs / 1000) + " s)",
+            bridge: true,
+            dead: true,
+          });
+        }, self.timeoutMs);
+        try {
+          Bridge.call(
+            "nFetchAsync",
+            id,
+            url,
+            JSON.stringify({ method: "GET", headers: { Authorization: token } })
+          );
+        } catch (e) {
+          finish({ status: 0, data: null, why: "pont indisponible", bridge: true });
+        }
+      });
     },
 
     /**
@@ -4261,31 +4355,46 @@
         this.reason = "jeton absent";
         return Promise.resolve(null);
       }
-      if (this.hasBridge()) {
-        var native = this.throughBridge(url, token);
-        if (native && native.data) {
-          self.via = "pont";
-          self.status = native.status;
-          return Promise.resolve(native.data);
+      var bridge = null;
+      if (this.hasAsync()) bridge = this.throughBridgeAsync(url, token);
+      else if (this.hasBridge()) bridge = Promise.resolve(this.throughBridge(url, token));
+      if (!bridge) return this.throughFetch(url, token).then(function (r) { return self.accept(r); });
+      return bridge.then(function (r) {
+        if (r && r.data) return self.accept(r);
+        /* Le pont est **muet** : la voie du navigateur ne le remplacera pas —
+           elle est refusée par le contrôle d'accès — donc on ne fait pas
+           attendre quelqu'un pour rien. */
+        if (r && r.dead) {
+          self.via = "";
+          self.status = 0;
+          self.reason = r.why;
+          return null;
         }
-        self.reason = native ? native.why : "pont indisponible";
-        self.status = native ? native.status : 0;
-      }
-      return this.throughFetch(url, token).then(function (r) {
-        if (r && r.data) {
-          self.via = "navigateur";
-          self.status = r.status;
-          self.reason = "";
-          return r.data;
-        }
-        /* Cinq requêtes pour la même panne ne font pas cinq fois la même
-           raison : la page affiche une phrase, pas un journal. */
-        if (r && r.why && self.reason.indexOf(r.why) < 0) {
-          self.reason = self.reason ? self.reason + " · " + r.why : r.why;
-        }
-        if (r && r.status) self.status = r.status;
-        return null;
+        return self.throughFetch(url, token).then(function (f) {
+          if (f && f.data) return self.accept(f);
+          self.holdReason(f, r);
+          return null;
+        });
       });
+    },
+
+    /** La première réponse utile : on retient par où elle est venue. */
+    accept: function (r) {
+      this.via = r && r.bridge ? "pont" : "navigateur";
+      this.status = (r && r.status) || 0;
+      this.reason = "";
+      return r ? r.data : null;
+    },
+
+    /** La raison, sans se répéter : celle du pont puis celle du navigateur. */
+    holdReason: function (browser, bridge) {
+      var parts = [];
+      [bridge, browser].forEach(function (r) {
+        if (!r || !r.why || parts.indexOf(r.why) >= 0) return;
+        parts.push(r.why);
+      });
+      this.reason = parts.join(" · ");
+      this.status = (browser && browser.status) || (bridge && bridge.status) || 0;
     },
 
     /** La voie native : hors navigateur, donc sans contrôle d'accès. */
@@ -4318,7 +4427,7 @@
       if (!data || typeof data !== "object") {
         return { status: status, data: null, why: "réponse illisible (JSON)" };
       }
-      return { status: status, data: data, why: "" };
+      return { status: status, data: data, why: "", bridge: true };
     },
 
     /** La voie du navigateur : celle du banc, et le repli sans pont. */
@@ -4384,6 +4493,13 @@
     filter: "all",
     timer: 0,
     tries: 0,
+    /* Où en est la lecture : « (2/5) » — un chargement qui n'avance plus doit se
+       voir, pas rester une phrase immobile. */
+    step: 0,
+    steps: 5,
+    /* Aucune lecture ne reste en l'air plus longtemps que ça. */
+    deadlineMs: 25000,
+    deadline: 0,
 
     /** Une requête de l'API du lecteur — par le pont natif quand il existe
         (hors navigateur, donc sans contrôle d'accès), `fetch` sinon. */
@@ -4508,7 +4624,21 @@
         "/me/tracks?limit=1",
       ];
       var res = [null, null, null, null, null];
+      this.step = 0;
+      this.steps = paths.length;
+      /* **Rien ne reste en chargement indéfiniment.** Le pont natif peut se
+         taire (réseau absent, requête qui n'aboutit pas) : au bout du délai, la
+         lecture se termine avec ce qu'elle a, et la page le dit. */
+      clearTimeout(this.deadline);
+      this.deadline = setTimeout(function () {
+        if (!self.loading) return;
+        Net.reason = Settings.labels.libraryTimeout;
+        Net.status = 0;
+        finish();
+      }, this.deadlineMs);
       var finish = function () {
+        clearTimeout(self.deadline);
+        self.deadline = 0;
         self.items = self.parse(res);
         self.counts = self.tally(res);
         self.loadedAt = Date.now();
@@ -4529,6 +4659,8 @@
         }
         self.get(paths[index]).then(function (data) {
           res[index] = data;
+          self.step = index + 1;
+          if (self.loading) self.apply();
           if (!data && index === 0 && Net.status === 0) {
             /* Rien n'a répondu du tout : les quatre autres ne feront pas mieux. */
             finish();
@@ -4597,11 +4729,19 @@
 
     /** Ce qu'il y a à dire quand la liste est vide (jamais un écran muet). */
     note: function () {
-      if (this.state === "loading") return Settings.labels.libraryLoading;
+      if (this.state === "loading") {
+        /* Où en est la lecture, en clair : « (2/5) ». */
+        return this.step
+          ? Settings.labels.libraryLoadingProgress.replace("%s", String(this.step)).replace("%s", String(this.steps))
+          : Settings.labels.libraryLoading;
+      }
       if (this.state === "no-token") return Settings.labels.libraryNoToken;
       /* Jamais un « ça n'a pas marché » muet : la raison exacte est dans le
          message, pour qu'une seule capture suffise à savoir ce qui manque. */
       if (this.state === "error") {
+        if (Net.reason === Settings.labels.libraryTimeout) {
+          return Settings.labels.libraryTimeout + " " + Settings.labels.libraryWhy.replace("%s", Net.reason);
+        }
         return Net.reason
           ? Settings.labels.libraryError + " " + Settings.labels.libraryWhy.replace("%s", Net.reason)
           : Settings.labels.libraryError;
@@ -6087,6 +6227,8 @@
     UI.build();
     History.install();
     Api.watch();
+    /* Les réponses du pont réseau arrivent ici (`window.__sdNet`). */
+    Net.install();
     Polish.start();
     Login.apply();
     Offline.check();

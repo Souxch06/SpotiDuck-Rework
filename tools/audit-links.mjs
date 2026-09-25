@@ -1035,6 +1035,42 @@ if (zeroIndex < 0) {
   errors.push("la hauteur de la barre d'onglets est redéclarée après sa désactivation : la réserve du bas ne suivrait plus l'écran");
 }
 
+/* 2-ter-octies. La requête qui ne fige plus la page — capture du 25/09 09:12 :
+   « Chargement de votre bibliothèque… » sans fin, et « le lecteur ne fait rien
+   quand on clique sur les boutons ». `AndBridge.nFetch` s'exécute sur le fil
+   JavaScript de la WebView : pendant qu'il attend le réseau, la page entière
+   est gelée. La coque doit donc passer par la voie **asynchrone**
+   (`nFetchAsync` + `window.__sdNet`), et ne jamais rester en chargement. */
+const netBridgeKt = read("android/app/src/main/java/com/spotiduck/app/Bridge.kt");
+const netActivityKt = read("android/app/src/main/java/com/spotiduck/app/MainActivity.kt");
+if (!/fun nFetchAsync\(id: String\?, url: String, optionsJson: String\?\)/.test(netBridgeKt)) {
+  errors.push("le pont n'expose plus de requête asynchrone : la page serait de nouveau gelée pendant l'appel réseau");
+}
+if (!/Thread\(\{/.test(netBridgeKt) || !/act\.runJs\(/.test(netBridgeKt)) {
+  errors.push("la requête asynchrone ne part plus d'un fil de fond (ou ne rend plus sa réponse à la page)");
+}
+if (!/internal fun runJs\(js: String\)/.test(netActivityKt) || !/webView\.post \{ webView\.evaluateJavascript/.test(netActivityKt)) {
+  errors.push("l'activité n'a plus de moyen d'appeler la page depuis un fil de fond");
+}
+if (!/throughBridgeAsync: function/.test(libraryCode) || !/Bridge\.call\(\s*"nFetchAsync"/.test(libraryCode)) {
+  errors.push("la coque n'utilise plus la voie réseau asynchrone : les boutons du lecteur ne répondraient plus pendant un chargement");
+}
+if (!/if \(this\.hasAsync\(\)\) bridge = this\.throughBridgeAsync/.test(libraryCode)) {
+  errors.push("la coque préfère de nouveau la voie bloquante à la voie asynchrone");
+}
+if (!/window\.__sdNet/.test(libraryCode) || !/answer: function \(id, raw\)/.test(libraryCode)) {
+  errors.push("la page n'accepte plus les réponses du pont (`window.__sdNet`) : la requête asynchrone n'aboutirait jamais");
+}
+if (!/deadlineMs: \d+/.test(libraryCode) || !/if \(!self\.loading\) return;/.test(libraryCode)) {
+  errors.push("rien ne borne plus un chargement de bibliothèque : il pourrait rester en « Chargement… » indéfiniment");
+}
+if (!/libraryLoadingProgress/.test(runtime) || !/libraryTimeout/.test(runtime)) {
+  errors.push("un chargement ne dit plus où il en est, ni qu'il a dépassé son délai");
+}
+if (/Bridge\.call\(\s*"nFetch",/.test(libraryCode) && !/hasBridge: function/.test(libraryCode)) {
+  errors.push("la coque appelle la requête bloquante sans garde-fou");
+}
+
 for (const sheet of ["78-home.css", "79-library.css"]) {
   const body = read(`src/inject/${sheet}`);
   if (!/scrollbar-width: none/.test(body) || !/::-webkit-scrollbar \{\s*width: 0/.test(body)) {
@@ -1103,7 +1139,7 @@ if (!/screenW > 1000 && dpr > 1/.test(stripComments(runtime))) {
 if (!/excerpt: function \(\)/.test(stripComments(runtime)) || !/describe: function \(\)/.test(stripComments(runtime))) {
   errors.push("le diagnostic ne peut plus dire ce que la page raconte ni pourquoi l'accueil est absent");
 }
-if (!/@JavascriptInterface\s+fun session\(\): Boolean/.test(bridgeKt) || !/fun sessionPresent\(\): Boolean/.test(activity)) {
+if (!/@JavascriptInterface\s+fun session\(\): Boolean/.test(netBridgeKt) || !/fun sessionPresent\(\): Boolean/.test(activity)) {
   errors.push("le diagnostic ne peut plus dire si un compte est réellement connecté (session du lecteur)");
 }
 if (

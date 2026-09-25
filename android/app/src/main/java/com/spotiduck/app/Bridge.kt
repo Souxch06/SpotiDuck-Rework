@@ -187,6 +187,9 @@ class Bridge(activity: MainActivity) {
      * `inject` = la couche SpotiDuck. Le user-agent et le script injecté en
      * dépendent, donc le changement recharge la page.
      */
+    @JavascriptInterface
+    fun uiMode(): String = activity.get()?.currentUiMode() ?: MainActivity.MODE_ORIGINAL
+
     /**
      * Requête HTTP pour l'interface d'origine — **reprise de l'implémentation
      * de l'application d'origine** (`WebService.nFetch`) : mêmes en-têtes, même
@@ -198,9 +201,20 @@ class Bridge(activity: MainActivity) {
      * Spotify, et renvoie le résultat au script sous la forme
      * `{"status":200,"body":"…","headers":{…}}` (et `status: 0` en cas d'échec).
      *
-     * Appelée depuis le thread JavaScript de la WebView : la requête bloquante
-     * n'a donc rien à faire du thread principal.
+     * **Elle bloque le fil JavaScript de la WebView.** Notre coque ne s'en sert
+     * donc pas : elle appelle `nFetchAsync`, qui fait la même requête depuis un
+     * fil de fond et rend sa réponse plus tard par `window.__sdNet(id, …)`.
      */
+    @JavascriptInterface
+    fun nFetchAsync(id: String?, url: String, optionsJson: String?) {
+        val key = id ?: return
+        Thread({
+            val payload = nFetch(url, optionsJson)
+            val act = activity.get() ?: return@Thread
+            act.runJs("window.__sdNet(${JSONObject.quote(key)},${JSONObject.quote(payload)})")
+        }, "sd-net").start()
+    }
+
     @JavascriptInterface
     fun nFetch(url: String, optionsJson: String?): String {
         val result = JSONObject()
@@ -298,8 +312,6 @@ class Bridge(activity: MainActivity) {
         }
     }
 
-    @JavascriptInterface
-    fun uiMode(): String = activity.get()?.currentUiMode() ?: MainActivity.MODE_ORIGINAL
 
     /**
      * La version **installée** de l'application.

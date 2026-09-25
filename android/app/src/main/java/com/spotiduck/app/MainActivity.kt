@@ -773,6 +773,17 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Exécute du JavaScript dans la page, depuis **n'importe quel fil**.
+     *
+     * Sert aux réponses du pont réseau (`Bridge.nFetchAsync`) : la requête part
+     * d'un fil de fond, et la réponse revient dans la page par ici. `webView.post`
+     * ramène l'appel sur le fil principal, comme l'exige `evaluateJavascript`.
+     */
+    internal fun runJs(js: String) {
+        webView.post { webView.evaluateJavascript(js, null) }
+    }
+
     private fun injectInsets(top: Float, bottom: Float, left: Float, right: Float) {
         val js = buildString {
             append("(function(){var s=document.documentElement.style;")

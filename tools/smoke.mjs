@@ -52,6 +52,18 @@ const { window } = dom;
 const doc = window.document;
 
 /* Spy on the Android bridge BEFORE the bundle boots. */
+/* **Le pont Android tel qu'il est : des méthodes précises, et rien d'autre.**
+   Un `Proxy` qui répond à tout — y compris à `nFetchAsync`, la voie réseau
+   asynchrone ajoutée en 2.11.8 — faisait croire au banc que la version
+   asynchrone était disponible : le script attendait alors une réponse qui ne
+   venait jamais (« la bibliothèque n'a rien lu (état loading) »). Les ponts
+   simulés déclarent donc, comme celui du téléphone, ce qu'ils savent faire. */
+const withoutAsync = (handler) => ({
+  ...handler,
+  get: (target, prop, ...rest) =>
+    String(prop) === "nFetchAsync" ? undefined : handler.get(target, prop, ...rest),
+});
+
 const bridgeCalls = [];
 window.eval(`
   window.AndBridge = new Proxy({}, {
@@ -391,7 +403,7 @@ await checkAsync("settings: the Play Protect row opens the phone setting", async
      ouvrir le réglage, et dire quoi faire quand elle n'y arrive pas. */
   const real = window.AndBridge;
   const seen = [];
-  window.AndBridge = new Proxy({}, { get: (t, p) => (...a) => { seen.push(String(p)); return String(p) === "openPlayProtect"; } });
+  window.AndBridge = new Proxy({}, withoutAsync({ get: (t, p) => (...a) => { seen.push(String(p)); return String(p) === "openPlayProtect"; } }));
   row.click();
   await tick(60);
   assert(seen.includes("openPlayProtect"), "AndBridge.openPlayProtect n'a pas été appelé : " + seen.join(", "));
@@ -757,7 +769,7 @@ checkAsync("the welcome screen retires when the player appears inside a containe
     '<!doctype html><html><body><div id="global-nav-bar"><a href="/login">Log in</a></div><div id="root"></div></body></html>',
     { url: "https://open.spotify.com/", pretendToBeVisual: true, runScripts: "dangerously" }
   );
-  host.window.AndBridge = new Proxy({}, { get: () => () => undefined });
+  host.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => undefined }));
   host.window.eval(await read("dist/spotiduck-ui.js"));
   await tick(200);
   assert(host.window.document.documentElement.classList.contains("sd-welcome-on"), "l'écran d'accueil devrait être affiché au départ");
@@ -787,7 +799,7 @@ await checkAsync("our own login links never keep the welcome screen on", async (
     pretendToBeVisual: true,
     runScripts: "dangerously",
   });
-  bare.window.AndBridge = new Proxy({}, { get: () => () => undefined });
+  bare.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => undefined }));
   bare.window.eval(await read("dist/spotiduck-ui.js"));
   await tick(900);
   const owner = bare.window.document.querySelector('.sd-layer a[href*="/login"]');
@@ -801,7 +813,7 @@ check("the welcome CTA is handed to the app, not just a link", () => {
   const calls = [];
   early.window.AndBridge = new Proxy(
     {},
-    { get: (t, p) => (...a) => { calls.push([String(p), a]); return undefined; } }
+    withoutAsync({ get: (t, p) => (...a) => { calls.push([String(p), a]); return undefined; } })
   );
   const cta = earlyDoc.querySelector(".sd-welcome-cta");
   const event = new early.window.MouseEvent("click", { bubbles: true, cancelable: true });
@@ -962,7 +974,7 @@ await checkAsync("the shell can never blank the page it dresses", async () => {
       "</body></html>",
     { url: "https://open.spotify.com/", pretendToBeVisual: true, runScripts: "dangerously" }
   );
-  dom.window.AndBridge = new Proxy({}, { get: () => () => undefined });
+  dom.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => undefined }));
   /* La règle de notre feuille, réduite à ce qui compte ici. */
   const style = dom.window.document.createElement("style");
   style.textContent = "#global-nav-bar{display:none !important}";
@@ -1000,7 +1012,7 @@ await checkAsync("listening statistics are computed, and they are correct", asyn
     pretendToBeVisual: true,
     runScripts: "dangerously",
   });
-  dom.window.AndBridge = new Proxy({}, { get: () => () => undefined });
+  dom.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => undefined }));
   dom.window.eval(await read("dist/spotiduck-ui.js"));
   await tick(200);
   const api = dom.window.SpotiDuckUI;
@@ -1123,7 +1135,7 @@ await checkAsync("the home screen shows the statistics, and can live without Spo
     pretendToBeVisual: true,
     runScripts: "dangerously",
   });
-  dom.window.AndBridge = new Proxy({}, { get: () => () => undefined });
+  dom.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => undefined }));
   dom.window.eval(await read("dist/spotiduck-ui.js"));
   await tick(200);
   const api = dom.window.SpotiDuckUI;
@@ -1186,7 +1198,7 @@ await checkAsync("the app has a home screen of its own, built from the page's da
       '<aside data-testid="now-playing-bar"></aside></body></html>',
     { url: "https://open.spotify.com/", pretendToBeVisual: true, runScripts: "dangerously" }
   );
-  dom.window.AndBridge = new Proxy({}, { get: () => () => undefined });
+  dom.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => undefined }));
   dom.window.eval(await read("dist/spotiduck-ui.js"));
   await tick(250);
 
@@ -1262,7 +1274,7 @@ await checkAsync("the home screen never covers a page that has nothing to show",
     pretendToBeVisual: true,
     runScripts: "dangerously",
   });
-  dom.window.AndBridge = new Proxy({}, { get: () => () => undefined });
+  dom.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => undefined }));
   dom.window.eval(await read("dist/spotiduck-ui.js"));
   await tick(250);
   const board = dom.window.document.querySelector(".sd-home");
@@ -1299,7 +1311,7 @@ await checkAsync("the home screen never covers a page that has nothing to show",
       pretendToBeVisual: true,
       runScripts: "dangerously",
     });
-    probe.window.AndBridge = new Proxy({}, { get: () => () => undefined });
+    probe.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => undefined }));
     probe.window.eval(await read("dist/spotiduck-ui.js"));
     await tick(120);
     const got = probe.window.SpotiDuckUI.home.isHomePath();
@@ -1320,7 +1332,7 @@ await checkAsync("a blank page says so instead of showing an empty screen", asyn
     pretendToBeVisual: true,
     runScripts: "dangerously",
   });
-  dom.window.AndBridge = new Proxy({}, { get: () => () => undefined });
+  dom.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => undefined }));
   /* jsdom ne calcule aucune mise en page : on lui donne une géométrie
      synthétique — un élément qui porte du texte a une taille, un élément vide
      n'en a pas. C'est ce que le garde-fou mesure dans un vrai navigateur. */
@@ -1385,7 +1397,7 @@ await checkAsync("a tall, narrow page is not 'nothing displayed', and the diagno
     const width = isMain ? 29 : hasText ? 24 : 0;
     return { width, height, top: 0, left: 0, right: width, bottom: height, x: 0, y: 0 };
   };
-  w.AndBridge = { version: () => "2.11.7", session: () => false };
+  w.AndBridge = { version: () => "2.11.8", session: () => false };
   w.eval(await read("dist/spotiduck-ui.js"));
   await tick(250);
 
@@ -1484,7 +1496,7 @@ await checkAsync("the library shows the account's playlists, albums, artists and
       json: () => Promise.resolve(body || {}),
     });
   };
-  dom.window.AndBridge = new Proxy({}, { get: () => () => undefined });
+  dom.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => undefined }));
   dom.window.eval(await read("dist/spotiduck-ui.js"));
   await tick(200);
 
@@ -1584,7 +1596,7 @@ await checkAsync("the library shows the account's playlists, albums, artists and
     pretendToBeVisual: true,
     runScripts: "dangerously",
   });
-  sub.window.AndBridge = new Proxy({}, { get: () => () => undefined });
+  sub.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => undefined }));
   sub.window.eval(await read("dist/spotiduck-ui.js"));
   await tick(150);
   const subApi = sub.window.SpotiDuckUI;
@@ -1629,7 +1641,7 @@ await checkAsync("without a token the library keeps Spotify's sidebar (never an 
     const body = answers(String(url).replace("https://api.spotify.com/v1", ""));
     return Promise.resolve({ ok: !!body, status: body ? 200 : 401, json: () => Promise.resolve(body || {}) });
   };
-  dom.window.AndBridge = new Proxy({}, { get: () => () => undefined });
+  dom.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => undefined }));
   dom.window.eval(await read("dist/spotiduck-ui.js"));
   await tick(200);
   const api = dom.window.SpotiDuckUI;
@@ -1806,6 +1818,100 @@ await checkAsync("la bibliothèque passe par le pont natif, donc sans contrôle 
   return "pont natif : 3 lignes lues · une panne dit sa raison · rien qui répond → un seul appel ✓";
 });
 
+await checkAsync("la bibliothèque lit par le pont asynchrone, sans figer la page", async () => {
+  /* **Signalé le 25/09 à 09:12 :** « Chargement de votre bibliothèque… » figé, et
+     « le lecteur ne fait rien quand on clique sur les boutons ». Cause : le pont
+     natif répond de façon **bloquante** — le fil JavaScript de la WebView
+     attendait le réseau, donc plus rien ne répondait. La coque passe donc par
+     `nFetchAsync` (fil de fond côté Android) et reçoit la réponse par
+     `window.__sdNet(id, …)`. On vérifie ici que la page **continue de vivre**
+     pendant l'attente, et que rien ne reste en chargement. */
+  const answers = {
+    "/me/playlists?limit=50": { total: 1, items: [{ id: "p1", name: "Mes tubes", images: [] }] },
+    "/me/albums?limit=50": { total: 0, items: [] },
+    "/me/artists?limit=50": { total: 0, items: [] },
+    "/me/shows?limit=50": { total: 0, items: [] },
+    "/me/tracks?limit=1": { total: 4 },
+  };
+  const openDom = (answerMode) => {
+    const dom = new JSDOM('<!doctype html><html><body><div id="main-view"></div></body></html>', {
+      url: "https://open.spotify.com/",
+      pretendToBeVisual: true,
+      runScripts: "dangerously",
+    });
+    dom.window.__asked = [];
+    dom.window.__bridge = [];
+    dom.window.AndBridge = withoutAsync({
+      nFetchAsync: (id, url) => {
+        dom.window.__bridge.push(String(url));
+        if (answerMode === "never") return; // le pont se tait
+        const body = answers[String(url).replace("https://api.spotify.com/v1", "")] || {};
+        /* La réponse arrive **plus tard**, comme celle d'un vrai fil de fond. */
+        dom.window.setTimeout(() => {
+          dom.window.__sdNet(id, JSON.stringify({ status: 200, body: JSON.stringify(body), headers: {} }));
+        }, 20);
+      },
+      recMediaStatus: () => undefined,
+      recMediaPosition: () => undefined,
+    });
+    dom.window.AndBridge.nFetchAsync = dom.window.AndBridge.nFetchAsync;
+    dom.window.fetch = (url) => {
+      dom.window.__asked.push(String(url));
+      return Promise.reject(new TypeError("Failed to fetch"));
+    };
+    return dom;
+  };
+
+  const dom = openDom("later");
+  dom.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(200);
+  const api = dom.window.SpotiDuckUI;
+  await dom.window.fetch("https://api.spotify.com/v1/me", { headers: { Authorization: "Bearer pont" } }).catch(() => {});
+  /* La prise du jeton passe par `fetch` : on remet le compteur à zéro pour ne
+     compter que les requêtes de la bibliothèque. */
+  dom.window.__asked.length = 0;
+  /* Un témoin : ce minuteur doit avoir le temps de s'exécuter pendant que la
+     requête est en vol (c'est exactement ce que le pont bloquant empêchait). */
+  let breathed = 0;
+  const breath = dom.window.setInterval(() => {
+    breathed++;
+  }, 5);
+  api.library.load(true);
+  for (let i = 0; i < 60 && api.library.state === "loading"; i++) await tick(25);
+  dom.window.clearInterval(breath);
+  assert(api.library.state === "ready", `état attendu « ready », obtenu « ${api.library.state} »`);
+  assert(api.library.items.length === 2, `2 lignes attendues, ${api.library.items.length} lue(s)`);
+  assert(breathed > 0, "la page n'a pas eu la main pendant la requête : le fil JavaScript était bloqué");
+  assert(api.net.via === "pont", `la réponse devrait venir du pont, obtenue « ${api.net.via} »`);
+  assert(dom.window.__asked.length === 0, "la voie du navigateur a été utilisée alors que le pont répondait");
+  dom.window.close();
+
+  /* **Le pont se tait** : la page le dit et s'arrête — pas de « Chargement… »
+     sans fin, et pas de relance sur la voie du navigateur (elle est bloquée par
+     le contrôle d'accès, on ne fait pas attendre pour rien). */
+  const mute = openDom("never");
+  mute.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(200);
+  const api2 = mute.window.SpotiDuckUI;
+  api2.net.timeoutMs = 200;
+  await mute.window
+    .fetch("https://api.spotify.com/v1/me", { headers: { Authorization: "Bearer pont" } })
+    .catch(() => {});
+  mute.window.__asked.length = 0;
+  api2.state.tab = "library";
+  api2.library.load(true);
+  for (let i = 0; i < 80 && api2.library.state === "loading"; i++) await tick(25);
+  assert(api2.library.state === "error", `état attendu « error », obtenu « ${api2.library.state} »`);
+  assert(api2.net.asyncDead === true, "le pont muet n'a pas été retenu (chaque appel referait attendre)");
+  assert(
+    /n'a pas répondu/.test(mute.window.document.querySelector(".sd-lib-note").textContent),
+    "la page ne dit pas que le pont n'a pas répondu : " + mute.window.document.querySelector(".sd-lib-note").textContent
+  );
+  assert(mute.window.__asked.length === 0, "la page a relancé la requête sur la voie du navigateur alors qu'elle est bloquée");
+  mute.window.close();
+  return "pont asynchrone : page vivante pendant l'attente · pont muet → la page le dit et n'insiste pas ✓";
+});
+
 await checkAsync("a duration announced in milliseconds never becomes thousands of hours", async () => {
   /* **La capture du 25/09 : « 56095 h 50 » pour un seul titre écouté.**
      Sur cette page, le curseur de progression de Spotify est gradué en
@@ -1818,7 +1924,7 @@ await checkAsync("a duration announced in milliseconds never becomes thousands o
       '<input type="range" min="0" max="202000" value="42000"></div></aside></body></html>',
     { url: "https://open.spotify.com/intl-fr/", pretendToBeVisual: true, runScripts: "dangerously" }
   );
-  dom.window.AndBridge = new Proxy({}, { get: () => () => undefined });
+  dom.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => undefined }));
   dom.window.eval(await read("dist/spotiduck-ui.js"));
   await tick(200);
   const api = dom.window.SpotiDuckUI;
@@ -1891,7 +1997,7 @@ await checkAsync("the interface unit follows the device, not a fixed guess", asy
     pretendToBeVisual: true,
     runScripts: "dangerously",
   });
-  device.window.AndBridge = new Proxy({}, { get: () => () => undefined });
+  device.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => undefined }));
   const setSize = (w, h) => {
     device.window.eval(`
       Object.defineProperty(document.documentElement, "clientWidth", { get: () => ${w}, configurable: true });
@@ -2131,6 +2237,7 @@ nw.__bridgeCalls = natCalls;
 nw.addEventListener("error", (e) => natErrors.push(String(e.message)));
 nw.eval(
   "window.AndBridge = new Proxy({}, { get: (t, p) => (...a) => {" +
+    "if (String(p) === 'nFetchAsync') return undefined;" +
     "window.__bridgeCalls.push([String(p), a]);" +
     "if (String(p) === 'isWoke') return false; } });"
 );
@@ -2298,7 +2405,7 @@ const coopLogin = new JSDOM(
 );
 coopLogin.window.AndBridge = new Proxy(
   {},
-  { get: (t, p) => (...a) => { coopLoginCalls.push([String(p), a]); return undefined; } }
+  withoutAsync({ get: (t, p) => (...a) => { coopLoginCalls.push([String(p), a]); return undefined; } })
 );
 coopLogin.window.eval(await read("dist/spotiduck-ui.js"));
 await tick(150);
@@ -2336,7 +2443,7 @@ const loginDom = new JSDOM(
 const lw = loginDom.window;
 const ld = lw.document;
 lw.__bridgeCalls = [];
-lw.AndBridge = new Proxy({}, { get: () => () => {} });
+lw.AndBridge = new Proxy({}, withoutAsync({ get: () => () => {} }));
 lw.eval(natScript);
 
 check("native mode: a social-only login page gets an e-mail way through", () => {
@@ -2381,7 +2488,7 @@ await checkAsync("native mode: the logged-out home page offers the e-mail way to
     { url: "https://open.spotify.com/", pretendToBeVisual: true, runScripts: "dangerously" }
   );
   home.window.__calls = [];
-  home.window.AndBridge = new Proxy({}, { get: () => () => {} });
+  home.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => {} }));
   home.window.eval(natScript);
   const bar = home.window.document.querySelector("#sd-login-help");
   assert(bar, "the logged-out home page got no e-mail help");
@@ -2423,7 +2530,7 @@ check("native mode: the login page announces its state, not a disconnection", ()
      normale : l'annoncer « out » ferait jeter une copie de secours valable. */
   const sent = [];
   const previous = lw.AndBridge;
-  lw.AndBridge = new Proxy({}, { get: (_t, name) => (...args) => sent.push([name, args[0]]) });
+  lw.AndBridge = new Proxy({}, withoutAsync({ get: (_t, name) => (...args) => sent.push([name, args[0]]) }));
 
   assert(lw.__sdLoginState() === "login", "une page de connexion doit se dire « login » : " + lw.__sdLoginState());
   lw.__sdLoginTick();
@@ -2442,7 +2549,7 @@ check("native mode: a connected player page is announced as « in »", () => {
     { url: "https://open.spotify.com/", pretendToBeVisual: true, runScripts: "dangerously" }
   );
   const sent = [];
-  player.window.AndBridge = new Proxy({}, { get: (_t, name) => (...args) => sent.push([name, args[0]]) });
+  player.window.AndBridge = new Proxy({}, withoutAsync({ get: (_t, name) => (...args) => sent.push([name, args[0]]) }));
   player.window.eval(natScript);
   assert(player.window.__sdLoginState() === "in", "un lecteur connecté doit se dire « in » : " + player.window.__sdLoginState());
   player.window.__sdLoginTick();
@@ -2464,7 +2571,7 @@ check("native mode: a logged-out player is announced as « out »", () => {
     { url: "https://open.spotify.com/", pretendToBeVisual: true, runScripts: "dangerously" }
   );
   const sent = [];
-  out.window.AndBridge = new Proxy({}, { get: (_t, name) => (...args) => sent.push([name, args[0]]) });
+  out.window.AndBridge = new Proxy({}, withoutAsync({ get: (_t, name) => (...args) => sent.push([name, args[0]]) }));
   out.window.eval(natScript);
   assert(out.window.__sdLoginState() === "out", "une page déconnectée doit se dire « out » : " + out.window.__sdLoginState());
   out.window.__sdLoginTick();
@@ -2486,7 +2593,7 @@ check("native mode: after a form error, the state can be cleaned and retried", (
     { url: "https://accounts.spotify.com/fr/login", pretendToBeVisual: true, runScripts: "dangerously" }
   );
   const clean = [];
-  fail.window.AndBridge = new Proxy({}, {
+  fail.window.AndBridge = new Proxy(withoutAsync({}), {
     get: (_t, name) => (...args) => {
       clean.push(name);
       return name === "resetLoginState" ? true : undefined;

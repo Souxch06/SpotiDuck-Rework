@@ -2736,3 +2736,49 @@ réseau ne répond pas.
   annoncée », le seuil des dix secondes, la distinction mesuré/estimé, les
   moments de la journée en temps, les notes et explications de la page, le verrou
   du lecteur (`Spotify.seen`), l'appel par le pont natif et sa raison.
+
+## §43 — La page ne se fige plus pendant une requête (v2.11.8)
+
+Capture du 25/09 (09:12) : la page de bibliothèque reste sur **« Chargement de
+votre bibliothèque… »**, et « **le lecteur ne fait rien quand on clique sur les
+boutons** ». Les deux ont la même cause.
+
+### Le pont natif bloquait le fil JavaScript
+
+`AndBridge.nFetch` est appelée **depuis le fil JavaScript de la WebView** : pendant
+que la requête attend le réseau, la page entière est gelée — plus aucun appui
+n'est traité (les boutons du mini-lecteur, les onglets, tout), et l'écran reste
+sur sa dernière image, donc sur « Chargement… ». Cinq requêtes à la suite, avec
+les délais du réseau, cela fait un écran mort pendant un long moment.
+
+Deux correctifs :
+
+1. **La requête ne bloque plus.** Le pont expose `nFetchAsync(id, url, options)` :
+   la requête part d'un **fil de fond** et sa réponse revient à la page par
+   `window.__sdNet(id, {status, body})`. La coque utilise cette voie (elle garde
+   `nFetch` en repli pour un pont qui ne l'exposerait pas, et `fetch` quand il n'y
+   a pas de pont du tout — banc de test, navigateur).
+2. **Rien ne reste en chargement.** La page dit où elle en est — « Chargement de
+   votre bibliothèque… (2/5) » — et un délai de garde (25 s) termine la lecture
+   avec ce qu'elle a : la page affiche alors « Votre bibliothèque n'a pas répondu
+   à temps. Raison : … » avec le bouton « Réessayer ». Le pont qui ne répond pas
+   est retenu (`asyncDead`) : les appels suivants ne font plus attendre.
+
+Le chargement lit toujours les cinq sources **une par une** (§42) : c'est ce qui
+laisse la page respirer entre deux requêtes.
+
+### Vérifications
+
+* banc : par le pont **asynchrone**, la bibliothèque se lit pendant que la page
+  vit (un minuteur s'exécute pendant que la requête est en vol — c'est exactement
+  ce que la voie bloquante empêchait), et la voie du navigateur n'est pas touchée ;
+* banc : un pont **muet** ne laisse pas la page en « Chargement… » — elle termine
+  en échec, dit « le pont n'a pas répondu », n'insiste pas sur la voie du
+  navigateur (bloquée par le contrôle d'accès) et retient que le pont est muet ;
+* banc : les ponts simulés ne déclarent plus que des méthodes réelles
+  (`withoutAsync`) — un `Proxy` qui répondait à tout faisait croire au banc que la
+  voie asynchrone existait, et il attendait une réponse qui ne venait jamais ;
+* audit : la voie asynchrone côté Android (`nFetchAsync` sur un fil de fond,
+  `runJs` dans l'activité), son usage côté page, la réception par `window.__sdNet`,
+  le délai de garde, la progression du chargement et la préférence pour la voie
+  non bloquante.
