@@ -301,6 +301,19 @@ class Bridge(activity: MainActivity) {
     @JavascriptInterface
     fun uiMode(): String = activity.get()?.currentUiMode() ?: MainActivity.MODE_ORIGINAL
 
+    /**
+     * La version **installée** de l'application.
+     *
+     * Le diagnostic affiché dans la coque annonçait « SpotiDuck 2.9.0 » à un
+     * téléphone qui avait depuis longtemps une version plus récente : la coque
+     * portait un numéro écrit à la main, jamais mis à jour, et aucune remontée
+     * de bug n'était exploitable. La coque est maintenant estampillée au build ;
+     * cette méthode donne la version de l'APK lui-même, et l'écart entre les
+     * deux est justement ce qu'il faut voir.
+     */
+    @JavascriptInterface
+    fun version(): String = activity.get()?.appVersion() ?: ""
+
     @JavascriptInterface
     fun setUiMode(mode: String?) {
         val act = activity.get() ?: return

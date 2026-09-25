@@ -368,6 +368,56 @@ const MEASURE = async () => {
     );
   })();
 
+  /* **Ce que notre coque conclut de cette page.** Le diagnostic du téléphone
+     (« contenu 29x2756 ») et l'accueil maison qui ne s'affichait pas se lisent
+     ici : quelle ancre est choisie, ce qu'elle contient *rendu*, si le chemin
+     est reconnu comme l'accueil, et si l'écran d'accueil (session fermée) a de
+     quoi se montrer. */
+  out.verdict = (function () {
+    var api = window.SpotiDuckUI;
+    var out = { version: String(window.__SD_VERSION__ || "?"), api: !!api };
+    if (!api) return out;
+    try {
+      out.state = api.content && api.content.state ? api.content.state().why : "?";
+      out.ok = api.content && api.content.state ? api.content.state().ok : "?";
+    } catch (e) {
+      out.state = "erreur " + e.message;
+    }
+    try {
+      out.homePath = api.home && api.home.isHomePath ? api.home.isHomePath() : "?";
+    } catch (e) {
+      out.homePath = "erreur";
+    }
+    /* Le contenu : l'ancre que *nous* choisissons, sa boîte et ce qu'elle rend. */
+    var anchor = document.querySelector('[data-testid=home-page], #main-view, main[data-testid], main');
+    if (anchor) {
+      var r = anchor.getBoundingClientRect();
+      var cs = window.getComputedStyle(anchor);
+      var txt = (anchor.innerText || anchor.textContent || "").replace(/\s+/g, " ").trim();
+      out.anchor = {
+        tag: anchor.tagName.toLowerCase() + (anchor.id ? "#" + anchor.id : "") + (anchor.getAttribute("data-testid") ? "[data-testid=" + anchor.getAttribute("data-testid") + "]" : ""),
+        box: Math.round(r.width) + "x" + Math.round(r.height),
+        display: cs.display + "/" + cs.visibility,
+        text: txt.length,
+        elements: anchor.querySelectorAll("button,[role=button],a[href],img,input,iframe,svg,canvas").length,
+        sample: txt.slice(0, 90),
+      };
+    } else {
+      out.anchor = null;
+    }
+    /* La session : le lecteur est-il là, y a-t-il un formulaire, un lien de
+       connexion (donc la page marketing) ? Et notre écran d'accueil ? */
+    out.session = {
+      mainView: !!document.querySelector("#main-view, [data-testid=home-page]"),
+      barreLecture: !!document.querySelector('[data-testid="now-playing-bar"]'),
+      formulaire: !!document.querySelector('[data-testid="login-form"], #login-username'),
+      lienConnexion: !!document.querySelector('a[href^="/login"], a[href*="/login"], a[href*="accounts.spotify.com"]'),
+      boutonConnexion: !!document.querySelector('button[data-testid*="login"], button[data-testid*="signup"]'),
+      accueilMAison: document.documentElement.classList.contains("sd-welcome-on") ? "notre écran d'accueil" : "-",
+    };
+    return out;
+  })();
+
   out.tapTargets = (function () {
     var els = document.querySelectorAll(".sd-layer .sd-nav-item, .sd-layer .sd-iconbtn, .sd-layer .sd-tab");
     var min = 999;
@@ -494,6 +544,13 @@ async function main() {
 
   const pages = [
     { label: "accueil", url: "https://open.spotify.com/" },
+    /* **Le chemin du téléphone.** La capture du 25/09 portait, dans le
+       diagnostic de l'application, `page /intl-fr/` : c'est là que Spotify
+       atterrit en France, et c'est cette page-là qu'il fallait mesurer — pas
+       seulement la racine. On l'ajoute ici, dans les conditions de la WebView
+       (`telephone`), parce que c'est la seule mesure qui voit ce que
+       l'utilisateur voit quand il dit « la page n'a rien affiché ». */
+    { label: "page-fr", url: "https://open.spotify.com/intl-fr/", mobile: true },
     { label: "connexion", url: "https://accounts.spotify.com/fr/login?allow_password=1" },
     /* L'interface d'origine : même page, mais l'empreinte de géométrie d'abord
        (écran 1920×1080) et son script ensuite — c'est la configuration que
@@ -711,6 +768,22 @@ async function main() {
         }
         /* (pas de capture à chaque vue : chaque image coûte des morceaux
            d'annotation, et GitHub n'en garde qu'une poignée) */
+      }
+
+      /* **La page du téléphone, résumée.** C'est la page sur laquelle la
+         capture « la page n'a rien affiché » a été prise : on veut son verdict
+         en une ligne, sinon il faut lire le rapport complet pour savoir si le
+         défaut est reproduit. */
+      if (target.label === "page-fr") {
+        const v = (after && after.verdict) || {};
+        const a = v.anchor || {};
+        note(
+          "Page /intl-fr/ (conditions du téléphone)",
+          `coque=${v.version} · état=${v.ok} (${v.state}) · chemin d'accueil=${v.homePath} · ` +
+            `ancre=${a.tag} ${a.box} ${a.display} texte=${a.text} car. éléments=${a.elements} ` +
+            `· session : lecteur=${v.session ? v.session.barreLecture : "?"} lien=${v.session ? v.session.lienConnexion : "?"} ` +
+            `bouton=${v.session ? v.session.boutonConnexion : "?"} · "${String(a.sample || "").slice(0, 70)}"`
+        );
       }
 
       /* Un résumé court par page : le détail complet va dans le rapport et

@@ -1331,6 +1331,11 @@ class MainActivity : AppCompatActivity() {
         else -> R.string.ui_mode_original_toast
     }
 
+    /** La version installée (celle de l'APK) — pour le diagnostic. */
+    fun appVersion(): String = runCatching {
+        packageManager.getPackageInfo(packageName, 0).versionName ?: ""
+    }.getOrDefault("")
+
     private fun prefs() = getSharedPreferences(PREFS, MODE_PRIVATE)
 
     /* ------------------------------------------------------------------ *
@@ -1544,10 +1549,15 @@ class MainActivity : AppCompatActivity() {
   var a = document.querySelector('[data-testid="home-page"], #main-view, main[data-testid], main');
   if (!a) return 'absent';
   var r = a.getBoundingClientRect();
-  var t = (a.textContent || '').replace(/\s+/g, ' ').trim();
-  if (r.width < 200 || r.height < 200) return 'etroit ' + Math.round(r.width) + 'x' + Math.round(r.height);
-  if (t.length < 40 && !a.querySelector('input,button,img,iframe,a[href]')) return 'vide';
-  return 'ok ' + Math.round(r.width) + 'x' + Math.round(r.height);
+  var t = (a.innerText || a.textContent || '').replace(/\s+/g, ' ').trim();
+  var n = a.querySelectorAll('button,[role=button],a[href],img,input,iframe,svg,canvas').length;
+  /* On mesure ce qui est **rendu**, pas la largeur d'une boîte : le 25/09 le
+     téléphone affichait « la page n'a rien affiché » avec, dans le même
+     message, « contenu 29x2756 » — la page avait 2 756 px de contenu et le test
+     de largeur (200 px) la déclarait vide. Une page haute et étroite s'affiche :
+     elle n'a rien d'une panne, et le repli d'interface n'a rien à corriger. */
+  if (t.length < 20 && n === 0) return 'vide ' + Math.round(r.width) + 'x' + Math.round(r.height);
+  return 'ok ' + Math.round(r.width) + 'x' + Math.round(r.height) + ' t' + t.length + '/e' + n;
 })()"""
 
         const val MODE_DEFAULT = MODE_INJECT

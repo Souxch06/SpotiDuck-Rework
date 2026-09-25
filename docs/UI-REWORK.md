@@ -2341,3 +2341,56 @@ anciennes sortant d'abord.
   résumé et de la série ;
 * sonde : `Accueil maison` relève l'état (affiché/masqué) et les compteurs,
   `Rognage` vérifie qu'aucun conteneur ne dépasse.
+
+---
+
+## §38 — Le diagnostic ne ment plus, et une page pleine n'est plus « vide » (v2.11.1)
+
+La capture du 25/09 au matin montre le panneau **« La page n'a rien affiché »**,
+avec, dans son propre diagnostic, `contenu 29×2756`. Deux défauts de mesure, et
+un troisième caché dessous.
+
+1. **Un seuil de largeur décidait si la page était vide.** L'état de contenu
+   exigeait une largeur ≥ 40 px (le seuil avait été écrit pour une autre
+   disposition de la page). La page du téléphone était **haute de 2 756 px** mais
+   l'élément mesuré ne faisait que 29 px de large : la page était pleine et
+   déclarée vide. On mesure désormais **ce qui est rendu** — le texte réellement
+   affiché (`innerText`, qui ignore ce qui est caché) et le nombre d'éléments
+   dont la boîte n'est pas vide — et l'alarme ne se déclenche plus que quand
+   *rien* n'est rendu, c'est-à-dire le noir du 24/09, le seul cas pour lequel
+   elle a été écrite. La même erreur existait côté Android : la sonde
+   `CONTENT_PROBE_JS` refusait toute page de moins de 200 px de large.
+2. **Le diagnostic annonçait « SpotiDuck 2.9.0 ».** La coque portait un numéro
+   de version écrit à la main, jamais mis à jour depuis : impossible, avec ça, de
+   savoir quelle version tournait sur un téléphone. La coque est maintenant
+   **estampillée à la compilation** (`window.__SD_VERSION__`, la version de
+   `package.json`, donc celle de l'APK) et le pont expose la version de l'APK
+   lui-même ; quand les deux diffèrent, le diagnostic dit les deux.
+3. **`/intl-fr/` n'était pas reconnu comme l'accueil.** C'est le chemin que
+   Spotify sert en France — celui de la capture. L'accueil maison ne s'affichait
+   donc pas là où l'utilisateur arrive. Le test de chemin accepte désormais
+   `/intl-xx`, `/xx` et `/xx-XX` (casse comprise), et refuse toujours les
+   sous-pages (playlist, album, artiste, section), qui ne doivent jamais être
+   recouvertes. La page marketing, elle, est reconnue par ses **boutons** de
+   connexion autant que par ses liens : l'écran d'accueil maison (session
+   fermée) s'affiche donc aussi là.
+
+### Vérifications
+
+* banc : « une page haute et étroite n'est pas “rien affiché” » — page
+  `/intl-fr/` de 29×2756 avec du texte et des liens : état *affiché*, panneau non
+  déclenché, aucune classe `sd-content-blank`, diagnostic portant la version de
+  l'application, et **page vraiment vide ⇒ alarme** (le seul cas légitime) ;
+* banc : la garde des chemins est mesurée sur neuf URL (racine, `/home`, `/fr`,
+  `/en-US`, `/intl-fr`, `/intl-en`, playlist, album, section) — l'ancien test
+  citait `State.route === "page"`, une ligne de `back()` sans rapport avec
+  l'accueil : il passait sans rien vérifier ;
+* audit : version estampillée au build (et interdiction de la constante en dur),
+  `appVersion()` côté application, mesure du *rendu* dans la coque et dans
+  `CONTENT_PROBE_JS`, **interdiction des seuils de largeur** qui ont causé la
+  fausse alarme, reconnaissance de `/intl-fr`, scénario de sonde `page-fr` ;
+* sonde : nouveau scénario **`page-fr`** — `https://open.spotify.com/intl-fr/`,
+  dans les conditions de la WebView (métavueposée par la chaîne d'injection,
+  densité, écran tactile) — qui relève l'ancre choisie, sa boîte, ce qu'elle
+  rend, le verdict de la coque, le chemin d'accueil et l'état de session ; le
+  résumé s'affiche en annotation.

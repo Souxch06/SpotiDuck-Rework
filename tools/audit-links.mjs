@@ -865,6 +865,45 @@ for (const m of manifest.matchAll(/android:name="\.(\w+)"/g)) {
   if (!existsSync(path)) errors.push(`AndroidManifest déclare .${m[1]} mais ${m[1]}.kt est absent`);
 }
 
+/* 3. Le diagnostic, la fausse alarme et le chemin `/intl-fr/` -----------------
+   Trois défauts mesurés sur le téléphone le 25/09, tous les trois silencieux :
+   un diagnostic qui annonçait « SpotiDuck 2.9.0 » (numéro de version codé en
+   dur, jamais mis à jour), une alarme « la page n'a rien affiché » déclenchée
+   sur une page qui avait 2 756 px de contenu, et un accueil maison qui ne
+   reconnaissait pas `/intl-fr/` — le chemin que Spotify sert en France. */
+const buildTool = read("tools/build.mjs");
+if (!/window\.__SD_VERSION__\s*=/.test(buildTool) || !/window\.__SD_VERSION__/.test(shellJs)) {
+  errors.push("la version de la coque n'est plus estampillée à la compilation : le diagnostic mentirait de nouveau");
+}
+if (/var VERSION = "\d/.test(stripComments(runtime))) {
+  errors.push("la version de la coque est redevenue une constante écrite à la main : elle ne suivra plus les livraisons");
+}
+if (!/appVersion\(\): String/.test(activity) || !/@JavascriptInterface\s+fun version\(\)/.test(bridgeKt)) {
+  errors.push("l'application ne transmet plus sa version installée : impossible de savoir ce qui tourne chez l'utilisateur");
+}
+if (!/rendered: function \(anchor\)/.test(stripComments(runtime))) {
+  errors.push("l'état de contenu ne mesure plus ce qui est rendu : des pages pleines seront déclarées vides");
+}
+if (/rect\.width < 40|r\.width < 200/.test(stripComments(runtime) + stripComments(activity))) {
+  errors.push("un seuil de largeur décide de nouveau si la page est vide (c'est la fausse alarme du 25/09)");
+}
+if (!/if \(r\.text < 20 && r\.els === 0\) return \{ ok: false/.test(stripComments(runtime))) {
+  errors.push("l'alarme de page vide ne se déclenche plus sur le bon critère (rien de rendu du tout)");
+}
+/* Le motif est écrit en clair : le tester par une chaîne évite un festival
+   d'échappements (le premier essai de ce garde-fou ne testait rien). */
+const intlHomePattern = "(?:intl-)?[a-z]{2}(?:-[a-z]{2})?$/i";
+if (!stripComments(runtime).includes(intlHomePattern)) {
+  errors.push("le chemin d'accueil ne reconnaît plus /intl-fr : l'accueil maison ne s'afficherait pas là où l'utilisateur arrive");
+}
+const probeTool = read("tools/probe-coop.mjs");
+if (!/label: "page-fr", url: "https:\/\/open\.spotify\.com\/intl-fr\/"/.test(probeTool)) {
+  errors.push("la sonde ne mesure plus la page /intl-fr/ du téléphone (celle de la capture du 25/09)");
+}
+if (!/out\.verdict/.test(probeTool) || !/homePath/.test(probeTool)) {
+  errors.push("la sonde ne relève plus ce que la coque conclut de la page (état, chemin d'accueil, ancre)");
+}
+
 /* Rapport ------------------------------------------------------------------ */
 const size = (n) => String(n).padStart(2);
 console.log(`\nSpotiDuck — liens internes\n`);

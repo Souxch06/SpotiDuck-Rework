@@ -59,6 +59,14 @@ async function build() {
     banner +
     "(function () {\n" +
     '  "use strict";\n' +
+    /* La version de la coque, estampillée **à la compilation** : le runtime la
+       lisait autrefois dans une constante écrite à la main (« 2.9.0 ») qui n'a
+       plus jamais bougé, si bien que le diagnostic d'un téléphone en 2.11
+       annonçait 2.9.0. Une constante, ici, ne peut pas mentir : elle vient de
+       `package.json`, la même source que la version de l'APK. */
+    "  window.__SD_VERSION__ = " +
+    JSON.stringify(VERSION) +
+    ";\n" +
     "  var SD_CSS_SOURCES = " +
     JSON.stringify(css) +
     ";\n" +

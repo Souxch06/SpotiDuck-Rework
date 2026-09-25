@@ -1174,13 +1174,41 @@ await checkAsync("the home screen never covers a page that has nothing to show",
     "l'accueil a trouvé des données là où il n'y en a pas"
   );
   /* Et une sous-page ouverte (playlist, album, artiste) ne doit jamais être
-     recouverte : l'onglet reste « accueil » pendant qu'on navigue. */
-  assert(
-    /State\.route === "page"/.test(await read("src/inject/spotiduck-ui.js")),
-    "l'accueil ne vérifie plus qu'on n'est pas sur une sous-page : il recouvrirait les playlists"
-  );
+     recouverte. La garde se mesure sur le **chemin** : `isHomePath()` dit vrai à
+     la racine, à `/home`, aux chemins de langue (`/fr`, `/en-US`) et — depuis le
+     25/09 — à `/intl-fr`, le chemin que Spotify sert en France ; il dit faux sur
+     tout le reste. (Le test précédent citait `State.route === "page"`, une ligne
+     de `back()` qui n'a rien à voir avec l'accueil : il passait sans rien
+     vérifier.) */
+  const home = dom.window.SpotiDuckUI.home;
+  assert(home && typeof home.isHomePath === "function", "l'accueil n'expose plus son test de chemin");
+  for (const [path, want, why] of [
+    ["https://open.spotify.com/", true, "la racine"],
+    ["https://open.spotify.com/home", true, "/home"],
+    ["https://open.spotify.com/fr", true, "la langue simple"],
+    ["https://open.spotify.com/en-US", true, "la langue avec région"],
+    ["https://open.spotify.com/intl-fr/", true, "/intl-fr (le chemin du téléphone)"],
+    ["https://open.spotify.com/intl-en/", true, "/intl-en"],
+    ["https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M", false, "une playlist"],
+    ["https://open.spotify.com/album/1ATL5GLyefJaxhQzSPVrLX", false, "un album"],
+    ["https://open.spotify.com/section/0JQ5DAqbMKFEC4WFtoNRpw", false, "une section"],
+  ]) {
+    /* jsdom ne laisse pas réécrire `location` : on mesure sur une copie du
+       module, avec l'URL voulue. */
+    const probe = new JSDOM("<!doctype html><html><body><main></main></body></html>", {
+      url: path,
+      pretendToBeVisual: true,
+      runScripts: "dangerously",
+    });
+    probe.window.AndBridge = new Proxy({}, { get: () => () => undefined });
+    probe.window.eval(await read("dist/spotiduck-ui.js"));
+    await tick(120);
+    const got = probe.window.SpotiDuckUI.home.isHomePath();
+    assert(got === want, `le chemin d'accueil se trompe sur ${why} : attendu ${want}, obtenu ${got}`);
+    probe.window.close();
+  }
   dom.window.close();
-  return "aucune rangée ⇒ masqué · sous-page ⇒ masqué ✓";
+  return "aucune rangée ⇒ masqué · sous-page ⇒ masqué · /intl-fr ⇒ accueil ✓";
 });
 
 await checkAsync("a blank page says so instead of showing an empty screen", async () => {
@@ -1226,6 +1254,67 @@ await checkAsync("a blank page says so instead of showing an empty screen", asyn
   assert(!dom.window.document.documentElement.className.includes("sd-content-blank"), "l'état est resté marqué");
   dom.window.close();
   return "écran vide signalé (recharger · copier) puis masqué au retour du contenu ✓";
+});
+
+await checkAsync("a tall, narrow page is not 'nothing displayed', and the diagnostic tells the truth", async () => {
+  /* **La capture du 25/09.** Le téléphone affichait « La page n'a rien
+     affiché », avec dans son propre diagnostic `contenu 29×2756` : la page
+     avait 2 756 px de contenu et un seuil de largeur (40 px, hérité d'une autre
+     disposition) la déclarait vide. Deux choses à vérifier ici : que cette page
+     ne déclenche plus l'alarme, et que le diagnostic dise la **vraie** version
+     (il annonçait « SpotiDuck 2.9.0 » à un téléphone bien plus récent, parce que
+     la coque portait un numéro écrit à la main).
+     jsdom ne calcule aucune mise en page : on lui donne la géométrie mesurée sur
+     le téléphone — 29 px de large, 2 756 px de haut, avec du texte et une liste
+     de langues, exactement ce qu'une page d'atterrissage contient. */
+  const page = new JSDOM("<!doctype html><html><body><main></main></body></html>", {
+    url: "https://open.spotify.com/intl-fr/",
+    pretendToBeVisual: true,
+    runScripts: "dangerously",
+  });
+  const w = page.window;
+  const langs = ["Français", "English", "Deutsch", "Español", "Italiano", "Português", "Nederlands", "Polski"];
+  w.document.querySelector("main").innerHTML =
+    "<h1>Choisissez votre langue</h1><ul>" +
+    langs.map((l) => `<li><a href="/intl-${l.slice(0, 2).toLowerCase()}/">${l}</a></li>`).join("") +
+    "</ul><p>Écoutez de la musique gratuitement, ou connectez-vous à votre compte pour retrouver vos playlists.</p>";
+  /* Toute la page est haute et étroite : c'est ce que la capture montrait. */
+  w.Element.prototype.getBoundingClientRect = function () {
+    const hasText = ((this.textContent || "").trim().length > 0);
+    const isMain = this.tagName === "MAIN";
+    const height = isMain ? 2756 : hasText ? 40 : 0;
+    const width = isMain ? 29 : hasText ? 24 : 0;
+    return { width, height, top: 0, left: 0, right: width, bottom: height, x: 0, y: 0 };
+  };
+  w.AndBridge = { version: () => "2.11.1" };
+  w.eval(await read("dist/spotiduck-ui.js"));
+  await tick(250);
+
+  const api = w.SpotiDuckUI;
+  const state = api.content.state();
+  assert(
+    state.ok === true,
+    `une page de 2 756 px de contenu est déclarée vide : ${state.why}`
+  );
+  assert(/rendu \d+ car\./.test(state.why), "le diagnostic ne dit pas ce qui est rendu : " + state.why);
+  assert(api.content.alertIfBlank() === false, "l'alarme « la page n'a rien affiché » s'est déclenchée à tort");
+  assert(
+    !w.document.documentElement.className.includes("sd-content-blank"),
+    "la page est marquée vide : la coque se masque alors elle-même"
+  );
+  const diag = api.content.diagnose();
+  assert(!/2\.9\.0/.test(diag), "le diagnostic annonce encore une version figée : " + diag);
+  assert(/SpotiDuck 2\.11\.1/.test(diag), "le diagnostic n'annonce pas la version de l'application : " + diag);
+  assert(/page \/intl-fr\//.test(diag), "le diagnostic ne dit pas sur quelle page il a été pris : " + diag);
+  /* Et cette page est bien un chemin d'accueil : sans ça, l'accueil maison ne
+     s'afficherait jamais là où l'utilisateur arrive. */
+  assert(api.home.isHomePath() === true, "/intl-fr/ n'est pas reconnu comme l'accueil");
+
+  /* Rien de rendu du tout : là, et seulement là, l'alarme a raison. */
+  w.document.querySelector("main").innerHTML = "";
+  assert(api.content.alertIfBlank() === true, "un écran vraiment vide ne signale plus rien");
+  page.window.close();
+  return "29×2756 ⇒ affichée · version réelle au diagnostic · vide ⇒ alarme ✓";
 });
 
 await checkAsync("the interface unit follows the device, not a fixed guess", async () => {

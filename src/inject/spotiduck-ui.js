@@ -42,7 +42,13 @@
 
   if (window.SpotiDuckUI && window.SpotiDuckUI.version) return; // idempotent
 
-  var VERSION = "2.9.0";
+  /* La version de la **coque**, estampillée par le bundler (`tools/build.mjs`
+     pose `window.__SD_VERSION__` avec la version de `package.json`).
+     Elle était écrite à la main (« 2.9.0 ») et n'a plus jamais bougé : le
+     diagnostic d'un téléphone en 2.11 annonçait donc « SpotiDuck 2.9.0 », ce
+     qui rendait toute remontée de bug inexploitable. `dev` n'apparaît que si
+     le fichier est chargé hors build (banc, mise au point). */
+  var VERSION = (window.__SD_VERSION__ || "dev");
   var STYLE_ID = "spotiduck-ui-style";
   var BODY_CLASS = "sd-mobile";
 
@@ -2149,18 +2155,54 @@
       html.classList.toggle("sd-content-hidden", fixed === 0 && !!anchor && anchor.getBoundingClientRect().height < 4);
       return fixed;
     },
-    /** Le contenu attendu est-il là, et visible ? */
+    /**
+     * Ce qui est **rendu** dans l'ancre de contenu.
+     *
+     * `innerText` n'existe que pour du texte réellement affiché (un texte caché
+     * n'y figure pas) ; le nombre d'éléments rendus se compte sur des boîtes non
+     * vides. C'est la seule mesure qui distingue « la page est noire » de « la
+     * page est une colonne étroite mais pleine ».
+     */
+    rendered: function (anchor) {
+      var text = 0;
+      try {
+        var raw = typeof anchor.innerText === "string" ? anchor.innerText : anchor.textContent;
+        text = String(raw || "").replace(/\s+/g, " ").trim().length;
+      } catch (e) {
+        text = 0;
+      }
+      var nodes = anchor.querySelectorAll("button, [role=button], a[href], img, input, iframe, svg, canvas");
+      var els = 0;
+      for (var i = 0; i < nodes.length; i++) {
+        var r = nodes[i].getBoundingClientRect();
+        if (r.width > 2 && r.height > 2) els++;
+      }
+      return { text: text, els: els };
+    },
+
+    /**
+     * Le contenu attendu est-il là ? On mesure **ce qui est rendu**, pas la
+     * largeur d'une boîte.
+     *
+     * Le 25/09, le téléphone a affiché l'alarme « la page n'a rien affiché »
+     * avec, dans son propre diagnostic, `contenu 29×2756` : la page avait
+     * 2 756 px de contenu, mais l'élément choisi ne faisait que 29 px de large —
+     * et le test `largeur < 40 px`, écrit pour une autre disposition de la page,
+     * la déclarait vide. Un seuil de largeur ne dit rien de ce qu'on voit ; ce
+     * qui le dit, c'est du texte rendu et des éléments rendus. L'alarme ne se
+     * déclenche donc plus que quand **rien** n'est rendu — le noir du 24/09.
+     */
     state: function () {
       var anchor = pick(CONTENT_ANCHORS);
       if (!anchor) return { ok: false, why: "aucun élément de contenu" };
       var rect = anchor.getBoundingClientRect();
-      var text = (anchor.textContent || "").replace(/\s+/g, " ").trim();
-      var hasMedia = !!anchor.querySelector("input, button, img, iframe, a[href]");
-      if (rect.height < 20 || rect.width < 40) {
-        return { ok: false, why: "contenu " + Math.round(rect.width) + "×" + Math.round(rect.height) };
-      }
-      if (text.length < 20 && !hasMedia) return { ok: false, why: "contenu vide" };
-      return { ok: true, why: "contenu " + Math.round(rect.width) + "×" + Math.round(rect.height) };
+      var r = this.rendered(anchor);
+      var size = Math.round(rect.width) + "×" + Math.round(rect.height);
+      var why =
+        "contenu " + size +
+        " · rendu " + r.text + " car. / " + r.els + " élément" + (r.els > 1 ? "s" : "");
+      if (r.text < 20 && r.els === 0) return { ok: false, why: why };
+      return { ok: true, why: why };
     },
 
     /**
@@ -2257,12 +2299,24 @@
       })();
     },
 
+    /**
+     * La version à montrer : celle de **l'application** (par le pont) et celle
+     * de la **coque** (estampillée au build). Les deux doivent coïncider ; si
+     * elles diffèrent, c'est que l'APK installé n'est pas celui qu'on croit — et
+     * c'est précisément ce qu'il faut voir dans une remontée de bug.
+     */
+    version: function () {
+      var app = Bridge.has("version") ? String(Bridge.call("version") || "") : "";
+      if (app && app !== VERSION) return app + " (coque " + VERSION + ")";
+      return VERSION;
+    },
+
     /** Une ligne à coller : ce qu'un écran qu'on ne voit pas dit de lui-même. */
     diagnose: function () {
       var s = this.state();
       var vp = Viewport.measure();
       return (
-        "SpotiDuck " + VERSION +
+        "SpotiDuck " + this.version() +
         " · interface " + (Bridge.has("uiMode") ? Bridge.call("uiMode") : "coque SpotiDuck") +
         " · vue " + vp.layout + "×" + viewH() + " px (écran " + (vp.device || "?") + ")" +
         " · unité " + Device.base.toFixed(2) +
@@ -3194,7 +3248,14 @@
      rapporter « déconnecté » à l'application pendant un chargement, donc une
      session valable pouvait être jetée. */
   function spotifyLoginLink() {
-    var links = document.querySelectorAll('a[href^="/login"], a[href*="/login"]');
+    /* Liens **et boutons** : la page d'atterrissage de Spotify
+       (`open.spotify.com/intl-fr/`) sert parfois sa connexion par un bouton
+       piloté en JavaScript, sans `href` — et l'écran d'accueil maison ne
+       s'affichait alors pas là où il est le plus utile (session fermée). */
+    var links = document.querySelectorAll(
+      'a[href^="/login"], a[href*="/login"], a[href*="accounts.spotify.com"],' +
+        ' button[data-testid*="login"], button[data-testid*="signup"]'
+    );
     for (var i = 0; i < links.length; i++) {
       var node = links[i];
       var ours = false;
@@ -3395,7 +3456,12 @@
     isHomePath: function () {
       var path = (location.pathname || "/").replace(/\/+$/, "") || "";
       if (path === "" || path === "/" || path === "/home") return true;
-      return /^\/(?:[a-z]{2}(?:-[a-z]{2})?)$/.test(path); /* /fr, /fr-FR, /en… */
+      /* `/fr`, `/fr-FR`, `/en`… **et `/intl-fr`** : c'est le chemin que Spotify
+         sert réellement en France (relevé sur le téléphone : `page /intl-fr/`).
+         La première version ne l'acceptait pas — donc l'accueil maison ne
+         s'affichait pas là où l'utilisateur arrive. Une sous-page (playlist,
+         album, artiste, `/section/…`) n'est jamais un chemin d'accueil. */
+      return /^\/(?:intl-)?[a-z]{2}(?:-[a-z]{2})?$/i.test(path);
     },
 
     shouldShow: function () {
