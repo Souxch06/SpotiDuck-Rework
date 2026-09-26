@@ -1,0 +1,22 @@
+# Un seul format pour tout le depot, parce que les generateurs comparent des
+# octets : un bout de ligne ou une tabulation de trop dans src/inject et la
+# ressource livree n'est plus identique a sa source generee (npm run check le
+# verifie, mais un editeur aligne coute moins cher qu'un rebuild).
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+[*.{kt,kts,java,xml}]
+indent_size = 4
+
+[*.md]
+trim_trailing_whitespace = false
+
+[makefile]
+indent_style = tab

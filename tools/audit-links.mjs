@@ -2040,9 +2040,14 @@ for (const m of libraryCode.matchAll(/(?:Settings|this)\.labels\[([^\]]+)\]/g)) 
   const locksPath = "tools/build-logic.locks.json";
   if (existsSync(join(root, locksPath))) {
     const locks = JSON.parse(read(locksPath)).blocks || {};
-    for (const name of ["état", "capteur", "playFromUri", "manageWake", "trigUnlock", "act", "manageAll", "updMedia"]) {
-      if (!locks[name] || locks[name].md5 === "0000000000") {
-        errors.push(`le verrou du bloc d'origine « ${name} » n'est pas posé : \`node tools/build-logic.mjs\` a été poussé sans sa relecture`);
+    /* La liste des blocs est lue la ou elle est ecrite (tools/build-logic.mjs) :
+       la dupliquer ici, c'est un bloc ajoute oublie de l audit — et un bloc oublie,
+       c est exactement ce qui etait arrive a « veille » et « installation ». */
+    const sliceNames = [...read("tools/build-logic.mjs").matchAll(/^\s+name:\s*"([^"]+)"/gm)].map((m) => m[1]);
+    if (!sliceNames.length) errors.push("aucun bloc trouve dans tools/build-logic.mjs : la liste des verrous n est plus verifiable");
+    for (const name of sliceNames) {
+      if (!locks[name] || !locks[name].len || locks[name].md5 === "0000000000") {
+        errors.push(`le verrou du bloc d'origine « ${name} » n'est pas posé : un bloc sans empreinte n'est pas du code repris tel quel — relire le découpage, puis \`node tools/build-logic.mjs --record-locks\``);
       }
     }
   } else {

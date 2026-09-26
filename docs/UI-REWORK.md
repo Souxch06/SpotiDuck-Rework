@@ -4063,3 +4063,81 @@ assertions du moteur 29/29 · audit 0/0 · regress 43/43 · `npm run android` 6/
 Ce qui manque toujours, et ne peut venir que de ton téléphone : la ligne
 `· commandes …` du diagnostic, qui dira si la page offre des candidats, s'ils sont
 vifs, et si l'appui est consommé.
+
+## §60 — Le dépôt se vérifie tout seul (v2.11.25)
+
+« Rends le projet plus propre et plus structuré pour éviter tous les bugs etc de
+compilateur etc ». Le périmètre choisi est la **sûreté de construction**, pas une
+réécriture : remuer `tools/` en sous-dossiers ou découper la coque (41 modules dans
+une seule IIFE de 9 000 lignes) aurait cassé plus de câblage (scripts npm, workflows,
+chemins attendus par l'audit, portée des variables) que ça n'aurait rapporté de
+propreté. Ce qui a été fait tient en six lignes, et chacune répond à un défaut
+**vécu** dans cette session, pas à un goût.
+
+1. **`tools/check.mjs` — le portique d'hygiène** (`npm run check`, 8 règles, table,
+   code 1). Il parse tout le JS du dépôt avec acorn (le « compilateur » qu'on n'avait
+   pas), compare octet pour octet `dist/*` et `android/app/src/main/assets/*`, vérifie
+   que toute entrée et toute sortie de construction est **suivie par git**, que l'index
+   ne déclare pas « supprimé » un fichier qui existe encore, que les dix verrous du
+   moteur sont posés, que toute méthode citée sur le pont existe côté Kotlin, que les
+   15 XML sont bien formés (faute avant `aapt2`), que les délimiteurs de commentaires
+   Kotlin s'équilibrent, que les scripts npm et les workflows ne pointent dans le
+   vide, que le bundle porte les 14 feuilles CSS **et** la version du dépôt, et que
+   toute référence `§NN` du code a sa section dans cette doc.
+2. **`npm run check:selftest`** : le portique est rejoué sur **cinq mutations
+   réelles** du dépôt (JS non parsable, accent grave dans un gabarit, ressource
+   livrée périmée, fichier non suivi, référence de doc pendante) et **échoue si un
+   de ses détecteurs ne tombe pas**. C'est la traduction de la règle de vérification
+   qu'on s'est donnée : un test qui n'aurait pas rattrapé le défaut ne sert à rien.
+3. **`.github/workflows/ci.yml` — il manquait tout court.** Depuis le début de ce
+   projet, seuls les tags de release lançaient quelque chose : aucune PR n'a jamais
+   exécuté un test. La CI rejoue maintenant build → `git diff --exit-code` sur les
+   fichiers générés → check → selftest → fumée → audit → régressions, plus un filet
+   « la vérification n'a rien laissé de sale » qui attrape un générateur non
+   déterministe.
+4. **Un seul chemin de construction** : `npm run android` = `npm run build &&
+   npm run sync:android` (avant, il rejouait deux générateurs dans son propre ordre,
+   ce qui permettait de livrer une chaîne partielle) ; `verify` enchaîne tout ;
+   `engines.node` + `.nvmrc` + `.editorconfig` posés (le dépôt n'en avait aucun —
+   vérifié) ; un script `silence` pour `tools/make-silence.mjs`, qui était une entrée
+   humaine non déclarée.
+5. **Les verrous ne se posent plus tout seul** (`--record-locks`). Le défaut était
+   le plus fourbe des deux : `build-logic.mjs` enregistrait l'empreinte d'un bloc
+   sans verrou à chaque build ordinaire — un bloc **mal découpé** se trouvait donc
+   certifié « repris tel quel » par le simple fait d'avoir été construit. Et le test
+   de divergence comparait la longueur **avant** l'empreinte : un bloc changé à
+   longueur égale était accepté sans un mot (vérifié en relisant la condition, qui
+   contenait `lock.len === got.len && got.len !== lock.len`, soit faux par
+   construction). Maintenant : aucun build ordinaire ne touche le fichier de verrous,
+   il n'est écrit que sur `--record-locks`, et `check` refuse un dépôt où un verrou
+   manque. L'audit, lui, lit la liste des blocs **dans** `build-logic.mjs` au lieu de
+   la dupliquer — la duplication avait déjà oublié `veille` et `installation`.
+6. **`docs/ARCHITECTURE.md`** : le graphe de construction, la table de qui fait quoi,
+   les huit invariants, et surtout la **carte des garde-fous** — quelle classe de
+   défaut est attrapée par quelle porte, et ce qui n'est volontairement vérifié nulle
+   part ici (le rendu réel, la grammaire Kotlin, le markup de Spotify).
+
+**Ce que le portique a trouvé pendant qu'on l'écrivait** — c'est la mesure qui prouve
+qu'il sert à quelque chose : (a) l'asset `spotiduck-logic.js` **n'était pas suivi**
+par git après un rollback d'environnement, et l'index le déclarait supprimé alors
+qu'il était sur le disque : un `git commit -a` inattentif retirait de la branche la
+ressource que l'application lit ; (b) `dist/spotiduck-ui.js` était resté périmé de
+66 Ko (464 678 au lieu de 505 547 octets) et `npm run android` vérifiait son propre
+`dist` périmé, 6/6 vert ; (c) en retouchant un en-tête de gabarit, **je suis moi-même
+tombé dans le piège de la règle 1** (un accent grave inséré dans un littéral de
+modèle a cassé le parseur de `build-logic.mjs`, trois fois de suite, avec une pile
+d'appels ESM sans numéro de ligne utile) ; (d) ma propre règle « signature Kotlin
+déclarée deux fois » hurlait sur `MainActivity.kt`, qui déclare bien
+`shouldOverrideUrlLoading` deux fois — dans deux `WebViewClient` distincts, ce qui est
+légal : la règle a été **retirée**, parce qu'une règle à faux positifs est retirée la
+semaine suivante et le code se casse ensuite en confiance ; (e) la règle de références
+de doc était **aveugle** (elle effaçait les commentaires avant de chercher des
+références écrites dans des commentaires) — c'est l'auto-test qui l'a montré, en
+échouant.
+
+**Vérifications** : `check` 0 erreur / 0 avertissement · selftest **5/5** mutations
+détectées · moteur 21 684 car. (10 verrous fidèles, en-tête nettoyé de ses accents
+graves) · smoke 154/154 · assertions du moteur 29/29 · audit 0/0 · regress 43/43 ·
+`npm run android` 6/6 · bundle 501 661 car. portant la version 2.11.25. Ce qui manque
+toujours, et ne peut venir que de ton téléphone : la ligne `· commandes …` du
+diagnostic.

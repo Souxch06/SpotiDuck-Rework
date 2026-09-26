@@ -133,19 +133,26 @@ const SLICES = [
   },
 ];
 
-/* Les empreintes sont dans `tools/build-logic.locks.json` (un bloc qui bouge
-   n'est plus du code repris tel quel). Au premier relevé — pas de sidecar, ou
-   une entrée à `0000000000` — l'outil enregistre ce qu'il trouve et le dit : la
-   relecture humaine est le `git diff` du fichier de verrous. */
+/* Les empreintes des blocs sont dans tools/build-logic.locks.json, et une
+   construction ordinaire ne les touche jamais. Un verrou ne se pose qu'avec :
+
+       node tools/build-logic.mjs --record-locks
+
+   et la relecture humaine est alors le git diff de ce fichier. C'est explicite
+   parce que le contraire ne l'était pas : avant ce patch, tout npm run build
+   posait de lui-même l'empreinte d'un bloc sans verrou — un bloc mal découpé (ou
+   une moitié de bloc, comme « installation » en 2.11.22) se voyait certifié
+   « repris tel quel » par le seul fait d'avoir été construit. Et le test de
+   divergence comparait la longueur avant l'empreinte, si bien qu'un bloc changé à
+   longueur égale était accepté sans un mot. Les deux trous sont bouchés ici ;
+   tools/check.mjs (règle 5) refuse en plus un dépôt où un verrou manque. */
 const LOCKFILE = "tools/build-logic.locks.json";
+const RECORD = process.argv.includes("--record-locks");
 let LOCKS = {};
 try {
   LOCKS = JSON.parse(read(LOCKFILE)).blocks || {};
 } catch (e) {
   LOCKS = {};
-}
-for (const slice of SLICES) {
-  if (!LOCKS[slice.name]) LOCKS[slice.name] = { len: 0, md5: "0000000000" };
 }
 
 /* Le pont dont le moteur dépend : chaque méthode citée par un bloc doit exister
@@ -186,16 +193,20 @@ for (const slice of SLICES) {
     const body = cut(source, slice);
     const lock = LOCKS[slice.name];
     const got = { len: body.length, md5: md5(body) };
-    if (!lock || lock.md5 === "0000000000" || lock.len !== got.len || got.md5 === "0000000000") {
-      /* premier relevé (sidecar absent, ou bloc nouveau) : on enregistre. */
-      LOCKS[slice.name] = { len: got.len, md5: got.md5 };
-      recorded.push(`${slice.name} ${got.len} car. md5 ${got.md5}`);
-    }
-    if (lock && lock.md5 !== "0000000000" && lock.len === got.len && (got.len !== lock.len || got.md5 !== lock.md5)) {
-      problems.push(
-        `le bloc « ${slice.name} » de l'original a changé (${got.len} car. md5 ${got.md5}, attendu ${lock.len} car. md5 ${lock.md5}) : ` +
-          "ce n'est plus du code repris tel quel — relire la source, et réaligner la coque plutôt que le bloc"
-      );
+    const pose = !!lock && lock.md5 !== "0000000000";
+    const fidele = pose && lock.len === got.len && lock.md5 === got.md5;
+    if (!fidele) {
+      if (!RECORD) {
+        problems.push(
+          `bloc « ${slice.name} » ${pose ? "non fidèle à son verrou" : "sans verrou posé"} ` +
+            `(${got.len} car. md5 ${got.md5}${pose ? ", attendu " + lock.len + " car. md5 " + lock.md5 : ", aucun"}) : ` +
+            "ce n'est plus du code repris tel quel sans relecture. Soit le découpage est faux — il doit cadrer un tout de l'original, pas une moitié —, " +
+            "soit le changement est voulu : alors node tools/build-logic.mjs --record-locks, et le diff du fichier de verrous se relit comme du code."
+        );
+      } else {
+        LOCKS[slice.name] = { len: got.len, md5: got.md5 };
+        recorded.push(`${slice.name} ${got.len} car. md5 ${got.md5}`);
+      }
     }
     blocks.push({ ...slice, body });
   } catch (error) {
@@ -224,26 +235,25 @@ if (problems.length) {
    -------------------------------------------------------------------------- */
 const header = `/* ==========================================================================
    SpotiDuck — le moteur de lecture de l'application d'origine, **repris tel
-   quel**. Généré par \`tools/build-logic.mjs\` : ne pas éditer ici.
+   quel**. Généré par tools/build-logic.mjs : ne pas éditer ici.
 
-   Huit blocs de \`src/original/spotiduck-original.js\`, recopiés octet pour
-   octet (longueurs et md5 vérifiés à chaque \`npm run build\`) : capteur de
-   jetons sur le trafic de la page, \`mngFetch\` (requêtes hors WebView par le
-   pont Android), \`playFromUri\` (démarrer une piste par l'API Connect),
-   \`manageWake\`, \`trigUnlock\`, les six commandes \`act*\`, \`manageAll\` (la
-   machine d'état : notification, veille, minuteries), \`updMedia\` (le rapport
+   Huit blocs de src/original/spotiduck-original.js, recopiés octet pour
+   octet (longueurs et md5 vérifiés à chaque npm run build) : capteur de
+   jetons sur le trafic de la page, mngFetch (requêtes hors WebView par le
+   pont Android), playFromUri (démarrer une piste par l'API Connect),
+   manageWake, trigUnlock, les six commandes act*, manageAll (la
+   machine d'état : notification, veille, minuteries), updMedia (le rapport
    à Android).
 
    Ce fichier **ne dessine rien**. Ce que l'original y mêlait d'affichage (sa
-   barre du haut, son mini-lecteur, son \`npBtn\), ses hacks CSS et ses
+   barre du haut, son mini-lecteur, son npBtn\), ses hacks CSS et ses
    coupures de rangées d'accueil est resté dehors : la coque
-   (\`src/inject/spotiduck-ui.js\%) est seule à dessiner, et lui fournit l'état.
+   (src/inject/spotiduck-ui.js\%) est seule à dessiner, et lui fournit l'état.
 
-   Interface vers la coque : \`window.SpotiDuckLogic\` (méthodes en bas du
+   Interface vers la coque : window.SpotiDuckLogic (méthodes en bas du
    fichier). Les variables d'état que les blocs se partagent sont **fournies par
    la coque** — c'est le seul code qui soit d'ici, et il ne fait que transférer.
-   ========================================================================= */
-`.replace("spotiduck-ui.js%", "spotiduck-ui.js`");
+   ========================================================================= */`;
 
 const glueTop = `
 (function () {
@@ -472,7 +482,11 @@ const glueBottom = `
 const out = header + glueTop + body + glueBottom;
 mkdirSync(join(root, "dist"), { recursive: true });
 writeFileSync(join(root, OUT), out, "utf8");
-writeFileSync(join(root, LOCKFILE), JSON.stringify({ bundle: { len: out.length, md5: md5(out) }, blocks: LOCKS }, null, 2) + "\n", "utf8");
+/* Un fichier de verrous réécrit à chaque build est un fichier de verrous dont le
+   diff ne veut plus rien dire : on n'y touche que sur --record-locks. */
+if (RECORD && recorded.length) {
+  writeFileSync(join(root, LOCKFILE), JSON.stringify({ bundle: { len: out.length, md5: md5(out) }, blocks: LOCKS }, null, 2) + "\n", "utf8");
+}
 
 const sizes = blocks.map((b) => `${b.name} ${String(b.body.length).padStart(5)} car.`).join(" · ");
 console.log(`\nSpotiDuck — moteur de lecture (code d'origine, ${blocks.length} blocs repris tels quels)\n`);

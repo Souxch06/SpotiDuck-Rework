@@ -1,25 +1,24 @@
 /* ==========================================================================
    SpotiDuck — le moteur de lecture de l'application d'origine, **repris tel
-   quel**. Généré par `tools/build-logic.mjs` : ne pas éditer ici.
+   quel**. Généré par tools/build-logic.mjs : ne pas éditer ici.
 
-   Huit blocs de `src/original/spotiduck-original.js`, recopiés octet pour
-   octet (longueurs et md5 vérifiés à chaque `npm run build`) : capteur de
-   jetons sur le trafic de la page, `mngFetch` (requêtes hors WebView par le
-   pont Android), `playFromUri` (démarrer une piste par l'API Connect),
-   `manageWake`, `trigUnlock`, les six commandes `act*`, `manageAll` (la
-   machine d'état : notification, veille, minuteries), `updMedia` (le rapport
+   Huit blocs de src/original/spotiduck-original.js, recopiés octet pour
+   octet (longueurs et md5 vérifiés à chaque npm run build) : capteur de
+   jetons sur le trafic de la page, mngFetch (requêtes hors WebView par le
+   pont Android), playFromUri (démarrer une piste par l'API Connect),
+   manageWake, trigUnlock, les six commandes act*, manageAll (la
+   machine d'état : notification, veille, minuteries), updMedia (le rapport
    à Android).
 
    Ce fichier **ne dessine rien**. Ce que l'original y mêlait d'affichage (sa
-   barre du haut, son mini-lecteur, son `npBtn), ses hacks CSS et ses
+   barre du haut, son mini-lecteur, son npBtn), ses hacks CSS et ses
    coupures de rangées d'accueil est resté dehors : la coque
-   (`src/inject/spotiduck-ui.js`) est seule à dessiner, et lui fournit l'état.
+   (src/inject/spotiduck-ui.js%) est seule à dessiner, et lui fournit l'état.
 
-   Interface vers la coque : `window.SpotiDuckLogic` (méthodes en bas du
+   Interface vers la coque : window.SpotiDuckLogic (méthodes en bas du
    fichier). Les variables d'état que les blocs se partagent sont **fournies par
    la coque** — c'est le seul code qui soit d'ici, et il ne fait que transférer.
    ========================================================================= */
-
 (function () {
   /* **Pas de « use strict »** : les blocs recopiés assignent des variables sans
      les déclarer (`playing`, `featVer`, `window.pBtn`) et se relisent

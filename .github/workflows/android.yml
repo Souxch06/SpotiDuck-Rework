@@ -53,19 +53,40 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # la meme source de verite que la CI : .nvmrc (Node 20 est deprecie et
+          # le disait dans les annotations de chaque run)
+          node-version-file: ".nvmrc"
 
       - name: Build the injected UI bundle
         run: |
           npm ci --no-audit --no-fund
           npm run build
-          node tools/sync-android.mjs
+          npm run sync:android
+
+      - name: Le tag contient exactement ce que la construction produit
+        run: |
+          # Un APK signe depuis un tag dont les ressources generees etaient
+          # perimees ne se voit nulle part : l'application livre simplement la
+          # version d'avant. Ici, la construction doit etre sans effet.
+          git diff --exit-code --stat -- dist android/app/src/main/assets || {
+            echo "::error::Les ressources generees du tag ne correspondent pas a ce que produisent les generateurs : le tag a ete pousse sans reconstruire (npm run android)."
+            exit 1
+          }
+
+      - name: Repository hygiene gate
+        run: npm run check
+
+      - name: The gate proves it falls
+        run: npm run check:selftest
 
       - name: Check the cross-file links (bridge, classes, resources)
         run: npm run audit
 
       - name: Run the UI smoke tests
         run: npm run smoke
+
+      - name: Regression cases (un cas par defaut vecu)
+        run: npm run regress-audit
 
       - name: Prepare the signing keystore
         id: signing
