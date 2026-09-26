@@ -3980,3 +3980,50 @@ moteur trop tard) · moteur 29/29 · smoke 154/154 · `npm run android` 6/6.
 Ce que la CI ne dira pas : si la touche agit **chez toi**, connectée — le bundle de la
 page dépend de la session. Ce qu'elle dira : que la chaîne est entière et que la coque
 ne se ment pas à elle-même.
+
+## §58 — « Tjrs pareil » : la coque dit ce qu'elle voit des commandes (v2.11.23)
+
+Rien de neuf côté symptôme, donc rien de neuf côté hypothèse : la passe
+précédente **ajoutait un danger** au lieu d'en retirer un, et le seul moyen
+honnête de finir est de faire dire à la coque ce qu'elle trouve dans **ta** page.
+
+**Corrigé ici, sur pièces :**
+
+1. **Le capteur pouvait tuer le `fetch` de la page.** Le bloc d'origine relit le
+   corps de certaines requêtes (`JSON.parse(opts.body)`) sans aucun garde-fou :
+   une requête au corps inattendu faisait **rejeter** la promesse de la page —
+   Spotify cessait de piloter son lecteur, ce qui se voit exactement comme
+   « les touches du bas ne font rien ». Le wrapper est refermé sur le capteur
+   (`tools/build-logic.mjs`, bloc *coque* après les huit blocs) : ce qu'il avait
+   à lire est lu, et si sa lecture lève, la requête de la page part quand même,
+   telle quelle. Un compteur, `SpotiDuckLogic.captureErrors()`, dit si cet
+   écart s'est produit (un compteur qui monte = page et capteur ne sont pas
+   d'accord).
+2. **Le geste large a été mesuré puis écarté.** Émettre `pointerdown` +
+   `mousedown` + `pointerup` + `mouseup` + `click` pour attraper un handler
+   branché ailleurs que sur `click` : **neuf commandes de lecture cassées au
+   smoke**, parce que nos propres écouteurs de gestes (`Gestures`, sur le
+   document) capturent le synthetic `pointerdown` et avalent le clic. L'unique
+   `click` revient, et la **consommation** de l'événement (`defaultPrevented`)
+   devient une mesure publiée, plus un portillon de réussite.
+3. **Le diagnostic dit ce que les commandes trouvent.** `Engine.selfTest()`
+   compte, pour chacune des six (lecture/pause, suivant, précédent, aléatoire,
+   répétition, j'aime) : le nombre de candidats de la page, si le meilleur est
+   vif ou désactivé, et l'état du moteur (appareil capté, jeton, auth). **Sans
+   rien presser** — un diagnostic qui change l'état de la lecture est un
+   mensonge. Une ligne de plus dans le diagnostic copiable :
+   `· commandes playPause:candidats=2 vif · next:… · moteur=là appareil=…`.
+   `SpotiDuckUI.selfTest(true)` est la variante qui appuie et publie « consommé
+   / NON CONSOMMÉ », pour la sonde de CI.
+
+**Ce que ça change pour toi** : la prochaine fois que tu copies le diagnostic
+(bouton « Copier le diagnostic »), tu m'envoies *la cause*, et pas une
+description. `candidats=0` partout = la page n'a pas les repères attendus (et
+alors c'est l'API Connect qui doit commander — le capteur dira pourquoi elle ne
+le peut pas encore) ; `vif` mais rien ne se passe = l'appui part et n'est pas
+traité ; `désactivé` = Spotify attend quelque chose (appareil non transféré,
+compte, pause réseau).
+
+**Vérifications** : build du moteur 17 585 car. · smoke 154/154 · moteur 29/29 ·
+audit 0/0 (groupe 11, six maillons de la chaîne appui → Android) · regress
+43/43 · `npm run android` 6/6.

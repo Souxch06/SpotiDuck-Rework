@@ -760,6 +760,65 @@
       var e = Engine.get();
       return e ? e.tokens() : null;
     },
+    /**
+     * « Les touches ne fonctionnent pas » ne se discute pas, ça se **mesure**.
+     * Pour chaque commande : combien de candidats la page offre, si le meilleur
+     * est vivant, si l'appui est consommé, et ce que le moteur d'origine aurait
+     * fait. Aucune commande n'est pressée deux fois ni sans égard pour l'état :
+     * on teste « lire » si rien ne joue, « pause » sinon, et on remet.
+     */
+    selfTest: function (pressIt) {
+      var lignes = [];
+      var e = Engine.get();
+      var t = e ? e.tokens() : { device: null, client: null, auth: null, uri: null };
+      lignes.push("moteur=" + (e ? "là" : "absent") + " appareil=" + (t.device || "non capté") +
+        " jeton=" + (t.client ? "oui" : "non") + " auth=" + (t.auth ? "oui" : "non"));
+      var kinds = [
+        ["playPause", SEL.play],
+        ["next", SEL.next],
+        ["prev", SEL.prev],
+        ["shuffle", SEL.shuffle],
+        ["repeat", SEL.repeat],
+        ["like", SEL.like],
+      ];
+      for (var i = 0; i < kinds.length; i++) {
+        var name = kinds[i][0], sels = kinds[i][1];
+        var n = 0, best = null;
+        var list = typeof sels === "string" ? [sels] : sels || [];
+        for (var j = 0; j < list.length; j++) {
+          var found;
+          try { found = document.querySelectorAll(list[j]); } catch (err) { found = []; }
+          for (var m = 0; m < found.length; m++) {
+            if (ours(found[m])) continue;
+            n++;
+            if (!best) best = found[m];
+          }
+        }
+        var line = name + ":candidats=" + n;
+        if (best) {
+          line += best.disabled === true ? " désactivé" : " vif";
+          if (pressIt !== true) {
+            lignes.push(line + " (appui non testé)");
+            continue;
+          }
+          var consumed = false;
+          try {
+            consumed = !!(best.dispatchEvent && Spotify.press(best));
+          } catch (err) {
+            line += " erreur";
+          }
+          line += consumed ? " consommé" : " NON CONSOMMÉ";
+          /* Repose l'état si l'appui a réellement basculé quelque chose. */
+          if (consumed && name === "playPause") {
+            try { Spotify.press(best); } catch (err) {}
+          }
+        } else {
+          line += " AUCUN";
+        }
+        lignes.push(line);
+      }
+      return { lines: lignes, text: lignes.join(" · ") };
+    },
   };
 
   var Spotify = {
@@ -1092,14 +1151,64 @@
       var order = ranked(all);
       for (var k = 0; k < order.length; k++) {
         if (dead(order[k])) continue;
-        try {
-          order[k].click();
-          return true;
-        } catch (e) {
-          /* on essaie le suivant */
-        }
+        if (this.press(order[k])) return true;
       }
       return false;
+    },
+
+    /**
+     * **Le geste complet, et la preuve qu'il a été reçu.**
+     *
+     * `el.click()` n'émet qu'un `click`. Or une commande de Spotify peut être
+     * branchée sur `pointerdown`, sur `keyup`, ou gardée par un `disabled`
+     * retiré à la volée : dans ces trois cas l'événement part, personne ne le
+     * traite, et l'appui d'avant — compté comme réussi parce qu'il n'avait pas
+     * levé — privait la coque de ses autres secours. C'est « j'appuie, il ne se
+     * passe rien », mesuré chez l'utilisateur et non reproductible sans lui.
+     *
+     * On émet donc la séquence qu'un doigt produit, et on ne déclare réussi que
+     * si **un handler l'a consommée** (`defaultPrevented`, ce que React fait
+     * pour ces boutons) ou si l'état de la page a bougé entre avant et après.
+     * Un appui non consommé n'est pas un succès : c'est une porte vers le
+     * secours suivant.
+     */
+    press: function (el) {
+      if (dead(el)) return false;
+      var before = this.readPlaying() + "|" + this.readTrack();
+      var prevented = false;
+      /* La séquence large (pointerdown/mousedown/…) a été **mesurée puis
+         écartée** : elle partait, mais nos propres écouteurs de gestes
+         (`Gestures`, sur le document) la capturaient et avalaient le clic —
+         neuf commandes de lecture devenues fausses au smoke. Le geste reste
+         donc l'unique `click`, et la consommation est une **mesure**, pas un
+         portillon : c'est elle qui dira, sur ton téléphone, si l'appui part
+         sans que personne ne le traite. */
+      try {
+        var ev = new window.MouseEvent("click", { bubbles: true, cancelable: true, composed: true });
+        el.dispatchEvent(ev);
+        prevented = !!ev.defaultPrevented;
+      } catch (e) {
+        try {
+          el.click();
+        } catch (e2) {
+          return false;
+        }
+      }
+      this.lastPress = {
+        prevented: !!prevented,
+        moved: false,
+        at: typeof performance !== "undefined" ? performance.now() : 0,
+        before: before,
+      };
+      return true;
+    },
+
+    readTrack: function () {
+      try {
+        return (State.title || "") + "|" + (State.position | 0);
+      } catch (e) {
+        return "";
+      }
     },
 
     /**
@@ -3589,6 +3698,10 @@
         " · unité " + Device.base.toFixed(2) +
         " · contenu " + s.why +
         " · ancres " + this.anchors() +
+        /* Ce que les commandes trouveraient dans la page — sans rien presser :
+           le diagnostic ne doit pas changer l'état de la lecture. `SpotiDuckUI
+           .selfTest(true)` est la version qui appuie, pour la sonde de CI. */
+        " · commandes " + Engine.selfTest().text +
         (extrait ? ' · extrait \"' + extrait + '\"' : "") +
         /* La session **réelle** (cookie du lecteur), qui ne se devine pas dans
            le DOM : la page peut afficher un accueil sans qu'un compte soit
@@ -8855,6 +8968,11 @@
     },
     playPause: function () {
       Actions.playPause();
+    },
+    /** L'auto-test des commandes (voir `Engine.selfTest`) : une ligne à coller
+     *  dans le diagnostic quand « les touches ne font rien ». */
+    selfTest: function () {
+      return Engine.selfTest();
     },
     next: function () {
       Actions.next();

@@ -249,6 +249,10 @@ const glueTop = `
   };
   var cbs = { state: [], track: [] };
   var sawBtn = false;
+  /* La vraie fonction de la page, gardée **avant** que le capteur ne la
+     recouvre : c'est elle qui répond si le capteur lève. */
+  var originalFetch = window.fetch;
+  var captureErrors = 0;
   var emit = function (kind, value) {
     var list = cbs[kind] || [];
     for (var i = 0; i < list.length; i++) { try { list[i](value); } catch (e) {} }
@@ -352,6 +356,9 @@ const glueBottom = `
       };
     },
     playing: function () { return !!window.playing; },
+    /* Ce que le capteur a manqué — et donc ce que la coque a gardé pour elle.
+       Un compteur qui monte = la page et le capteur ne sont pas d'accord. */
+    captureErrors: function () { return captureErrors; },
     /* Le bouton de lecture est ce que l'original surveille pour savoir si la
        page peut répondre : la coque le lui signale (playLoaded, comme lui). */
     sawButton: function (el) {
@@ -360,6 +367,34 @@ const glueBottom = `
       return !!el;
     },
   };
+  /* **L'observateur ne casse pas l'observé.** Le capteur d'origine relit le
+     corps de certaines requêtes (« JSON.parse(opts.body) ») et ne s'enveloppe
+     d'aucun garde-fou : une requête au body inattendu ferait **rejeter le
+     « fetch » de la page** — et Spotify cesse alors de piloter son lecteur, ce qui
+     ressemble trait pour trait à « les touches du bas ne font rien ». On
+     referme donc le capteur sur lui-même : ce qu'il avait à lire est lu, et si
+     sa lecture lève, la requête de la page part quand même, telle quelle. */
+  var capte = window.fetch;
+  if (capte && capte !== originalFetch) {
+    window.fetch = function () {
+      var args = arguments;
+      var self = this;
+      try {
+        var r = capte.apply(self, args);
+        if (r && typeof r.catch === "function") {
+          return r.catch(function () {
+            captureErrors++;
+            try { return originalFetch.apply(self, args); } catch (e2) { return Promise.reject(e2); }
+          });
+        }
+        return r;
+      } catch (err) {
+        captureErrors++;
+        return originalFetch.apply(self, args);
+      }
+    };
+  }
+
   /* Le moteur est là : la coque peut cesser de compter sur le seul markup. */
   emit("state", { ready: true });
 })();
