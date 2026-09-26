@@ -16,6 +16,9 @@ const files = {
   shim: "android/app/src/main/assets/native-mode.js",
   widget: "android/app/src/main/res/layout/widget_player.xml",
   shell: "src/inject/20-shell.css",
+  kt: "android/app/src/main/java/com/spotiduck/app/MainActivity.kt",
+  base: "src/inject/10-base.css",
+  probe: "tools/probe-coop.mjs",
 };
 const originals = {};
 for (const k of Object.keys(files)) originals[k] = readFileSync(join(root, files[k]), "utf8");
@@ -44,6 +47,10 @@ const CASES = [
   ["widget", "            android:gravity=\"center_vertical\"\n            android:orientation=\"horizontal\">", "            android:orientation=\"horizontal\">", "alignée au centre"],
   ["widget", "android:id=\"@+id/widget_next\"", "android:id=\"@+id/widget_next2\"", "widget_next"],
   ["shim", '"add-button", "now-playing-widget-like-button"', '"button-like-invent"', "comme commande du lecteur"],
+  ["kt", "if (mode == MODE_ORIGINAL) DESKTOP_UA else MOBILE_UA", "if (mode == MODE_NATIVE) MOBILE_UA else DESKTOP_UA", "redemande la page de bureau"],
+  ["kt", "if (uiMode == MODE_ORIGINAL && identityScript.isNotEmpty()) {", "if (identityScript.isNotEmpty()) {", "empreinte Windows est repos"],
+  ["base", 'html.sd-mobile footer[data-testid="now-playing-bar"],\nhtml.sd-mobile div[data-testid="now-playing-bar"] {', "html.sd-mobile aside[data-testid=\"now-playing-bar\"] {", "réappara"],
+  ["probe", 'setUserAgent(target.mode === "original" ? DESKTOP_UA : MOBILE_UA)', "setUserAgent(DESKTOP_UA)", "plus la configuration de l'application"],
   /* Les secours de lecture de la 2.11.19 (« les boutons ne font rien »). */
   ["ui", "mediaEl: function () {", "mediaElInutilise: function () {", "n'a plus de mediaEl"],
   ["ui", "var sess = this.session();", "var sess = null;", "ne consulte plus ce que la page joue"],

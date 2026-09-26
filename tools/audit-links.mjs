@@ -759,8 +759,13 @@ if (origCss.length !== 6001 || !cssMd5.startsWith("13de5546d0")) {
 if (!/MODE_ORIGINAL/.test(activity) || !/scriptFor\(/.test(activity)) {
   errors.push("MainActivity : le script d'origine n'est plus chargé selon le mode choisi");
 }
-if (!/mode\s*==\s*MODE_NATIVE\)\s*MOBILE_UA\s*else\s*DESKTOP_UA/.test(activity.replace(/\s+/g, " "))) {
-  errors.push("MainActivity : l'agent de l'interface d'origine n'est plus l'agent bureau");
+/* La règle **quelle que soit sa forme** : ce que l'agent décide est vérifié au
+   groupe 10 (qui lit la fonction, pas une écriture précise). Ici on vérifie
+   seulement que le choix existe encore — un garde-fou collé à une seule
+   formulation meurt à la première réécriture, et c'est exactement comme ça que
+   la 2.11.19 a pu passer avec l'agent de bureau sur la coque. */
+if (!/private fun userAgentFor\(/.test(activity) || !/DESKTOP_UA/.test(activity) || !/MOBILE_UA/.test(activity)) {
+  errors.push("MainActivity : l'agent servi à la page n'est plus choisi selon le mode (la règle attendue est vérifiée au groupe 10)");
 }
 /* L'empreinte de navigateur : injectée au chargement, elle décide de la mise en
    page. Trois valeurs suffisent à la reconnaître, et l'application doit
@@ -1911,6 +1916,42 @@ for (const m of libraryCode.matchAll(/(?:Settings|this)\.labels\[([^\]]+)\]/g)) 
   }
   if (!/mediaSeek\(/.test(shim) || !/mediaToggle\(/.test(shim)) {
     errors.push("les commandes du shim n'ont plus de secours sur l'élément qui joue");
+  }
+}
+
+/* --------------------------------------------------------------------------
+   10. L'agent envoyé à Spotify, la coque et la sonde doivent se tenir.
+   `userAgentFor` décide quelle page est servie (mobile ou bureau) ; la coque
+   est dessinée pour la page mobile ; l'empreinte Windows ne doit plus être
+   posée que pour l'interface d'origine ; et la sonde de CI doit mesurer la
+   configuration réellement livrée, pas une autre. Chacun de ces quatre fils
+   coupés redonne le défaut de la 2.11.19 (« la page est rognée des deux tiers,
+   le lecteur ne fait rien ») sans qu'aucun test de la coque ne bronche.
+   -------------------------------------------------------------------------- */
+{
+  const kt = activitySource;
+  const uaFor = /private fun userAgentFor\(mode: String\): String =\s*\n?\s*if \(([^)]*)\) (DESKTOP_UA|MOBILE_UA) else (DESKTOP_UA|MOBILE_UA)/.exec(kt);
+  if (!uaFor) {
+    errors.push("`userAgentFor` n'est plus reconnaissable : la coque peut redevenir servie par la page de bureau sans que rien ne le dise");
+  } else if (uaFor[2] === "DESKTOP_UA" && /MODE_ORIGINAL/.test(uaFor[1])) {
+    /* le bon sens : bureau seulement pour l'interface d'origine */
+  } else if (uaFor[2] === "MOBILE_UA" && /MODE_NATIVE/.test(uaFor[1])) {
+    errors.push("`userAgentFor` ne donne l'agent de bureau qu'au mode natif : la coque (MODE_INJECT) redemande la page de bureau dans un écran de téléphone");
+  } else {
+    errors.push("`userAgentFor` n'envoie plus l'agent mobile à la coque : Spotify servirait la mise en page du bureau dans 412 px");
+  }
+  if (!/if \(uiMode == MODE_ORIGINAL && identityScript\.isNotEmpty\(\)\)/.test(kt)) {
+    errors.push("l'empreinte Windows est reposée à tous les modes : `navigator` se contredit avec l'agent Android, et Spotify répond « navigateur non compatible » (lecture désactivée)");
+  }
+  const parked = read("src/inject/10-base.css");
+  for (const tag of ["aside", "footer", "div"]) {
+    if (!new RegExp(`html\\.sd-mobile ${tag}\\[data-testid="now-playing-bar"\\]`).test(parked)) {
+      errors.push(`la feuille ne met de côté la barre de lecture que sous l'étiquette « aside » : la page mobile (${tag}) réapparaîtrait sous la nôtre`);
+    }
+  }
+  const probe = read("tools/probe-coop.mjs");
+  if (!/setUserAgent\(target\.mode === "original" \? DESKTOP_UA : MOBILE_UA\)/.test(probe)) {
+    errors.push("la sonde de CI ne mesure plus la configuration de l'application : elle peut valider une page que le téléphone ne reçoit pas");
   }
 }
 

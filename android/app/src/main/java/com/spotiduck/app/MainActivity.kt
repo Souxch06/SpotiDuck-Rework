@@ -323,12 +323,18 @@ class MainActivity : AppCompatActivity() {
                     }
                     return
                 }
-                /* L'identité avant tout le reste : la WebView annonce déjà
-                   Chrome Windows, mais `navigator` répondait encore
-                   « Android » (plateforme, client hints, greffons) — soit un
-                   mélange que Spotify appelle « navigateur non compatible ».
-                   Voir `src/original/spotiduck-identity.js`. */
-                if (identityScript.isNotEmpty()) {
+                /* L'empreinte de **bureau** n'a plus sa place ici : elle
+                   réécrivait `navigator.userAgent`, la plateforme et les client
+                   hints en « Windows » pour les rendre cohérents avec l'agent de
+                   bureau que la coque revendiquait. La coque revendique
+                   maintenant l'agent Android que la WebView annonce déjà ; poser
+                   cette empreinte par-dessus recréerait justement le mélange
+                   (page mobile servie, `navigator` de bureau) que Spotify appelle
+                   « votre navigateur n'est pas compatible » — le message de
+                   lecture désactivée. Elle reste nécessaire pour l'interface
+                   d'origine seule, qui sert la page de bureau (et son empreinte à
+                   elle est injectée plus haut). */
+                if (uiMode == MODE_ORIGINAL && identityScript.isNotEmpty()) {
                     view.evaluateJavascript(identityScript, null)
                 }
                 injectViewportScript()
@@ -880,14 +886,32 @@ class MainActivity : AppCompatActivity() {
     fun currentUiMode(): String = uiMode
 
     /**
-     * L'interface d'origine a besoin du même agent que l'application d'origine :
-     * c'est la page **bureau** de Spotify qu'elle habille (l'ancien script en
-     * dépendait totalement : sélecteurs `#Desktop_LeftSidebar_Id`,
-     * `data-testid=tracklist-row`, barre de lecture `aside`). La page web mobile
-     * est le seul mode qui demande un agent Chrome Android.
+     * **Quel agent pour quel mode** — et c'est cet agent qui décide, côté
+     * Spotify, quelle page est servie.
+     *
+     * L'interface d'origine a besoin de la page **bureau** (l'ancien script en
+     * dépendait totalement : `#Desktop_LeftSidebar_Id`, `data-testid=tracklist-row`,
+     * barre de lecture `aside`) et de la géométrie 1920×1080 que son empreinte
+     * impose elle-même.
+     *
+     * La coque maison, elle, est dessinée pour la **largeur du téléphone** : ses
+     * paliers (`76-device.css`, en 360 · 412 · 480 px), ses feuilles modales et
+     * ses repères (`now-playing-widget`, `playback-progressbar`) sont ceux de la
+     * page mobile. Lui annoncer Chrome Windows tout en la mettant en page sur
+     * 412 px — ce que faisait la 2.11.19, `MODE_INJECT` demandant l'agent de
+     * bureau — fait servir une mise en page pensée pour 1280 px et plus dans un
+     * écran de 412 px : la grille est rognée des deux tiers et les commandes de
+     * la barre de bureau tombent hors écran (`control-button-skip-forward 62px
+     * dépasse=75`, relevé par la sonde Chrome du 26/09). C'est ce que l'auteur
+     * du signalement voyait depuis trois versions : « clique sur une playlist →
+     * pas d'affichage, ou juste une image buggée », et « le lecteur ne fait
+     * rien ».
+     *
+     * Donc : agent mobile pour la coque comme pour le mode Spotify, agent de
+     * bureau pour l'interface d'origine seule.
      */
     private fun userAgentFor(mode: String): String =
-        if (mode == MODE_NATIVE) MOBILE_UA else DESKTOP_UA
+        if (mode == MODE_ORIGINAL) DESKTOP_UA else MOBILE_UA
 
     /** Le script injecté selon le mode choisi. */
     private fun scriptFor(mode: String): String = when (mode) {

@@ -3829,3 +3829,77 @@ l'appareil de l'utilisateur — c'est lui qui a signalé le défaut, c'est lui q
 le validera. Et la `mediaSession` de la page réelle n'existe que si Spotify a de
 quoi jouer : sur une page sans session, la coque retombe sur ses autres chemins
 (boutons, clavier), ce que les sondes mesurent séparément.
+
+---
+
+## §55 — L'agent et la page ne se correspondent plus (v2.11.20)
+
+Le signalement tenait en deux lignes : « le lecteur ne fait rien » et « onglet
+bibliothèque → une playlist → pas d'affichage, ou juste une image buggée ». Ni la
+coque ni ses testids n'y étaient pour quelque chose : **l'application demandait
+à Spotify la page du bureau, et la mettait en page sur la largeur du
+téléphone.**
+
+Le choix est dans `MainActivity.userAgentFor` : depuis la 2.11.18,
+`MODE_INJECT` (notre coque) recevait `DESKTOP_UA`, `MOBILE_UA` n'étant réservé
+qu'au mode natif. Et `FAKE_DESKTOP_VIEWPORT = false` : la géométrie de 1920 px
+que l'empreinte d'origine utilise pour *loger* cette page n'est pas posée.
+Résultat mesuré par la sonde Chrome : une mise en page conçue pour 1280 px et
+plus dans 412 px — `div 3830px dépasse=3404`, `control-button-skip-forward 62px
+dépasse=75`, `coupes-par-un-parent: div 412<555 (35%)`. Une playlist ouverte
+depuis la bibliothèque n'est alors plus qu'un en-tête et sa pochette : le reste de
+la grille est hors champ. Et les commandes de la barre de bureau tombent à
+droite, hors de l'écran : le bouton existe, l'appui n'y parvient pas.
+
+`src/original/README.md` posait la règle sans que personne n'en tire la
+conséquence : l'interface d'origine habille la page **bureau** *parce qu'elle
+croit* à un écran 1920×1080 ; « la coque maison met la page en page sur la
+largeur réelle du téléphone ». Les deux ensemble, c'était le défaut. La §43
+avait pourtant déjà touché ce fil en retirant l'imposture de géométrie — sans
+retirer l'agent avec.
+
+### Ce qui est changé
+
+1. `userAgentFor` : `DESKTOP_UA` pour `MODE_ORIGINAL` **seule** ; la coque et le
+   mode natif reçoivent `MOBILE_UA`. Spotify sert alors
+   `mobile-web-player.447f0d93.js`, la page pensée pour la largeur du
+   téléphone — vérifié en CI : `mobile : 200, 309 052 o, 6 scripts`, et côté
+   DRM `widevine=ok / MediaKeys=function` avec cet agent, donc la lecture n'est
+   pas bloquée pour autant.
+2. L'empreinte Windows (`spotiduck-identity.js`, `navigator.userAgent`,
+   `platform: Win32`, client hints) n'est plus injectée que pour l'interface
+   d'origine. La laisser sur la coque reviendrait à servir la page mobile en
+   affirmant être un navigateur de bureau — le mélange précis que Spotify
+   appelle « votre navigateur n'est pas compatible », avec le message de lecture
+   désactivée qui va avec.
+3. La feuille met désormais la barre de Spotify de côté **par son repère**, plus
+   par son étiquette : `aside`, `footer` et `div` portant
+   `data-testid="now-playing-bar"`. La page mobile ne loge pas sa barre dans un
+   `<aside>` ; l'ancienne règle ne la touchait pas, et sa barre — avec ses
+   commandes — réapparaissait sous la nôtre.
+
+### Et la vérification, dans l'ordre
+
+* La sonde de CI (`tools/probe-coop.mjs`) **mesure maintenant la configuration
+  livrée** : agent mobile, meta `device-width`, notre coque, sur la vraie page
+  (`coque-mobile`). Elle ne peut plus valider en silence une page que le
+  téléphone ne reçoit pas — c'était exactement l'angle mort des trois versions
+  précédentes, où le feu vert voulait dire « correct, dans une configuration
+  qui n'existe pas ».
+* Règle dure nouvelle (la sixième) : un élément de la page **plus large que
+  l'écran d'un quart ou plus**, sans ancêtre qui le rogne, fait échouer le run —
+  c'est la signature d'une page de bureau dans un écran de téléphone. Les
+  débordements voulus (carrousels) ne sont pas comptés, ni les éléments fixes.
+* Les quatre garde-fous d'audit vérifiés par `node tools/regress-audit.mjs`
+  (**37/37**) : agent par mode, empreinte limitée à l'interface d'origine,
+  mise de côté de la barre sur les trois étiquettes, sonde mesurant l'agent de
+  la coque. Un garde-fous plus ancien, qui vérifiait l'agent d'origine en
+  collant à une formulation précise, a été réécrit : il serait mort à la
+  première reformulation — et c'est bien ainsi que la régression est passée.
+
+### Ce qui n'est pas vérifiable ici
+
+Le téléphone reste le seul endroit où la **page mobile connectée** se mesure :
+largeur réelle de mise en page après le changement d'agent, positions des
+commandes, et surtout l'appui qui doit enfin agir. La sonde prouve la
+configuration et la géométrie, pas la session.
