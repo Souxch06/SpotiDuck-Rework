@@ -3942,3 +3942,41 @@ millisecondes — la coque mesure déjà l'unité, elle doit la passer au moteur
 3) `Net`/`Api` qui devinent leurs jetons pourraient lire `Engine.tokens()` ;
 4) l'affichage, repris plus tard — la page de bureau dans 412 px (§55) garde son
 chiffre à faire tomber à zéro.
+
+## §57 — La touche du bas ne fait rien : deux maillons qui mentent sur leur succès (v2.11.22)
+
+Remonte de l'utilisateur après la 2.11.21 : « icône en bas de l'écran, les touches ne
+fonctionnent pas ». Deux fautes, toutes deux introduites la veille, et toutes deux du
+même genre — **un maillon qui déclare un succès sans avoir agi** :
+
+1. **le capteur du moteur détournait le trafic de la page.** Le bloc d'origine renvoyait
+   toute URL contenant `connect-state` vers `mngFetch`, donc vers `HttpURLConnection` du
+   pont : plus d'`AbortSignal`, pas de streaming, des en-têtes réécrits. Dans
+   l'application d'origine c'était son lecteur entier ; ici la coque n'a besoin que des
+   **jetons**. Le bloc `capteur` s'arrête donc à la ligne d'origine qui précède le
+   `try { let resp;` et se ferme par une ligne de la coque (`return oriFetch.apply(…)`).
+   Le verrou du bloc porte sur le corps recopié ; la décision de ne pas intercepter est
+   écrite dans le commentaire de l'outil.
+2. **`Engine.toggle` comptait l'appel comme un appui.** `actPlayPause` de l'original
+   répond « oui » même quand sa règle d'icône décide de ne rien presser — et la coque,
+   croyant la commande faite, **renonçait à son propre secours** (`mediaToggle` sur
+   l'élément). Le module `Engine` vérifie maintenant l'événement : un écouteur en capture
+   posé sur le bouton ne le quitte que si l'appui est réellement parti (`pressed`).
+   Et la commande `playFromUri` passe **après** les deux voies vérifiées, en répondant
+   `false` : un envoi réseau ne prouve rien sur l'état de la page, c'est le veilleur
+   (`Auto`, `fallback`) qui juge.
+
+**Ordre des secours de `Spotify.playPause`** : candidats de markup de la coque →
+`actPlayPause` d'origine (appui prouvé) → l'élément `<audio>` → l'API Connect. Cet ordre
+est une décision et le garde-fou la vérifie.
+
+**Vérifications** : audit groupe 11 (les six maillons de la chaîne appui → état →
+Android : spy de l'appui, ordre des secours, absence de détourage, injection du moteur
+avant l'identité et la page, verrous des huit blocs, minuteries déduites d'un seul
+rapport) · `regress-audit` **43/43**, dont cinq cas écrits pour ces deux fautes (retirer
+le spy, sauter le moteur, croire l'envoi réussi, réintercepter le trafic, injecter le
+moteur trop tard) · moteur 29/29 · smoke 154/154 · `npm run android` 6/6.
+
+Ce que la CI ne dira pas : si la touche agit **chez toi**, connectée — le bundle de la
+page dépend de la session. Ce qu'elle dira : que la chaîne est entière et que la coque
+ne se ment pas à elle-même.

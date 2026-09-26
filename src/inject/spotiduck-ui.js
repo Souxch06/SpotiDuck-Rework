@@ -712,13 +712,31 @@
         liked: !!State.liked,
       });
     },
-    /* Un appui via le moteur : `actPlayPause` est jugé sur l'icône, et répond
-       faux si le bouton d'origine n'est pas là — la coque reprend alors. */
+    /* Un appui **vraiment** obtenu du moteur, et rien d'autre.
+     *
+     * `actPlayPause` de l'original répond « oui » même quand il ne presse pas :
+     * sa règle est « icône courte et on veut jouer → je presse ; icône longue
+     * et on veut la pause → je presse ; sinon je ne touche à rien ». Compter une
+     * fonction qui ne lève pas comme une réussite, c'est exactement le mensonge
+     * qui fait « la touche du bas ne fait rien » : la coque croit avoir commandé,
+     * renonce à son propre secours, et l'affichage optimiste reste seul à dire
+     * que ça joue. On vérifie donc l'**appui**, pas l'appel : un écouteur en
+     * capture ne quitte le bouton que si l'événement est réellement parti. */
     toggle: function (want) {
       var e = Engine.get();
       if (!e) return false;
       if (!Engine.sawButton()) return false;
-      return e.call("actPlayPause", !!want);
+      var el = Engine._btn;
+      if (!el || el.disabled === true) return false;
+      var pressed = false;
+      var spy = function () { pressed = true; };
+      try { el.addEventListener("click", spy, true); } catch (err) { return false; }
+      try {
+        e.call("actPlayPause", !!want);
+      } finally {
+        try { el.removeEventListener("click", spy, true); } catch (err) {}
+      }
+      return pressed;
     },
     /* L'URI du contexte affiché — `spotify:playlist:…`, `spotify:album:…`.
        C'est ce que l'application d'origine envoie à `playFromUri`, et le seul
@@ -732,7 +750,11 @@
       var uri = e && Engine.contextUri();
       if (!uri) return false;
       if (!e.tokens().device) return false; /* le capteur n'a encore rien vu */
-      return e.playUri(uri);
+      /* La commande part, mais rien ne dit à la coque qu'elle a été servie :
+         elle répond **faux** et laisse le watch juger la page. C'est le veilleur
+         (`Auto`, `fallback`) qui dira si la piste a démarré — jamais l'envoi. */
+      e.playUri(uri);
+      return false;
     },
     tokens: function () {
       var e = Engine.get();
@@ -1116,11 +1138,17 @@
          sont exactement ceux de l'application d'origine ; l'élément `<audio>`
          reste le secours de la coque. */
       if (want !== undefined && Engine.toggle(want)) return true;
-      if (want === true && Engine.playContext()) return true;
       /* Aucun bouton vivant : on agit sur l'élément. C'est la même chose que
          pressez le bouton de Spotify du point de vue de la lecture. */
       var go = want === undefined ? null : !!want;
-      return this.mediaToggle(go === null ? !this.readPlaying() : go);
+      if (this.mediaToggle(go === null ? !this.readPlaying() : go)) return true;
+      /* Et si la page n'a **ni** bouton **ni** élément qui réponde, il reste la
+         voie de l'application d'origine : la commande à l'API Connect, par le
+         pont. Elle est jugée après les deux secours de la coque, pas avant —
+         une commande réseau ne prouve rien sur l'état de la page, elle ne peut
+         donc pas y couper court. */
+      if (want === true) return Engine.playContext();
+      return false;
     },
     next: function () {
       return this.click(SEL.next);

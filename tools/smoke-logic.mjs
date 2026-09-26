@@ -257,8 +257,26 @@ function load(sandbox) {
   const shell = readFileSync(join(root, "dist/spotiduck-ui.js"), "utf8");
   ok("la coque refuse de commander sans appareil capté",
     /if \(!e\.tokens\(\)\.device\) return false;/.test(shell), "porte absente de la coque");
-  ok("la coque tente le moteur avant son dernier secours",
-    /if \(want !== undefined && Engine\.toggle\(want\)\) return true;[\s\S]{0,120}if \(want === true && Engine\.playContext\(\)\) return true;/.test(shell));
+  /* L'ordre des secours est la décision, pas un détail : la voie de l'API ne
+     peut pas couper court aux deux voies vérifiées de la coque. */
+  const order = [
+    shell.indexOf("Engine.toggle(want)"),
+    shell.indexOf("this.mediaToggle(go === null"),
+    shell.indexOf("return Engine.playContext()"),
+  ];
+  ok("coque : markup → moteur → élément → API, dans cet ordre",
+    order.every((n) => n > 0) && order[0] < order[1] && order[1] < order[2], JSON.stringify(order));
+  ok("coque : un appui du moteur n'est cru réussi que s'il a pressé",
+    /addEventListener\("click", spy, true\)[\s\S]{0,200}return pressed;/.test(shell),
+    "sans ce spy, `actPlayPause` répond vrai même sans presser");
+  ok("coque : la commande API ne se fait jamais passer pour un succès",
+    /e\.playUri\(uri\);\s*return false;/.test(shell));
+  /* Et le capteur ne doit **pas** détourner le trafic de la page : c'est ce
+     détourage (flux d'état du lecteur via `HttpURLConnection`, sans
+     `AbortSignal`) qui rendait toutes les touches du bas muettes. */
+  ok("moteur : le capteur écoute, il n'intercepte pas",
+    !/resp\s*=\s*await mngFetch\(url,opts\)/.test(src) && /return oriFetch\.apply\(this, args\);/.test(src),
+    "la page doit rester maître de ses requêtes");
   ok("l'état mesuré est bien repassé au moteur à chaque appui",
     /Engine\.feed\(\);\n\s*if \(!Spotify\.playPause\(want\)\)/.test(shell));
 }

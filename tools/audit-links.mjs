@@ -293,6 +293,7 @@ for (const anchor of ["data-testid=\"home-page\"", "#main-view", "main[data-test
    cas du 24/09 : écran noir sous notre barre) doit ramener à notre coque — la
    seule dont on sait qu'elle affiche la page — et non laisser l'utilisateur
    devant un écran vide sans issue. */
+const bridgeSource = read("android/app/src/main/java/com/spotiduck/app/Bridge.kt");
 const activitySource = read("android/app/src/main/java/com/spotiduck/app/MainActivity.kt");
 if (!/checkContentUsable/.test(activitySource)) {
   errors.push("l'application ne vérifie plus que la page affiche quelque chose : un écran vide ne serait plus rattrapé");
@@ -1981,6 +1982,75 @@ for (const m of libraryCode.matchAll(/(?:Settings|this)\.labels\[([^\]]+)\]/g)) 
   }
   if (!/d\u00e9passe|trop large pour l'\u00e9cran/.test(probe)) {
     errors.push("la sonde de CI n'a plus de règle « mise en page trop large pour l'écran » : le défaut de la 2.11.19 redeviendrait invisible");
+  }
+}
+
+/* --------------------------------------------------------------------------
+   11. La chaîne de lecture, de l'appui à Android. Elle traverse quatre
+   fichiers qui ne s'importent jamais entre eux (coque → pont Kotlin → moteur
+   d'origine → notification), donc **rien** d'autre que ce groupe ne la voit.
+   Elle a cassé deux fois de la même manière : un maillon qui croit avoir
+   réussi sans avoir agi (2.11.19 : le bouton `disabled` ; 2.11.21 : l'appel
+   `actPlayPause` compté comme un appui), et un maillon qui détourne le trafic
+   de la page pour son propre compte (la 2.11.21, précisément : le capteur
+   renvoyait le flux d'état du lecteur par `HttpURLConnection` — plus aucune
+   touche du bas ne répondait).
+   -------------------------------------------------------------------------- */
+{
+  /* La source, pas le bundle : `regress-audit` mutera ces fichiers pour prouver
+     que ces garde-fous tombent — et un contrôle qui lit `dist/` ne verrait
+     jamais la main mise sur `src/`. */
+  const shell = read("src/inject/spotiduck-ui.js");
+  const kt = activitySource;
+  /* 1 · la porte du moteur doit juger l'appui, pas l'appel. */
+  if (!/addEventListener\("click", spy, true\)/.test(shell) || !/return pressed;/.test(shell)) {
+    errors.push(
+      "`Engine.toggle` ne vérifie plus que le bouton a réellement reçu l'événement : un `actPlayPause` qui ne presse rien sera cru réussi, et la coque renoncera à son propre secours"
+    );
+  }
+  /* 2 · l'ordre des secours, qui est une décision. */
+  const iToggle = shell.indexOf("Engine.toggle(want)");
+  const iMedia = shell.indexOf("this.mediaToggle(go === null");
+  const iApi = shell.indexOf("return Engine.playContext()");
+  if (!(iToggle > 0 && iMedia > iToggle && iApi > iMedia)) {
+    errors.push("l'ordre markup → moteur → élément → API Connect n'est plus tenu (la voie réseau ne doit jamais couper court aux voies vérifiées)");
+  }
+  if (!/e\.playUri\(uri\);\s*return false;/.test(shell)) {
+    errors.push("`Engine.playContext` annonce un succès sur un simple envoi : plus rien ne jugera la page après la commande API");
+  }
+  /* 3 · le capteur écoute, il n'intercepte pas. */
+  const logic = read("dist/spotiduck-logic.js");
+  if (/resp\s*=\s*await mngFetch\(url,opts\)/.test(logic) || !/return oriFetch\.apply\(this, args\);/.test(logic)) {
+    errors.push(
+      "le capteur du moteur intercepte à nouveau le trafic `connect-state` de la page : le flux d'état du lecteur passe par le pont, `AbortSignal` et le streaming disparaissent — « les touches du bas ne font plus rien »"
+    );
+  }
+  /* 4 · le moteur est posé avant la page, sinon il n'a rien à capter. */
+  const iLogic = kt.indexOf("view.evaluateJavascript(logicScript, null)");
+  const iIdentity = kt.indexOf("view.evaluateJavascript(identityScript, null)");
+  if (!(iLogic > 0 && iIdentity > iLogic)) {
+    errors.push("le moteur n'est plus injecté **avant** l'identité et la page dans `onPageStarted` : le `Client-Token` et l'appareil de la session auront déjà été émis, et `playFromUri` n'aura pas d'appareil où commander");
+  }
+  if (!/readAsset\("spotiduck-logic\.js"\)/.test(kt)) {
+    errors.push("`MainActivity` ne lit plus l'asset `spotiduck-logic.js` : la coque retombe sur le seul markup de Spotify");
+  }
+  /* 5 · le verrou du corps repris, pas de la formulation : le capteur est
+     désormais suivi d'une ligne de la coque, et cette ligne doit rester la
+     seule qu'on ait ajoutée à un bloc d'origine. */
+  const locksPath = "tools/build-logic.locks.json";
+  if (existsSync(join(root, locksPath))) {
+    const locks = JSON.parse(read(locksPath)).blocks || {};
+    for (const name of ["état", "capteur", "playFromUri", "manageWake", "trigUnlock", "act", "manageAll", "updMedia"]) {
+      if (!locks[name] || locks[name].md5 === "0000000000") {
+        errors.push(`le verrou du bloc d'origine « ${name} » n'est pas posé : \`node tools/build-logic.mjs\` a été poussé sans sa relecture`);
+      }
+    }
+  } else {
+    errors.push("`tools/build-logic.locks.json` est absent : rien ne garantit que le moteur soit encore du code d'origine");
+  }
+  /* 6 · le rapport d'état, un seul maître. */
+  if (!/fun recMediaStatus\(/.test(bridgeSource) || !/manageTSleep\(/.test(bridgeSource)) {
+    errors.push("le pont ne déduit plus les minuteries de l'état rapporté : la coque et le moteur devraient commander chacun de leur côté");
   }
 }
 

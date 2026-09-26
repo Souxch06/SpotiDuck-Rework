@@ -64,9 +64,19 @@ const SLICES = [
   },
   {
     name: "capteur",
-    why: "a volé dans le trafic de la page : `spotDevId`, `spotCliToken`, `spotAuthToken`, `currUri`, plus le routage `connect-state` par le pont et le rechargement sur « Player Locked »",
+    why: "lit dans le trafic de la page `spotDevId`, `spotCliToken`, `spotAuthToken`, `currUri`, et l'état de lecture posé par la page elle-même",
     from: "window.hasVid=function(){",
-    to: "window.playFromUri = function",
+    /* **Arrêté là où l'original commençait à détourner.** Le bloc d'origine
+       renvoyait ensuite toute URL contenant `connect-state` vers `mngFetch` —
+       donc le flux d'état du lecteur de Spotify passait par `HttpURLConnection`
+       du pont : plus d'`AbortSignal`, plus de streaming, des en-têtes réécrits.
+       Dans l'application d'origine, c'était sa page et son lecteur ; ici, la
+       coque a besoin des **jetons**, pas du détourage — et le détourage rend
+       exactement le symptôme « les touches du bas ne font plus rien ». Le bloc
+       se termine donc par une ligne de la coque (voir `close`) qui laisse la
+       page maître de son propre trafic. */
+    to: "  try { let resp;",
+    close: "\n  /* Coque : la page garde son trafic. `mngFetch` reste utilisé par\n     `playFromUri` (bloc suivant), qui est une commande de la coque. */\n  return oriFetch.apply(this, args);\n};\n",
   },
   {
     name: "playFromUri",
@@ -151,11 +161,8 @@ function cut(src, slice) {
   const last = src.indexOf(slice.to, first);
   if (last < 0) throw new Error(`fin « ${slice.to} » introuvable après ${slice.name}`);
   let body = src.slice(first, last);
-  if (slice.keep) {
-    if (!body.endsWith(slice.keep)) throw new Error(`${slice.name} : la fin attendue (${slice.keep}) n'est plus là`);
-  } else {
-    body = body.replace(/\s+$/, "");
-  }
+  body = body.replace(/\s+$/, "");
+  if (slice.close) body = body + "\n" + slice.close.trim();
   return body;
 }
 

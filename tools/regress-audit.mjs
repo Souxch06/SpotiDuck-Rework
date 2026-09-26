@@ -19,6 +19,7 @@ const files = {
   kt: "android/app/src/main/java/com/spotiduck/app/MainActivity.kt",
   base: "src/inject/10-base.css",
   probe: "tools/probe-coop.mjs",
+  logi: "dist/spotiduck-logic.js",
 };
 const originals = {};
 for (const k of Object.keys(files)) originals[k] = readFileSync(join(root, files[k]), "utf8");
@@ -52,11 +53,19 @@ const CASES = [
   ["base", 'html.sd-mobile footer[data-testid="now-playing-bar"],\nhtml.sd-mobile div[data-testid="now-playing-bar"] {', "html.sd-mobile aside[data-testid=\"now-playing-bar\"] {", "la page du téléphone"],
   ["probe", 'setUserAgent(target.agent === "tel" ? MOBILE_UA : DESKTOP_UA)', "setUserAgent(DESKTOP_UA)", "ne choisit plus l'agent par cible"],
   ["probe", 'label: "coque-bureau"', 'label: "coque-bureau-supprime"', "plus de contexte"],
+  /* La chaîne de lecture, maillon par maillon (groupe 11). Les deux premiers
+     cas rejouent les deux vrais défauts de la 2.11.21 : un appui cru réussi
+     sans appui, et le trafic de la page détourné par le capteur. */
+  ["ui", 'return pressed;', "return true;", "ne vérifie plus que le bouton a réellement reçu"],
+  ["ui", '      if (want !== undefined && Engine.toggle(want)) return true;\n', "", "markup → moteur → élément → API"],
+  ["ui", "e.playUri(uri);\n      return false;", "e.playUri(uri);\n      return true;", "annonce un succès sur un simple envoi"],
+  ["logi", "  return oriFetch.apply(this, args);", "  resp = await mngFetch(url,opts);\n  return oriFetch.apply(this, args);", "intercepte à nouveau le trafic"],
+  ["kt", 'view.evaluateJavascript(logicScript, null)', '/* retiré */', "n'est plus injecté **avant**"],
   /* Les secours de lecture de la 2.11.19 (« les boutons ne font rien »). */
   ["ui", "mediaEl: function () {", "mediaElInutilise: function () {", "n'a plus de mediaEl"],
   ["ui", "var sess = this.session();", "var sess = null;", "ne consulte plus ce que la page joue"],
   ["ui", "if (!input) return this.mediaSeek(ms);", "if (!input) return false;", "refuse de chercher"],
-  ["ui", "return this.mediaToggle(go === null ? !this.readPlaying() : go);", "return false;", "plus de secours sur l'\u00e9l\u00e9ment"],
+  ["ui", "if (this.mediaToggle(go === null ? !this.readPlaying() : go)) return true;", "if (false) return true;", "plus de secours sur l'\u00e9l\u00e9ment"],
   ["ui", "          if (btn.disabled) btn.disabled = false;", "          btn.disabled = !s.hasTrack;", "verrouill"],
   ["ui", "var dom = Spotify.readPlaying();", "var dom = State.playing;", "état optimiste"],
   ["shell", "html.sd-mobile .sd-iconbtn.is-unavailable {\n  opacity: 0.4;\n  pointer-events: auto;\n}", "html.sd-mobile .sd-iconbtn.is-unavailable {\n  opacity: 0.4;\n}", "pressable"],
