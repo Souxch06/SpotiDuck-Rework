@@ -75,6 +75,9 @@
     /** Une page qui obéit solde les blâmes : on ne parle pas d'une panne qui n'est plus là. */
     blameClear: function () {
       this._blames = 0;
+      /* La page vient d'obéir : le rapport n'a plus de raison d'être affiché, et
+         une bande qui survit à son propre sujet est un mensonge d'écran. */
+      if (Content.alert && !Content.alert.hidden) Content.hideAlert();
     },
     /**
      * **Dernier recours : le clavier du lecteur.**

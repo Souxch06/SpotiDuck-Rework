@@ -5949,7 +5949,7 @@ check("le relais du lecteur mobile est reconnu à son libellé", () => {
    est donc le seul canal qui reste entre la panne d'un téléphone et une correction :
    il doit s'ouvrir tout seul, contenir la ligne `commandes`, et ne pas jacter au
    premier succès. */
-check("deux commandes sans effet ouvrent la carte du rapport", () => {
+await checkAsync("deux commandes sans effet ouvrent la carte du rapport", async () => {
   const A = SD._internals.Actions;
   const C = SD._internals.Content;
   /* La carte est posée dans **notre couche** (`.sd-layer`) : vider le `<body>`
@@ -5977,12 +5977,17 @@ check("deux commandes sans effet ouvrent la carte du rapport", () => {
     const rapport = carte.querySelector(".sd-content-alert-diag").textContent;
     assert(/commandes /.test(rapport), "le rapport ne contient pas la ligne « commandes » : il ne dirait pas quels maillons répondent");
     assert(/relais (proposé|absent)/.test(rapport), "le rapport ne dit pas si le relais « Écouter sur cet appareil » est proposé : la panne resterait indécidable entre un autre appareil et une absence de session");
-    assert(/Le lecteur ne r\u00e9pond pas/.test(carte.querySelector(".sd-content-alert-title").textContent), "titre incohérent avec la panne signalée");
+    assert(/Le lecteur ne répond pas/.test(carte.querySelector(".sd-content-alert-title").textContent), "titre incohérent avec la panne signalée");
     assert(carte.querySelector(".sd-content-alert-copy"), "plus de bouton pour copier : la carte serait un texte à recopier à la main");
     A.blameClear();
     C.hideAlert();
     A.blame();
     assert(alerte().hidden, "le compteur n'a pas été soldé par un succès : la carte se rouvrirait trop tôt");
+    /* Page vide : la modale plein écran redevient la bonne forme — rien d'autre ne
+       mérite les appuis sur un écran qui n'affiche rien. */
+    C.showAlert("test");
+    assert(!C.alert.classList.contains("sd-content-alert-compact"), "la carte « page vide » a hérité du mode bande : elle ne couvrirait plus ce qu'elle remplace");
+    C.hideAlert();
     return "carte ouverte à la deuxième panne, rapport copiable";
   } finally {
     A.blameClear();

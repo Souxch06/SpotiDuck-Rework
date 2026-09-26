@@ -2112,6 +2112,29 @@ for (const m of libraryCode.matchAll(/(?:Settings|this)\.labels\[([^\]]+)\]/g)) 
     }
   }
 
+  /* 5quater · une carte de diagnostic ne doit jamais remplacer ce qu'elle
+     diagnostique. La 2.11.28 ouvrait le rapport « le lecteur ne répond pas » en
+     modale plein écran : la sonde de CI a mesuré nos propres boutons devenus morts
+     (`button.sd-iconbtn recouvert par div.sd-content-alert`, deux cibles) — la
+     carte tuait le lecteur qu'elle était chargée d'accuser. Les quatre fils
+     ci-dessous sont la bande, sa géométrie, et ses deux façons de disparaître. */
+  {
+  if (!runtime.includes('this.alert.classList.toggle("sd-content-alert-compact", !!transport)')) {
+      errors.push("la carte du rapport de commande ne se met plus en bande non modale : elle recouvrira l'écran et avalera les appuis du lecteur qu'elle est censée diagnostiquer");
+    }
+    const cssAlert = read("src/inject/70-original.css");
+    const compact = (cssAlert.match(/\.sd-content-alert-compact \{[\s\S]{0,260}?\}/) || [""])[0];
+    if (!/--sd-bottom/.test(compact) || /inset: 0/.test(compact)) {
+      errors.push("la règle `.sd-content-alert-compact` n'est plus calée au-dessus de l'espace du lecteur : la bande redeviendrait un voile plein écran (régression mesurée par la sonde en 2.11.28)");
+    }
+    if (!/clearTimeout\(this\._stuckT\);\s*this\._stuckT = 0;/.test(runtime)) {
+      errors.push("`hideAlert` n'annule plus l'échéance de la bande : une fermeture à la main serait suivie d'une réouverture fantôme, ou l'inverse");
+    }
+    if (!/if \(Content\.alert && !Content\.alert\.hidden\) Content\.hideAlert\(\);/.test(runtime)) {
+      errors.push("un succès ne referme plus la carte du rapport : la bande survivrait à sa propre raison d'être, par-dessus un lecteur qui répond");
+    }
+  }
+
   /* 6 · le rapport d'état, un seul maître. */
   if (!/fun recMediaStatus\(/.test(bridgeSource) || !/manageTSleep\(/.test(bridgeSource)) {
     errors.push("le pont ne déduit plus les minuteries de l'état rapporté : la coque et le moteur devraient commander chacun de leur côté");

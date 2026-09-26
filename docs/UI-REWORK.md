@@ -4379,3 +4379,45 @@ Ce qui reste hors de portée d'ici : le bac n'a pas de réseau vers `open.spotif
 donc faits **sans session**, ce qui explique des `429` et le `titre=""` du zap.
 D'où la carte : pour la première fois, un téléphone qui ne répond pas peut envoyer
 lui-même la phrase exacte qui dira quel maillon a manqué, sans rien recopier.
+
+## §64 — La carte qui faisait taire le lecteur (v2.11.29)
+
+Six heures après la 2.11.28, un contrôle de la CI est passé en échec, et il avait
+raison. Message relevé sur deux cibles :
+
+```
+accueil : l'appui ne parvient pas au bouton :
+  button.sd-iconbtn recouvert par div.sd-content-alert   (×3)
+page-fr : idem
+```
+
+C'était ma carte du diagnostic. Je l'avais branchée sur la deuxième commande restée
+sans effet — donc, sur une page qui affiche très bien mais dont les commandes ne
+répondent pas, elle s'ouvrait… en **modale plein écran**, posée sur la barre
+d'onglets et sur le lecteur. Comme notre couche donne `pointer-events: auto` à ses
+enfants directs, la carte avalait tous les appuis : **la coque devenait muette parce
+qu'elle signalait qu'elle était muette.** Un cercle que seul un écran réel pouvait
+montrer — jsdom ne hit-teste pas, et le banc est resté vert pendant que la sonde
+rougeait.
+
+Cinq choses tirées de là, écrites dans le dépôt pour qu'elles ne dépendent plus de
+la chance :
+
+| Règle | Pourquoi |
+| --- | --- |
+| une carte de diagnostic ne remplace jamais ce qu'elle diagnostique | la bande se cale `inset: auto … calc(var(--sd-bottom) + 8px) …`, au-dessus de l'espace du lecteur, jamais `inset: 0` |
+| elle se referme seule (45 s) et sur le premier succès | `blameClear` appelle `hideAlert` ; `hideAlert` annule l'échéance — sinon une fermeture à la main serait suivie d'une réouverture fantôme |
+| `Recharger` disparaît en mode bande | recharger une page qui affiche n'est pas la réponse à une commande muette |
+| la forme plein écran reste pour la page vide | là, rien d'autre ne mérite les appuis : la modale est la bonne forme |
+| quatre verrous d'audit, chacun coupé dans `regress-audit` | dont un sur la **feuille CSS** elle-même : la classe sans la règle correspondante ne protège de rien |
+
+Pour que le cas soit rejouable, `tools/regress-audit.mjs` a gagné une entrée
+`orig:` vers `src/inject/70-original.css` — sans fichier enregistré dans sa table,
+un cas qui mute du CSS n'est rejoué **nulle part** et tombe donc pour la mauvaise
+raison (cinq autres feuilles y étaient déjà, celle-ci manquait).
+
+Mesure : `check` 0/0 · portique 6/6 · banc **161/161** · moteur d'origine **30/30** ·
+audit 0/0 · **56/56** régressions. Et la leçon de méthode, qui vaut plus que le
+correctif : les annotations des sondeurs se lisent avec l'identifiant du *check-run*,
+pas celui du job — depuis que je les ouvre, c'est la deuxième fois qu'elles me
+reprennent, et les deux fois sur un défaut que **je** venais d'introduire.

@@ -159,6 +159,8 @@
 
     hideAlert: function () {
       document.documentElement.classList.remove("sd-content-blank");
+      clearTimeout(this._stuckT);
+      this._stuckT = 0;
       if (this.alert) this.alert.hidden = true;
     },
 
@@ -219,12 +221,28 @@
       $(".sd-content-alert-reload", this.alert).textContent = Settings.labels.reload;
       $(".sd-content-alert-copy", this.alert).textContent = Settings.labels.copyDiagnostic;
       $(".sd-content-alert-close", this.alert).textContent = Settings.labels.close;
+      /* La mode de présentation fait partie du diagnostic : une carte de commande
+         muette est une **bande**, posée dans la marge, qui laisse les appuis
+         parvenir au lecteur qu'elle accuse. En modale plein écran, elle tuait nos
+         propres boutons — mesuré par la sonde le 26/09 (« button.sd-iconbtn
+         recouvert par div.sd-content-alert »). */
+      this.alert.classList.toggle("sd-content-alert-compact", !!transport);
       this.alert.hidden = false;
       /* Le contenu peut encore arriver (un chargement lent, pas un échec) : on
          revérifie sans boucle serrée, et le panneau s'efface tout seul. Pour les
          commandes, rien de tel : la page peut très bien afficher pendant que la
          lecture ne répond pas — la carte ne se ferme donc que par la main. */
-      if (transport) return;
+      if (transport) {
+        /* Et elle se referme seule : une carte qui resterait serait pire que le
+           silence qu'elle remplace. Quarante-cinq secondes laissent le temps de
+           copier, pas celui d'oublier l'application sous une bande. */
+        var selfT = this;
+        clearTimeout(this._stuckT);
+        this._stuckT = setTimeout(function () {
+          selfT.hideAlert();
+        }, 45000);
+        return;
+      }
       var self = this;
       var tries = 0;
       (function recheck() {

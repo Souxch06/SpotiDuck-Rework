@@ -19,6 +19,9 @@ const files = {
   shell: "src/inject/20-shell.css",
   kt: "android/app/src/main/java/com/spotiduck/app/MainActivity.kt",
   base: "src/inject/10-base.css",
+  /* La feuille qui porte la carte de contenu (modale, puis bande depuis 2.11.29) :
+     sans entrée ici, un cas de régression qui mute du CSS n'est rejoué nulle part. */
+  orig: "src/inject/70-original.css",
   probe: "tools/probe-coop.mjs",
   logi: "dist/spotiduck-logic.js",
 };
@@ -94,6 +97,11 @@ const CASES = [
   ["ui", "        var relais = want ? Auto.maybeTakeover() : false;", "        var relais = false;", "relais n'est plus tenté"],
   ["ui", "      if (this._watchBar === bar) return;\n", "", "n'est plus rebranché"],
   ["ui", "        Content.commandFailure();\n", "", "n'ouvrent plus la carte du rapport"],
+  /* La bande non modale (2.11.29) : quatre fils, quatre coupes. */
+  ["ui", '      this.alert.classList.toggle("sd-content-alert-compact", !!transport);\n', "", "plus en bande non modale"],
+  ["orig", "  inset: auto var(--sd-safe-r) calc(var(--sd-bottom) + 8px) var(--sd-safe-l);", "  inset: 0;", "plein écran"],
+  ["ui", "      clearTimeout(this._stuckT);\n      this._stuckT = 0;\n", "", "échéance de la bande"],
+  ["ui", "      if (Content.alert && !Content.alert.hidden) Content.hideAlert();\n", "", "un succès ne referme plus la carte"],
   ["ui", "    awaitEngine: function (key, watch, ref, delay) {\n", "    awaitEngine: function () {\n", "plus d'`awaitEngine`"],
   ["logi", "  return oriFetch.apply(this, args);", "  resp = await mngFetch(url,opts);\n  return oriFetch.apply(this, args);", "intercepte à nouveau le trafic"],
   ["kt", 'view.evaluateJavascript(logicScript, null)', '/* retiré */', "n'est plus injecté **avant**"],
