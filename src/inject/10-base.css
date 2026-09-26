@@ -313,7 +313,15 @@ html.sd-mobile.sd-queue-open #Desktop_PanelContainer_Id {
    progress <input type=range> and every control we drive) but must not be
    visible. `display:none` would break Spotify's own layout maths, so we park
    it off-screen with a real (but empty) box. */
-html.sd-mobile aside[data-testid="now-playing-bar"] {
+/* Le 26/09, la coque demandait l'agent de bureau et se faisait donc servir la
+   page de bureau dans un écran de téléphone. Depuis, la page servie est celle
+   du mobile : sa barre n'est plus un `<aside>` mais un `<footer>` (ou un
+   `<div>`) portant le même repère. La règle doit suivre le **repère**, pas
+   l'étiquette — sinon la barre de Spotify réapparaît sous la nôtre, avec ses
+   propres commandes décalées, et nos appuis partent dans le vide. */
+html.sd-mobile aside[data-testid="now-playing-bar"],
+html.sd-mobile footer[data-testid="now-playing-bar"],
+html.sd-mobile div[data-testid="now-playing-bar"] {
   position: fixed !important;
   left: 0 !important;
   bottom: 0 !important;

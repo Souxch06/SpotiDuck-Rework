@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 import { readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 
+import { uiSource } from "./ui-source.mjs";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p) => readFileSync(join(root, p), "utf8");
 
@@ -40,7 +41,10 @@ const bridgeKt = read("android/app/src/main/java/com/spotiduck/app/Bridge.kt");
 const kotlinMethods = new Set(
   [...bridgeKt.matchAll(/@JavascriptInterface\s+fun\s+(\w+)/g)].map((m) => m[1])
 );
-const runtime = read("src/inject/spotiduck-ui.js");
+/* La coque est assemblee depuis src/inject/ui/ : lire lenveloppe ne verrait que le
+   marqueur, et l audit declarerait « plus de module X » alors que X existe. On passe
+   donc par le meme assembleur que la construction. */
+const runtime = uiSource(root);
 const usedBridgeNames = new Set();
 for (const m of runtime.matchAll(/Bridge\.call\(\s*"(\w+)"/g)) usedBridgeNames.add(m[1]);
 /* Les raccourcis (`mediaStatus`, `sleepLock`…) appellent `call("<nom>")` : on
@@ -55,7 +59,7 @@ for (const m of originalCalls.matchAll(/AndBridge\.(\w+)\s*\(/g)) usedBridgeName
    elle qui annonce l'état de connexion et qui demande le nettoyage de l'état du
    formulaire. Sans cette lecture, l'audit réclamerait la suppression de méthodes
    bien utilisées. */
-const nativeCalls = read("android/app/src/main/assets/native-mode.js");
+const nativeCalls = read("src/inject/native-mode.js");
 for (const m of nativeCalls.matchAll(/AndBridge\.(\w+)\s*\(/g)) usedBridgeNames.add(m[1]);
 
 for (const name of usedBridgeNames) {
@@ -293,6 +297,7 @@ for (const anchor of ["data-testid=\"home-page\"", "#main-view", "main[data-test
    cas du 24/09 : écran noir sous notre barre) doit ramener à notre coque — la
    seule dont on sait qu'elle affiche la page — et non laisser l'utilisateur
    devant un écran vide sans issue. */
+const bridgeSource = read("android/app/src/main/java/com/spotiduck/app/Bridge.kt");
 const activitySource = read("android/app/src/main/java/com/spotiduck/app/MainActivity.kt");
 if (!/checkContentUsable/.test(activitySource)) {
   errors.push("l'application ne vérifie plus que la page affiche quelque chose : un écran vide ne serait plus rattrapé");
@@ -606,7 +611,7 @@ if (!/PlayerWidget\.refresh/.test(service)) {
   errors.push("PlaybackService : le widget n'est plus redessiné quand la lecture change");
 }
 
-const nativeAsset = read("android/app/src/main/assets/native-mode.js");
+const nativeAsset = read("src/inject/native-mode.js");
 if (!/showUiChooser/.test(nativeAsset)) {
   errors.push("native-mode.js : plus rien n'ouvre le sélecteur d'interface (appui long)");
 }
@@ -759,8 +764,13 @@ if (origCss.length !== 6001 || !cssMd5.startsWith("13de5546d0")) {
 if (!/MODE_ORIGINAL/.test(activity) || !/scriptFor\(/.test(activity)) {
   errors.push("MainActivity : le script d'origine n'est plus chargé selon le mode choisi");
 }
-if (!/mode\s*==\s*MODE_NATIVE\)\s*MOBILE_UA\s*else\s*DESKTOP_UA/.test(activity.replace(/\s+/g, " "))) {
-  errors.push("MainActivity : l'agent de l'interface d'origine n'est plus l'agent bureau");
+/* La règle **quelle que soit sa forme** : ce que l'agent décide est vérifié au
+   groupe 10 (qui lit la fonction, pas une écriture précise). Ici on vérifie
+   seulement que le choix existe encore — un garde-fou collé à une seule
+   formulation meurt à la première réécriture, et c'est exactement comme ça que
+   la 2.11.19 a pu passer avec l'agent de bureau sur la coque. */
+if (!/private fun userAgentFor\(/.test(activity) || !/DESKTOP_UA/.test(activity) || !/MOBILE_UA/.test(activity)) {
+  errors.push("MainActivity : l'agent servi à la page n'est plus choisi selon le mode (la règle attendue est vérifiée au groupe 10)");
 }
 /* L'empreinte de navigateur : injectée au chargement, elle décide de la mise en
    page. Trois valeurs suffisent à la reconnaître, et l'application doit
@@ -809,10 +819,10 @@ if (!/request\.deny\(\)/.test(activity)) {
 if (!/VIEWPORT_META_JS/.test(activity) || !/device-width/.test(activity)) {
   errors.push("MainActivity : le meta viewport n'est plus forcé");
 }
-if (!/width=device-width/.test(read("src/inject/spotiduck-ui.js"))) {
+if (!/width=device-width/.test(runtime)) {
   errors.push("la couche injectée ne pose plus le meta viewport");
 }
-if (!/width=device-width/.test(read("android/app/src/main/assets/native-mode.js"))) {
+if (!/width=device-width/.test(read("src/inject/native-mode.js"))) {
   errors.push("le mode bêta ne pose plus le meta viewport");
 }
 
@@ -917,8 +927,72 @@ const libraryCode = stripComments(runtime);
 if (!/unitFactor: function/.test(libraryCode) || !/calibrate: function/.test(libraryCode)) {
   errors.push("l'unité du curseur de progression n'est plus mesurée : les durées peuvent redevenir 1000 fois trop grandes");
 }
-if (!/dur \/ factor\) \* 1000/.test(libraryCode) || !/pos \/ factor\) \* 1000/.test(libraryCode)) {
-  errors.push("la lecture de la position ne passe plus par l'unité mesurée");
+/* Le corps de `read()` et de `seek()` : la seule façon de vérifier que **tous**
+   les passages par le curseur passent bien par la conversion mesurée, au lieu
+   de multiplier ou diviser « à la main » à un endroit et pas à un autre (c'est
+   exactement ainsi que la lecture était juste et l'écriture fausse). */
+/* Un nom de fonction, vérifié **jusqu'à sa parenthèse** : `includes("function
+   mediaEl")` répondrait encore oui après un renommage en `mediaElAbsente`, et
+   un garde-fou qui ne tombe pas quand on renomme la fonction n'en est pas un. */
+const hasFn = (text, name) => {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(escaped + "\\s*\\(").test(text);
+};
+
+const bodyOf = (name) => {
+  const at = libraryCode.indexOf(name);
+  if (at < 0) return "";
+  const open = libraryCode.indexOf("{", at);
+  let depth = 0;
+  for (let i = open; i < libraryCode.length; i++) {
+    if (libraryCode[i] === "{") depth++;
+    else if (libraryCode[i] === "}") {
+      depth--;
+      if (depth === 0) return libraryCode.slice(open, i + 1);
+    }
+  }
+  return "";
+};
+/* `dur * 1000` vise **la** conversion à la main du curseur ; les bornes écrites
+   au pluriel (« mdur », « adur ») sont la lecture de l'élément qui joue, et ne
+   sont pas le même geste — d'où la frontière de mot. */
+const readBody = bodyOf("read: function");
+const seekBody = bodyOf("seek: function");
+if (
+  !/this\.ticksToMs\(dur\)/.test(readBody) ||
+  !/this\.ticksToMs\(pos\)/.test(readBody) ||
+  /(^|[^\w])dur \* 1000/.test(readBody) ||
+  /(^|[^\w])pos \* 1000/.test(readBody)
+) {
+  errors.push("la lecture de la position ne passe plus par l'unité mesurée (conversion à la main dans Spotify.read())");
+}
+const actionsSeekBody = bodyOf("seek: function (ms) {\n      var target");
+if (!/this\.msToTicks\(ms\)/.test(seekBody)) {
+  errors.push("le déplacement du curseur n'utilise plus la graduation lue : il viserait la mauvaise position sur un lecteur en millisecondes");
+}
+if (!/Spotify\.ticksToMs\(input\.value\)/.test(actionsSeekBody)) {
+  errors.push("la vérification après un déplacement du curseur relit la position sans la conversion mesurée");
+}
+if (!/this\.blame\(\)/.test(actionsSeekBody) || !/this\.settle\(300\)/.test(actionsSeekBody)) {
+  errors.push("un déplacement du curseur qui échoue ne le dit plus ni au diagnostic ni au doigt");
+}
+if (!/setTimeout\(function \(\) \{[\s\S]{0,400}\}, 400\)/.test(actionsSeekBody)) {
+  errors.push("le curseur n'attend plus la confirmation de Spotify : la barre de progression repartirait en arrière après un saut");
+}
+if (!/var value = this\.msToTicks\(ms\);/.test(seekBody) || /var value = /.test(seekBody.replace(/var value = this\.msToTicks\(ms\);/, ""))) {
+  errors.push("le déplacement du curseur recalcule la valeur à la main au lieu d'utiliser la conversion unique");
+}
+if (!/State\.anchorPos = Spotify\.ticksToMs\(input\.value\)/.test(libraryCode)) {
+  errors.push("l'ancre posée par le glisser du curseur ne lit plus la position dans l'unité mesurée");
+}
+if (/addEventListener\(\s*"input"\s*,\s*function \(e\)/.test(libraryCode)) {
+  errors.push("le glisser du curseur réécoute encore un <input> par copie : la mise à jour du curseur se fait à l'aveugle");
+}
+if (!/maxTicks: function/.test(libraryCode) || !/var max = this\.maxTicks\(\);/.test(seekBody)) {
+  errors.push("la graduation du curseur n'a plus de borne de repli : un curseur sans `max` rendrait toute recherche impossible");
+}
+if (!/return known > 0 \? this\.msToTicks\(known\) : 0;/.test(libraryCode)) {
+  errors.push("la borne de repli du curseur ne se convertit plus dans l'unité mesurée");
 }
 if (!/plausible: function/.test(libraryCode) || !/MAX_SECONDS: 12 \* 3600/.test(libraryCode)) {
   errors.push("les durées enregistrées ne sont plus contrôlées : une valeur absurde s'afficherait telle quelle");
@@ -1358,8 +1432,30 @@ if (!/@JavascriptInterface\s+fun session\(\): Boolean/.test(netBridgeKt) || !/fu
 if (!/scale: function/.test(libraryCode)) {
   errors.push("la graduation du curseur n'a plus de repère commun : lire et écrire pourraient diverger d'un facteur 1000");
 }
-if (!/var value = this\.scale\(\) === 1 \? ms : ms \/ 1000;/.test(libraryCode)) {
-  errors.push("le déplacement du curseur n'utilise plus la graduation lue : il viserait la mauvaise position sur un lecteur en millisecondes");
+/* **La durée du titre se lit à un seul endroit.** `UI.paintProgress`, les deux
+   gestes du curseur, la touche « fin » du clavier : partout où il faut savoir
+   combien dure le titre, c'est `trackDurationMs()` — sans quoi un pointeur
+   s'arrête au premier dixième, cherche dans un titre de trois heures, ou se
+   bloque à zéro quand la page n'a pas encore annoncé sa durée. */
+if (!/function trackDurationMs\(\)/.test(libraryCode)) {
+  errors.push("la durée du titre n'a plus de source unique : le curseur peut se figer ou chercher au-delà du morceau");
+}
+for (const need of [
+  "var total = s.duration > 0 ? s.duration : trackDurationMs();",
+  "var ms = ratio * trackDurationMs();",
+  "if (!trackDurationMs()) return;",
+  "Actions.seek(ev.key === \"Home\" ? 0 : trackDurationMs());",
+  "this.seek(clamp(Number(ratio) || 0, 0, 1) * trackDurationMs())",
+]) {
+  if (!libraryCode.includes(need)) {
+    errors.push(`un affichage ou un geste du curseur ne demande plus sa durée à trackDurationMs() : ${need}`);
+  }
+}
+if (!/function trackDurationMs\(\)[\s\S]{0,400}Spotify\.ticksToMs\(max\)/.test(libraryCode)) {
+  errors.push("trackDurationMs() ne convertit plus la graduation du curseur en millisecondes");
+}
+if (/ratio \* \(State\.duration \|\| 0\)/.test(libraryCode)) {
+  errors.push("un geste du curseur multiplie encore sa proportion par la durée annoncée toute seule");
 }
 if (
   !/var secondsBand = /.test(libraryCode) ||
@@ -1448,11 +1544,25 @@ if (!/blame: function \(\)/.test(stripComments(runtime)) || !/State\.title \? Se
   errors.push("le message ne distingue plus « rien ne joue » de « cette page n'expose pas la commande »");
 }
 for (const [appel, quoi] of [
-  ['this.fallback(" ", "playing", String(!want));', "lecture/pause"],
+  ['this.fallback(" ", "playing", ref);', "lecture/pause"],
   ['this.fallback("ArrowRight", "track");', "suivant"],
   ['this.fallback("ArrowLeft", "track");', "précédent"],
 ]) {
   if (!runtime.includes(appel)) errors.push(`${quoi} n'a plus de repli clavier : sur une page sans bouton vivant, le bouton ne ferait rien`);
+}
+/* Un appui = une commande. Le secours clavier ne doit jamais partir pendant
+   qu'une commande réseau roule : c'est précisément ce qui faisait « j'appuie sur
+   lire, la musique ne démarre pas » — la touche appuyait deux fois, une fois pour
+   lancer, une fois pour mettre en pause, dans le même tour de boucle. La garde est
+   donc un fil aussi solide que le repli lui-même. */
+if (!/if \(want && \(relais \|\| Engine\.inFlight\(\)\)\) \{[\s\S]{0,260}?this\.awaitEngine\(/.test(stripComments(runtime))) {
+  errors.push("le secours clavier n'est plus séquencé derrière la commande en cours : deux pilotes peuvent se contredire et annuler la lecture (défaut corrigé en 2.11.27)");
+}
+if (!/awaitEngine: function \(key, watch, ref, delay\)/.test(stripComments(runtime))) {
+  errors.push("plus d'`awaitEngine` : rien n'attend le résultat de la commande avant de la juger perdue, et le premier secours venu écrase la lecture");
+}
+if (!/verifyPlay: function \(ref\)/.test(stripComments(runtime)) || !/this\.verifyPlay\(ref\);/.test(runtime)) {
+  errors.push("plus de `verifyPlay` : un appui consommé par la page sera cru suffisant, alors qu'un bouton pressé n'est pas une musique qui joue");
 }
 if (!/transportNoTrack: "Rien ne joue/.test(runtime) || !/transportMissing: "Ces commandes ne répondent pas/.test(runtime)) {
   errors.push("les deux messages du transport ont changé de sens : l'utilisateur n'apprendrait plus pourquoi ça ne répond pas");
@@ -1578,6 +1688,457 @@ if (!/window\.__sdNavMark = "pose";/.test(probe) || !/opened\.recharge/.test(pro
 }
 if (!/const RETOUR_PROBE = \(\) => \{/.test(probe) || !/page\.evaluate\(RETOUR_PROBE\)/.test(probe) || !/Retour depuis une playlist/.test(probe)) {
   errors.push("la sonde ne mesure plus le retour : « le retour en arrière doit fonctionner » ne serait plus vérifié");
+}
+
+/* --------------------------------------------------------------------------
+   6. Les textes et les réglages : ce qui est promis doit exister.
+   Un libellé oublié dans la liste des textes ne se voit nulle part — ni à la
+   compilation (le fichier est un tout), ni au banc (le test lit la liste, pas
+   l'appel). Sur le téléphone, cela donne une bulle « undefined », une
+   « Notice indisponible » pour un simple rechargement, ou un bouton sans nom
+   pour un lecteur d'écran. Même risque pour les réglages : une clé que la
+   liste de sauvegarde oublie s'efface au redémarrage.
+   -------------------------------------------------------------------------- */
+/* Les listes ci-dessous sont lues dans le code sans ses commentaires : un mot
+   entre guillemets dans une explication ne doit pas compter comme une clé. */
+const labelsBlock = bodyOf("labels: {");
+const labelKeys = new Set([...labelsBlock.matchAll(/^\s*([a-zA-Z0-9_]+):/gm)].map((m) => m[1]));
+if (labelKeys.size < 40) {
+  errors.push(`la liste des textes n'a plus pu être lue entièrement (${labelKeys.size} libellés) : le contrôle des libellés est aveugle`);
+}
+/* Doublons dans la liste des textes : le second écrase le premier en silence,
+   et le premier devient introuvable — « Recharger » réclamait un libellé que
+   seul un doublon semblait fournir. */
+{
+  const once = new Set();
+  for (const m of labelsBlock.matchAll(/^\s*([a-zA-Z0-9_]+):/gm)) {
+    if (once.has(m[1])) errors.push(`deux libellés portent le même nom « ${m[1]} » : la première valeur est écrasée`);
+    once.add(m[1]);
+  }
+}
+/* `labels.` seul serait trop large (le module des repères a son propre tableau
+   `labels`) ; on ne surveille que les accès au règlage des textes. */
+for (const m of libraryCode.matchAll(/(?:Settings|this)\.labels\.([a-zA-Z0-9_]+)/g)) {
+  if (!labelKeys.has(m[1])) {
+    errors.push(`un libellé est demandé sous le nom « ${m[1]} », qui n'existe pas dans la liste : le bouton s'appelle « undefined »`);
+  }
+}
+/* Une clé calculée est permise, à condition que **tous** les noms qu'elle peut
+   produire existent (ici : un ou plusieurs éléments). */
+for (const m of libraryCode.matchAll(/(?:Settings|this)\.labels\[([^\]]+)\]/g)) {
+  const names = [...m[1].matchAll(/"([a-zA-Z0-9_]+)"|'([a-zA-Z0-9_]+)'/g)].map((q) => q[1] || q[2]);
+  if (!names.length) {
+    errors.push(`un libellé est demandé par une clé entièrement calculée (${m[1]}) : le contrôle des textes ne peut plus le suivre`);
+    continue;
+  }
+  for (const n of names) {
+    if (!labelKeys.has(n)) {
+      errors.push(`un libellé est demandé sous le nom « ${n} », qui n'existe pas dans la liste`);
+    }
+  }
+}
+
+/* La liste des réglages qui survivent au redémarrage doit couvrir `DEFAULTS`
+   (et réciproquement) et chaque clé doit exister dans `Settings` : une clé
+   oubliée à moitié se traduit par « mes réglages ne sont pas gardés ». */
+{
+  const defaultsBlock = bodyOf("var DEFAULTS = {");
+  const defaultKeys = [...defaultsBlock.matchAll(/^\s*([a-zA-Z0-9_]+):/gm)].map((m) => m[1]);
+  if (defaultKeys.length < 8) errors.push("les valeurs par défaut des réglages n'ont plus pu être lues");
+  const persistAt = libraryCode.indexOf("var PERSIST = [");
+  const persistBlock = persistAt < 0 ? "" : libraryCode.slice(persistAt, libraryCode.indexOf("]", persistAt));
+  const persisted = new Set([...persistBlock.matchAll(/"([a-zA-Z0-9_]+)"/g)].map((m) => m[1]));
+  if (persisted.size < 8) errors.push("la liste des réglages sauvegardés est vide ou illisible : plus aucun réglage ne survivrait");
+  for (const k of defaultKeys) {
+    if (!persisted.has(k)) errors.push(`le réglage « ${k} » a une valeur par défaut mais n'est pas sauvegardé : il s'efface au redémarrage`);
+  }
+  for (const k of persisted) {
+    if (!defaultKeys.includes(k)) errors.push(`la liste de sauvegarde connaît « ${k} », qui n'a pas de valeur par défaut : « Réinitialiser » ne l'effacerait jamais`);
+  }
+  const settingsBlock = bodyOf("var Settings = {");
+  for (const k of defaultKeys) {
+    if (!new RegExp(`^\\s{4}${k}:`, "m").test(settingsBlock)) {
+      errors.push(`le réglage « ${k} » a une valeur par défaut absente de l'objet des réglages`);
+    }
+  }
+}
+
+/* Le bas de l'écran se réserve d'après la hauteur **mesurée** du mini-lecteur ;
+   les valeurs des feuilles ne servent que au tout premier rendu. Si les deux
+   divergent, la page est recouverte d'une bande vide (vu le 25/09 : « le bas
+   de l'écran est noir », « on ne peut plus rien toucher sous la barre »). */
+{
+  const deviceCss = read("src/inject/76-device.css");
+  const reserved = [...deviceCss.matchAll(/--sd-mini-h:\s*calc\((\d+)px/g)].map((m) => Number(m[1]));
+  if (!reserved.length) errors.push("les feuilles ne fixent plus du tout la hauteur du mini-lecteur");
+  const measured = /--sd-mini-h-current/.test(read("src/inject/10-base.css")) && /measure: function/.test(libraryCode);
+  if (!measured) errors.push("la place réservée en bas ne suit plus la hauteur réelle du mini-lecteur");
+  if ((libraryCode.match(/askMeasure\(\)/g) || []).length < 2) {
+    errors.push("rien ne redemande la mesure après un changement de vue ou de densité");
+  }
+  if (!/watchSize: function/.test(libraryCode)) errors.push("un changement de taille d'écran ne redemande plus la mesure");
+  for (const n of reserved) {
+    /* Trois lignes (pochette + transport + progression) à ~44 px + marges : en
+       dessous, la place réservée est fausse et la page passe sous la barre. */
+    if (n < 140) errors.push(`hauteur de mini-lecteur annoncée trop petite en CSS (${n}px) : la page passerait sous la barre`);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   7. Le widget du bureau : la feuille XML et le code Kotlin doivent se parler,
+      et les trois commandes doivent rester alignées (40 dp · 48 dp · 40 dp).
+   -------------------------------------------------------------------------- */
+{
+  const widgetXml = read("android/app/src/main/res/layout/widget_player.xml");
+  const widgetKt = read("android/app/src/main/java/com/spotiduck/app/PlayerWidget.kt");
+  const declared = new Set([...widgetXml.matchAll(/android:id="@\+id\/(\w+)"/g)].map((m) => m[1]));
+  const used = new Set([...widgetKt.matchAll(/R\.id\.(\w+)/g)].map((m) => m[1]));
+  for (const id of used) {
+    if (!declared.has(id)) errors.push(`le widget demande « ${id} » : aucun élément de widget_player.xml ne le porte (le bouton ne répondrait pas)`);
+  }
+  for (const id of declared) {
+    if (!used.has(id)) warnings.push(`« ${id} » est dans la feuille du widget : plus personne ne l'utilise en Kotlin`);
+  }
+  const strings = read("android/app/src/main/res/values/strings.xml");
+  for (const m of widgetXml.matchAll(/@(?:string|drawable)\/(\w+)/g)) {
+    if (!new RegExp(`name="${m[1]}"`).test(strings) && !existsSync(join(root, `android/app/src/main/res/drawable/${m[1]}.xml`))) {
+      errors.push(`la feuille du widget référence « ${m[1]} », qui n'existe ni comme chaîne ni comme dessin`);
+    }
+  }
+  /* La rangée de commandes : des hauteurs différentes (40 · 48 · 40 dp), donc un
+     alignement. On cherche le conteneur qui porte le bouton « précédent », et
+     **lui seul** — le parent racine, lui, est déjà centré. */
+  {
+    const opens = [...widgetXml.matchAll(/<LinearLayout\b[^>]*>/g)];
+    const row = opens.find((m) => widgetXml.slice(m.index + m[0].length, m.index + m[0].length + 260).includes("@+id/widget_previous"));
+    if (!row) {
+      errors.push("la rangée de commandes du widget n'est plus un LinearLayout identifiable : l'alignement ne peut plus être contrôlé");
+    } else if (!/gravity="center_vertical"/.test(row[0])) {
+      errors.push("la rangée de commandes du widget n'est plus alignée au centre : 40 dp et 48 dp se toucheraient de travers");
+    }
+  }
+  for (const src of widgetXml.matchAll(/android:src="@drawable\/(\w+)"/g)) {
+    const file = join(root, `android/app/src/main/res/drawable/${src[1]}.xml`);
+    if (!existsSync(file)) errors.push(`le widget affiche « ${src[1]} », dessin absent des ressources`);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   8. Les deux modes, la même barre de progression.
+   La coque injectée et le shim « interface Spotify » pilotent le même curseur
+   de la même page. S'ils se mettaient à compter l'un en secondes et l'autre en
+   millisecondes, la notification et l'écran afficheraient deux positions
+   différentes du même morceau — et une avance de dix secondes en vaudrait dix
+   mille. Les deux fichiers doivent donc partager le seuil et le sens.
+   -------------------------------------------------------------------------- */
+{
+  const shell = libraryCode;
+  const shim = stripComments(nativeCalls);
+  for (const need of ["function cursorUnitFactor", "function ticksToMs", "function msToTicks"]) {
+    if (!hasFn(shim, need)) {
+      errors.push(`le shim du mode « interface Spotify » n'a plus de ${need}() : il redevine l'unité du curseur pour son propre compte`);
+    }
+  }
+  const shellThreshold = /max > (\d+)/.exec(shell);
+  const shimThreshold = /n > (\d+)/.exec(shim);
+  if (shellThreshold && shimThreshold && shellThreshold[1] !== shimThreshold[1]) {
+    errors.push(`les deux modes ne partagent plus le seuil d'unité du curseur (${shellThreshold[1]} d'un côté, ${shimThreshold[1]} de l'autre)`);
+  }
+  if (!/function progressInput/.test(shim)) {
+    errors.push("le shim n'a plus de repère borné à la barre de progression : il peut écrire dans le curseur de volume");
+  }
+  if (/q\("input\[type='range'\]"\)/.test(shim) || /querySelector\("input\[type='range'\]"\)/.test(shim)) {
+    errors.push("le shim retombe sur « le premier curseur de la page » : sur la page mobile, c'est le volume");
+  }
+  if (!/function btnText\(/.test(shim) || !/function playerRoot\(/.test(shim)) {
+    errors.push("le shim ne borne plus ses libellés au lecteur : un bouton de la page peut être pris pour une commande de lecture");
+  }
+  if (!/\bbyLabel\(res\)/.test(shim) && /byLabel\([^)]*,/.test(shim)) {
+    errors.push("le shim cherche encore ses commandes hors du lecteur");
+  }
+  /* Les deux modes doivent piloter **les mêmes boutons** de la même page :
+     `SEL.*` de la coque et les candidats du shim sont lus côte à côte. Un id
+     que le shim invente est un id que personne n'a vérifié sur la page. */
+  const shellTestids = new Set([...runtime.matchAll(/data-testid=\"([a-z0-9-]+)\"/g)].map((m) => m[1]));
+  for (const m of shim.matchAll(/playerButton\(\[([^\]]+)\]/g)) {
+    for (const id of m[1].matchAll(/\"([a-z0-9-]+)\"/g)) {
+      if (!shellTestids.has(id[1])) {
+        errors.push(`le shim cherche « ${id[1]} » comme commande du lecteur : la coque ne le connaît pas`);
+      }
+    }
+  }
+  if (!hasFn(shim, "function bestCoverUrl")) {
+    errors.push("le shim ne demande plus la plus grande pochette : la notification afficherait la vignette 64 px");
+  }
+}
+
+/* --------------------------------------------------------------------------
+   9. Les secours de lecture : ce que la page **joue**, pas seulement ce
+   qu'elle affiche.
+   La coque et le shim ne savaient lire que les `data-testid` de React. Renommés
+   (et c'est tous les mois), la coque se croyait sans piste, posait `disabled`
+   sur ses propres boutons — un bouton désactivé ne reçoit aucun événement — et
+   l'utilisateur ne voyait plus rien se passer, sans le moindre message. Les
+   trois garde-fous ci-dessous verrouillent la leçon : une source indépendante du
+   markup, un appui jamais muet, et les deux modes d'accord.
+   -------------------------------------------------------------------------- */
+{
+  const shell = libraryCode;
+  for (const need of ["mediaEl: function", "session: function", "mediaToggle: function", "mediaSeek: function"]) {
+    if (!hasFn(shell, need)) {
+      errors.push(`la coque n'a plus de ${need.replace(": function", "")}() : elle redevient aveugle dès que le markup de Spotify change de nom`);
+    }
+  }
+  const read = (shell.match(/read: function \(\) \{[\s\S]*?\n    \},/) || [""])[0];
+  if (!/this\.session\(\)/.test(read) || !/this\.mediaEl\(\)/.test(read)) {
+    errors.push("`read()` ne consulte plus ce que la page joue : titre et durée dépendent de nouveau d'un seul repère de markup");
+  }
+  if (!/!!this\.mediaEl\(\)|this\.session\(\)/.test(shell)) {
+    errors.push("la coque ne déclare plus le lecteur prêt sur l'élément qui joue");
+  }
+  const seek = (shell.match(/seek: function \(ms\) \{[\s\S]*?\n    \},/) || [""])[0];
+  if (!/this\.mediaSeek\(/.test(seek)) {
+    errors.push("`seek()` refuse de chercher quand le curseur de la page est absent : l'appui reste muet");
+  }
+  const playPause = (shell.match(/playPause: function \(want\) \{[\s\S]*?\n    \},/) || [""])[0];
+  if (!/this\.mediaToggle\(/.test(playPause)) {
+    errors.push("`playPause()` n'a plus de secours sur l'élément : sans bouton vivant, la commande ne fait rien");
+  }
+  /* Un appui ne doit jamais être perdu par la feuille elle-même. */
+  if (/btn\.disabled = !s\.hasTrack/.test(shell)) {
+    errors.push("les commandes du mini-lecteur sont verrouillées par `disabled` : un bouton désactivé ne reçoit aucun événement, l'appui devient muet");
+  }
+  if (!/aria-disabled/.test(shell) || !/is-unavailable/.test(shell)) {
+    errors.push("l'indisponibilité d'une commande n'est plus annoncée (`aria-disabled` + `.is-unavailable`) : elle ne peut plus être dessinée sans verrouiller l'appui");
+  }
+  if (!/\.sd-iconbtn\.is-unavailable\s*\{[^}]*pointer-events:\s*auto/.test(css)) {
+    errors.push("`.is-unavailable` n'est pas explicitement pressable dans la feuille : le bouton indisponible redeviendrait muet");
+  }
+  /* Le raccourci de dernier recours doit être jugé sur la page, pas sur notre
+     affichage optimiste : sinon un appui qui n'a rien fait se croit réussi. */
+  const fallback = (shell.match(/fallback: function \(key, watch, avant\) \{[\s\S]*?\n    \},/) || [""])[0];
+  if (!/Spotify\.readPlaying\(\)/.test(fallback)) {
+    errors.push("`fallback()` juge le raccourci sur l'état optimiste de la coque : un appui muet ne sera plus jamais signalé");
+  }
+  /* Et le shim, même secours. */
+  const shim = stripComments(nativeCalls);
+  for (const need of ["function mediaEl", "function session", "function mediaToggle", "function mediaSeek"]) {
+    if (!hasFn(shim, need)) {
+      errors.push(`le shim n'a plus ${need}() : la notification redevient muette quand la page ne pose pas ses repères`);
+    }
+  }
+  if (!/btn\.disabled === true/.test(shim)) {
+    errors.push("le shim compte un bouton désactivé comme une réussite : la notification dirait « fait » sans que rien ne se passe");
+  }
+  if (!/var sess = session\(\)/.test(shim)) {
+    errors.push("la publication du shim ne lit plus la session média de la page");
+  }
+  if (!/mediaSeek\(/.test(shim) || !/mediaToggle\(/.test(shim)) {
+    errors.push("les commandes du shim n'ont plus de secours sur l'élément qui joue");
+  }
+}
+
+/* --------------------------------------------------------------------------
+   10. L'agent servi à Spotify, la feuille de la coque et la sonde de CI.
+   `userAgentFor` décide quelle page est servie. La règle est un **arbitrage
+   mesuré**, pas un goût : la page du téléphone rend la mise en page exacte du
+   téléphone mais refuse la lecture à un compte gratuit (§42), la page de
+   bureau joue mais est mise en page sur 412 px — d'où `05-original-fit.css`
+   et le stationnement de sa barre. Ces trois fils se coupent sans qu'aucun
+   test de la coque ne bronche, parce qu'ils ne sont dans aucun fichier que la
+   coque importe. Ce groupe est là pour ça.
+   -------------------------------------------------------------------------- */
+{
+  const kt = activitySource;
+  const uaFor =
+    /private fun userAgentFor\(mode: String\): String =\s*\n?\s*if \(([^)]*)\)\s*(DESKTOP_UA|MOBILE_UA)\s+else\s+(DESKTOP_UA|MOBILE_UA)/.exec(kt);
+  if (!uaFor) {
+    errors.push(
+      "`userAgentFor` n'est plus reconnaissable : vérifier qu'elle sert toujours la page de bureau aux modes habillés, puis étendre ce garde-fou volontairement"
+    );
+  } else {
+    const cond = uaFor[1].replace(/\s+/g, "");
+    const yes = uaFor[2], elseBranch = uaFor[3];
+    const okNativeMobile = /MODE_NATIVE\)?$/.test(cond) && yes === "MOBILE_UA" && elseBranch === "DESKTOP_UA";
+    const okNotNative = /!={0,1}MODE_NATIVE/.test(cond) && yes === "DESKTOP_UA" && elseBranch === "MOBILE_UA";
+    const okWhen = /when/.test(cond) && /MODE_NATIVE[\s\S]{0,40}MOBILE_UA/.test(kt);
+    if (!(okNativeMobile || okNotNative || okWhen)) {
+      errors.push(
+        "`userAgentFor` ne sert plus la page de bureau aux modes habillés : la coque recevrait le lecteur web mobile, qui refuse la lecture à un compte gratuit (« Lecture désactivée », §42) — l'inverse ferait servir la mise en page du bureau dans un écran de 412 px"
+      );
+    }
+  }
+  /* La règle sans sa raison se fait retourner au tour suivant : celui qui
+     l'a écrite croyait bien faire. Le motif doit rester collé au code. */
+  const doc = kt.slice(Math.max(0, kt.indexOf("private fun userAgentFor") - 1800), kt.indexOf("private fun userAgentFor"));
+  if (!/mwp\.playback\.error\.protected\.content|Lecture désactivée/.test(doc) || !/§42/.test(doc)) {
+    errors.push(
+      "l'explication de l'agent n'est plus écrite au-dessus de `userAgentFor` : sans la cause mesurée (page mobile = lecture refusée hors Premium), la règle est inversée à la prochaine passe"
+    );
+  }
+  /* La barre de lecture de Spotify doit rester de côté **quelle que soit
+     l'étiquette** que la page lui donne : `aside` sur la page de bureau,
+     `footer`/`div` sur celle du téléphone. Ne connaître que `aside`, c'est
+     laisser la sienne réapparaître sous la nôtre dès que l'agent change. */
+  const parked = read("src/inject/10-base.css");
+  for (const tag of ["aside", "footer", "div"]) {
+    if (!new RegExp(`${tag}\\[data-testid="now-playing-bar"\\]`).test(parked)) {
+      errors.push(`la feuille ne met de côté la barre de lecture que sous l'étiquette « aside » : la page ${tag === "div" ? "du téléphone" : tag} la rendrait sous la nôtre`);
+    }
+  }
+  /* La sonde doit mesurer **la configuration livrée** : l'agent vient du champ
+     `agent` de la cible (et non d'un goût par défaut), et un contexte existe
+     pour chacune des deux pages en cause, sur la vraie URL. */
+  const probe = read("tools/probe-coop.mjs");
+  if (!/setUserAgent\(target\.agent === "tel" \? MOBILE_UA : DESKTOP_UA\)/.test(probe)) {
+    errors.push("la sonde de CI ne choisit plus l'agent par cible : elle peut valider une page que le téléphone ne reçoit pas");
+  }
+  for (const label of ['label: "coque-bureau"', 'label: "coque-mobile"']) {
+    if (!probe.includes(label)) {
+      errors.push(`la sonde de CI n'a plus de contexte ${label} : la mise en page réellement livrée n'est plus mesurée sur la vraie page`);
+    }
+  }
+  if (!/d\u00e9passe|trop large pour l'\u00e9cran/.test(probe)) {
+    errors.push("la sonde de CI n'a plus de règle « mise en page trop large pour l'écran » : le défaut de la 2.11.19 redeviendrait invisible");
+  }
+}
+
+/* --------------------------------------------------------------------------
+   11. La chaîne de lecture, de l'appui à Android. Elle traverse quatre
+   fichiers qui ne s'importent jamais entre eux (coque → pont Kotlin → moteur
+   d'origine → notification), donc **rien** d'autre que ce groupe ne la voit.
+   Elle a cassé deux fois de la même manière : un maillon qui croit avoir
+   réussi sans avoir agi (2.11.19 : le bouton `disabled` ; 2.11.21 : l'appel
+   `actPlayPause` compté comme un appui), et un maillon qui détourne le trafic
+   de la page pour son propre compte (la 2.11.21, précisément : le capteur
+   renvoyait le flux d'état du lecteur par `HttpURLConnection` — plus aucune
+   touche du bas ne répondait).
+   -------------------------------------------------------------------------- */
+{
+  /* La source, pas le bundle : `regress-audit` mutera ces fichiers pour prouver
+     que ces garde-fous tombent — et un contrôle qui lit `dist/` ne verrait
+     jamais la main mise sur `src/`. */
+  const shell = runtime;
+  const kt = activitySource;
+  /* 1 · la porte du moteur doit juger l'appui, pas l'appel. */
+  if (!/addEventListener\("click", spy, true\)/.test(shell) || !/return pressed;/.test(shell)) {
+    errors.push(
+      "`Engine.toggle` ne vérifie plus que le bouton a réellement reçu l'événement : un `actPlayPause` qui ne presse rien sera cru réussi, et la coque renoncera à son propre secours"
+    );
+  }
+  /* 2 · l'ordre des secours, qui est une décision. */
+  const iToggle = shell.indexOf("Engine.toggle(want)");
+  const iMedia = shell.indexOf("this.mediaToggle(go === null");
+  const iApi = shell.indexOf("return Engine.playContext()");
+  if (!(iToggle > 0 && iMedia > iToggle && iApi > iMedia)) {
+    errors.push("l'ordre markup → moteur → élément → API Connect n'est plus tenu (la voie réseau ne doit jamais couper court aux voies vérifiées)");
+  }
+  if (!/e\.playUri\(uri\);[\s\S]{0,1400}?Engine\._sent = \{ want: true, uri: uri, at: Date\.now\(\) \};\s*return true;/.test(shell)) {
+    errors.push("`Engine.playContext` ne marque plus la commande « partie » : playPause ne peut plus savoir qu'un secours immédiat tuerait la lecture, et « j'appuie, rien » revient");
+  }
+  /* Le solde, pas la promesse : `settleSent` branché sur `Engine.sync` est la seule
+     raison pour laquelle une lecture réussie ne laisse pas la coque muette quatre
+     secondes, le temps que la commande expire. Couper ce fil ne casse rien de
+     visible — la touche de pause ne répond plus une fois, et rien ne le dit. */
+  if (!/Engine\.settleSent\(!!st\.playing\);/.test(shell)) {
+    errors.push("le solde de commande n'est plus branché sur `Engine.sync` : après une lecture réussie, la coque croit la commande encore en cours et ne presse plus rien");
+  }
+  /* 3 · le capteur écoute, il n'intercepte pas. */
+  const logic = read("dist/spotiduck-logic.js");
+  if (/resp\s*=\s*await mngFetch\(url,opts\)/.test(logic) || !/return oriFetch\.apply\(this, args\);/.test(logic)) {
+    errors.push(
+      "le capteur du moteur intercepte à nouveau le trafic `connect-state` de la page : le flux d'état du lecteur passe par le pont, `AbortSignal` et le streaming disparaissent — « les touches du bas ne font plus rien »"
+    );
+  }
+  /* 4 · le moteur est posé avant la page, sinon il n'a rien à capter. */
+  const iLogic = kt.indexOf("view.evaluateJavascript(logicScript, null)");
+  const iIdentity = kt.indexOf("view.evaluateJavascript(identityScript, null)");
+  if (!(iLogic > 0 && iIdentity > iLogic)) {
+    errors.push("le moteur n'est plus injecté **avant** l'identité et la page dans `onPageStarted` : le `Client-Token` et l'appareil de la session auront déjà été émis, et `playFromUri` n'aura pas d'appareil où commander");
+  }
+  if (!/readAsset\("spotiduck-logic\.js"\)/.test(kt)) {
+    errors.push("`MainActivity` ne lit plus l'asset `spotiduck-logic.js` : la coque retombe sur le seul markup de Spotify");
+  }
+  /* 5 · le verrou du corps repris, pas de la formulation : le capteur est
+     désormais suivi d'une ligne de la coque, et cette ligne doit rester la
+     seule qu'on ait ajoutée à un bloc d'origine. */
+  const locksPath = "tools/build-logic.locks.json";
+  if (existsSync(join(root, locksPath))) {
+    const locks = JSON.parse(read(locksPath)).blocks || {};
+    /* La liste des blocs est lue la ou elle est ecrite (tools/build-logic.mjs) :
+       la dupliquer ici, c'est un bloc ajoute oublie de l audit — et un bloc oublie,
+       c est exactement ce qui etait arrive a « veille » et « installation ». */
+    const sliceNames = [...read("tools/build-logic.mjs").matchAll(/^\s+name:\s*"([^"]+)"/gm)].map((m) => m[1]);
+    if (!sliceNames.length) errors.push("aucun bloc trouve dans tools/build-logic.mjs : la liste des verrous n est plus verifiable");
+    for (const name of sliceNames) {
+      if (!locks[name] || !locks[name].len || locks[name].md5 === "0000000000") {
+        errors.push(`le verrou du bloc d'origine « ${name} » n'est pas posé : un bloc sans empreinte n'est pas du code repris tel quel — relire le découpage, puis \`node tools/build-logic.mjs --record-locks\``);
+      }
+    }
+  } else {
+    errors.push("`tools/build-logic.locks.json` est absent : rien ne garantit que le moteur soit encore du code d'origine");
+  }
+  /* 5ter · le relais « Écouter sur cet appareil », qui conditionne tout le reste.
+     La sonde de CI a relevé nos quatre commandes de transport trouvées mais
+     DÉSACTIVÉES sur la page réelle : tant que le relais n'est pas pressé, aucun
+     bouton du lecteur ne peut répondre. Les quatre fils ci-dessous sont ce qui fait
+     que la coque le trouve, le tente et s'en souvient après un redessin de la page.
+     Chacun a été cassé un par un dans `tools/regress-audit.mjs`. */
+  {
+    /* `]` clamp dans chaque sélecteur entre guillemets : la liste doit être saisie
+       jusqu'à sa virgule de fin de ligne, sinon on sonde un tronçon. */
+    const takeover = (runtime.match(/takeover: \[[\s\S]{0,900}?\],\n/) || [""])[0];
+    const rows = (runtime.match(/takeoverRows: \[[\s\S]{0,500}?\],\n/) || [""])[0];
+    /* Une punaise sur `aside` ne suffit plus depuis que la barre livrée est un
+       `footer` (dit notre 10-base.css) : la forme sans étiquette est la seule qui
+       ne dépende pas d'un choix de balise fait par Spotify ce mois-ci. */
+    /* Un sélecteur punaisé sur `footer[…]" en contient aussi un `[data-testid=…]` :
+       ce qui compte, c'est la forme **sans étiquette de balise**, donc celle qui
+       commence par le crochet. */
+    if (!/'\[data-testid="now-playing-bar"\]/.test(takeover) || !/'\[data-testid="now-playing-bar"\]/.test(rows)) {
+      errors.push("les candidats du relais ne couvrent plus la barre quelle que soit sa balise : sur la page où le lecteur est un <footer>, le relais ne sera jamais trouvé et les commandes resteront désactivées");
+    }
+    if (!/vous écoutez sur/.test(runtime)) {
+      errors.push("le libellé réel du lecteur mobile (« Vous écoutez sur », relevé dans ses fichiers de langue par la sonde) n'est plus reconnu : le relais ne serait pas cliqué hors de la traduction française du web player de bureau");
+    }
+    if (!/var relais = want \? Auto\.maybeTakeover\(\) : false;/.test(runtime)) {
+      errors.push("le relais n'est plus tenté quand la page refuse la commande : c'est pourtant le seul cas où il sert (boutons présents mais désactivés)");
+    }
+    if (!/this\._watchBar === bar/.test(runtime) || !/Auto\.watch\(\);/.test(runtime)) {
+      errors.push("le guetteur du relais n'est plus rebranché quand la barre est remplacée : après un redessin du lecteur, plus aucun relais ne serait tenté de la session");
+    }
+    if (!/if \(this\._blames >= 2\) \{\s*this\._blames = 0;\s*Content\.commandFailure\(\);/.test(runtime)) {
+      errors.push("deux commandes sans effet n'ouvrent plus la carte du rapport : « le lecteur ne répond pas » redevient un symptôme sans mesure, et la seule voie pour la décrire disparaît");
+    }
+  }
+
+  /* 5quater · une carte de diagnostic ne doit jamais remplacer ce qu'elle
+     diagnostique. La 2.11.28 ouvrait le rapport « le lecteur ne répond pas » en
+     modale plein écran : la sonde de CI a mesuré nos propres boutons devenus morts
+     (`button.sd-iconbtn recouvert par div.sd-content-alert`, deux cibles) — la
+     carte tuait le lecteur qu'elle était chargée d'accuser. Les quatre fils
+     ci-dessous sont la bande, sa géométrie, et ses deux façons de disparaître. */
+  {
+  if (!runtime.includes('this.alert.classList.toggle("sd-content-alert-compact", !!transport)')) {
+      errors.push("la carte du rapport de commande ne se met plus en bande non modale : elle recouvrira l'écran et avalera les appuis du lecteur qu'elle est censée diagnostiquer");
+    }
+    const cssAlert = read("src/inject/70-original.css");
+    const compact = (cssAlert.match(/\.sd-content-alert-compact \{[\s\S]{0,260}?\}/) || [""])[0];
+    if (!/--sd-bottom/.test(compact) || /inset: 0/.test(compact)) {
+      errors.push("la règle `.sd-content-alert-compact` n'est plus calée au-dessus de l'espace du lecteur : la bande redeviendrait un voile plein écran (régression mesurée par la sonde en 2.11.28)");
+    }
+    if (!/clearTimeout\(this\._stuckT\);\s*this\._stuckT = 0;/.test(runtime)) {
+      errors.push("`hideAlert` n'annule plus l'échéance de la bande : une fermeture à la main serait suivie d'une réouverture fantôme, ou l'inverse");
+    }
+    if (!/if \(Content\.alert && !Content\.alert\.hidden\) Content\.hideAlert\(\);/.test(runtime)) {
+      errors.push("un succès ne referme plus la carte du rapport : la bande survivrait à sa propre raison d'être, par-dessus un lecteur qui répond");
+    }
+  }
+
+  /* 6 · le rapport d'état, un seul maître. */
+  if (!/fun recMediaStatus\(/.test(bridgeSource) || !/manageTSleep\(/.test(bridgeSource)) {
+    errors.push("le pont ne déduit plus les minuteries de l'état rapporté : la coque et le moteur devraient commander chacun de leur côté");
+  }
 }
 
 /* Rapport ------------------------------------------------------------------ */

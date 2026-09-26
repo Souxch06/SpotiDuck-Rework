@@ -14,8 +14,14 @@ name: Probe the shell
 #   · un appui sur un onglet produit-il une navigation ?
 #   · quelles erreurs la page a-t-elle levées ?
 #
-# Aucun échec n'est bloquant : tout est publié en annotations (quatre au plus —
-# GitHub tronque au-delà).
+# Tout le relevé est publié en annotations (une vingtaine au plus — GitHub
+# tronque au-delà), **sauf** cinq règles dures qui font échouer le run :
+# un bouton de la coque verrouillé en `disabled` (l'appui n'y parvient pas),
+# un bouton recouvert par autre chose, la page qui joue pendant que la coque se
+# croit sans piste, la place réservée qui ne suit pas la hauteur mesurée, une de
+# nos barres hors de l'écran. Ces cinq-là sont décidables **sans session** : elles
+# portent sur ce que la coque se fait à elle-même. C'est la barrière qui aurait
+# manqué aux trois versions publiées « tout vert » avec le lecteur muet.
 
 on:
   workflow_dispatch:

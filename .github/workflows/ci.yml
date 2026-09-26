@@ -1,0 +1,88 @@
+name: CI — portiques
+
+# Ce fichier est la raison pour laquelle une branche peut désormais être poussée
+# sans rien casser : jusqu'ici, seuls les tags de release lançaient quelque chose
+# (android.yml), donc une pull request était fusionnée sur la foi du terminal de
+# celui qui l'avait écrite, et « ça compile chez moi » tenait lieu de preuve.
+#
+# Chaque push et chaque PR jouent la même chose que localement, dans cet ordre —
+# le premier maillon qui casse rend les suivants inutiles, donc ils viennent après :
+#
+#   1. npm run build         les générateurs tournent (coque, fit de l'original,
+#                            moteur d'origine sous verrous) ;
+#   2. git diff --exit-code  ce qu'ils produisent est bien ce qui est commité : une
+#                            sortie générée périmée est le défaut le plus fréquent
+#                            de ce dépôt, et il était invisible ;
+#   3. npm run check         le portique d'hygiène (parsing, ressources livrées,
+#                            index git, verrous, pont, XML, références de doc) ;
+#   4. npm run check:selftest  les détecteurs du portique prouvent qu'ils tombent —
+#                            un portique non testé est une décoration ;
+#   5. npm run smoke         assertions de comportement, coque et moteur (jsdom,
+#                            sans WebView) ;
+#   6. npm run audit         l'audit des liens (onze groupes : sélecteurs, classes,
+#                            chaînes de commandes, chaîne de lecture) ;
+#   7. npm run regress-audit chaque régression vécue a un cas qui la rattrape.
+#
+# Le Kotlin et l'APK ne sont pas construits ici : android.yml le fait à la sortie de
+# release, avec le SDK, la signature et la pièce jointe. Doubler quatre minutes de
+# Gradle à chaque push n'aurait rien apporté d'autre que de faire patienter.
+
+on:
+  push:
+    branches: ["main", "arena/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    name: build, fraîcheur, hygiène, fumée, audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+
+      - name: Dépendances
+        run: npm ci --no-audit --no-fund
+
+      - name: « 1 · les générateurs tournent »
+        run: npm run build
+
+      - name: « 2 · rien de périmé dans ce qui est livré »
+        run: |
+          npm run sync:android
+          if ! git diff --exit-code --stat -- dist android/app/src/main/assets; then
+            echo "::error::Les fichiers générés ne correspondent pas à ce qui est commité. Ce dépôt versionne dist/ et les ressources de l'application : après une retouche de src/, il faut relancer « npm run android » et commiter le résultat — sinon l'APK est construit avec la version d'avant, sans un message."
+            git diff --stat -- dist android/app/src/main/assets
+            exit 1
+          fi
+
+      - name: « 3 · portique d'hygiène »
+        run: npm run check
+
+      - name: « 4 · le portique prouve qu'il tombe »
+        run: npm run check:selftest
+
+      - name: « 5 · fumée »
+        run: npm run smoke
+
+      - name: « 6 · audit des liens »
+        run: npm run audit
+
+      - name: « 7 · régression de l'audit »
+        run: npm run regress-audit
+
+      - name: « filet · la vérification n'a rien laissé de sale »
+        if: always()
+        run: |
+          git status --porcelain -- dist android/app/src/main/assets src tools docs > /tmp/dirty.txt || true
+          if [ -s /tmp/dirty.txt ]; then
+            echo "La construction n'est pas déterministe, ou un outil écrit dans le dépôt sans qu'on le lui demande :"
+            cat /tmp/dirty.txt
+            exit 1
+          fi

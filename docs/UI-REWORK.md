@@ -3558,3 +3558,866 @@ La capture `screenshots/playlist_ouverture.png` montre les deux moments :
 pendant l'ouverture (le voile, le lecteur toujours là) et la playlist ouverte
 (barre de retour, contenu, mini-lecteur).
 
+
+## §53 — Tout ce qui traînait encore : le curseur, le bas de l'écran, les réglages, le mode livré (v2.11.18)
+
+« Fais en sorte que tous les affichages ne soient plus buggés, que le lecteur
+marche à 100 %, et teste de ton côté. » Pas de nouveau symptôme donc, mais une
+relecture complète de la coque, de ses feuilles et du shim du mode « interface
+Spotify », avec un contrôle par défaut trouvé — banc jsdom **ou** audit croisé.
+Quatorze défauts ont été corrigés ; les voici, avec la faute et ce qui la rend
+impossible maintenant.
+
+### Le curseur de progression comptait deux unités différentes
+
+La durée et la position étaient converties avec l'unité **mesurée** sur la page
+(`unitFactor()`), mais trois autres chemins multipliaient ou divisaient par 1000
+pour leur propre compte : l'écoute du glisser du doigt, la relecture après un
+`seek`, et l'écriture du `seek` lui-même. Sur une page graduée en
+millisecondes — c'est le cas le plus courant — le résultat était visible à
+l'œil : **la barre sautait à la fin du morceau dès qu'on lâchait le curseur**,
+et une avance de dix secondes pouvait en valoir dix mille.
+
+* les conversions ont un seul nom et une seule définition, `ticksToMs()` et
+  `msToTicks()`, posées à côté de `unitFactor()` — plus personne ne fait le
+  calcul à la main ;
+* la **borne haute** du curseur (`maxTicks()`) se replie sur la durée annoncée
+  par la page : sans cela, un curseur sans `max` (certaines versions)
+  clampait toute demande à `0..0` — **chercher ne faisait plus rien du tout** ;
+* `trackDurationMs()` est le seul endroit qui répond à « combien dure ce
+  titre » (durée annoncée, sinon graduation du curseur) : les deux gestes,
+  l'affichage des temps et les touches clavier l'utilisent. Avant, l'appui sur
+  la barre se **bloque** tant que la page n'a pas annoncé sa durée — soit la
+  première seconde de chaque titre ;
+* l'écoute du glisser n'était branchée que sur **la copie du curseur trouvée au
+  démarrage** : Spotify recrée son lecteur à chaque changement de vue, et
+  l'écoute restait sur le nœud remplacé — le doigt déplacait la barre de
+  Spotify, notre position ne bougeait plus. C'est maintenant **une seule**
+  écoute, déléguée sur le `document` et filtrée sur la barre de progression.
+
+### Le bas de l'écran réservait une hauteur inventée
+
+La place réservée sous la page (`--sd-bottom`) se calcule d'après la hauteur du
+mini-lecteur, et cette hauteur était **écrite à la main** dans les feuilles, en
+deux endroits qui se contredisaient (`10-base.css` posait 60 px, `76-device.css`
+le corrigeait par appareil). Le mini-lecteur, lui, se dimensionne seul : sa
+pochette suit la largeur de l'écran, ses deux rangées de commandes ont leur
+propre taille, la densité change tout. D'où la bande de contenu **passée sous la
+barre** — 63 px à 412×915, 56 px en paysage — que l'on ne pouvait plus toucher.
+
+* `UI.measure()` lit la hauteur **rendue** du mini-lecteur et l'écrit dans
+  `--sd-mini-h-current`, sur le même support que la feuille ;
+* trois cas seulement : masqué → `0`, mesuré → sa hauteur, pas encore de mise
+  en page → **on retire notre valeur** et la feuille reprend la main. Le
+  troisième cas est le piège : écrire `0` parce qu'on n'a rien mesuré aurait
+  produit l'inverse exact du défaut corrigé ;
+* la mesure est redemandée à chaque peinture (`askMeasure`, coalescé en une
+  image), à un changement de taille d'écran (`ResizeObserver` sur le
+  mini-lecteur, la barre d'onglets, la barre du haut) et à chaque
+  réaffirmation ;
+* les valeurs de feuille ne restent que le **premier rendu** : 168 / 184 / 200
+  px (150 en paysage), et la mesure gagne dès qu'elle existe. Un commentaire le
+  dit maintenant dans `76-device.css`, et l'audit refuse un repli inférieur à
+  140 px (trois rangées tiennent difficilement en dessous).
+
+### Les réglages : trois oublis et un effet retard
+
+* **`Statistiques`, `Accueil SpotiDuck`, `Bibliothèque SpotiDuck` n'étaient pas
+  dans la liste des réglages sauvegardés** — ils changeaient, l'application
+  obéissait, et le redémarrage suivant les remettait en place (« mes réglages ne
+  sont pas gardés »). La liste de lecture et la liste d'écriture étaient écrites
+  à la main, en deux endroits : c'est maintenant **une seule** liste
+  (`PERSIST`), qui fournit aussi les types et les valeurs par défaut, avec
+  contrôle du thème et de la densité (une valeur inconnue laissait la page sans
+  feuille de couleurs) ;
+* `DEFAULTS.tabbar` valait `true` alors que `Settings.tabbar` vaut `false` :
+  « Réinitialiser les réglages » rallumait la barre d'onglets du bas, en plus de
+  la barre du haut, avec 64 px de place réservée en trop ;
+* changer `Accueil`, `Bibliothèque` ou `Statistiques` ne repeignait **rien** :
+  nos deux pages maison et la mesure ne se regardent que sur un changement de
+  vue. L'appui est maintenant suivi d'un rafraîchissement, dans les deux sens ;
+* éteindre « Couleur reprise de la pochette » laissait le dégradé en place.
+
+### Deux boutons qui ne faisaient pas ce qu'ils disaient
+
+* **« Précédent »** : au-delà de trois secondes, la commande remettait le titre
+  au début **sans vérifier que cela avait marché**, et ne faisait rien d'autre —
+  curseur absent (page en cours de remplacement) = bouton muet. Sans curseur,
+  elle demande maintenant la piste précédente, comme l'application ;
+* **l'onglet « Bibliothèque »**, depuis une playlist : notre page est plein
+  écran et se range devant une sous-page, donc l'appui allumait l'onglet et
+  **ne montrait rien**. L'onglet ramène l'application à l'accueil (par le bouton
+  de Spotify, adresse en repli), et la page s'affiche ;
+* le mini-lecteur n'avait pas de clavier sur sa barre de progression (le lecteur
+  plein écran, si) : flèches, `Début`, `Fin` sont branchés sur les deux ;
+* `Toast.show()` affichait le mot `undefined` quand un libellé manquait ; une
+  bulle sans texte ne se montre plus.
+
+### Des feuilles qui ne correspondaient plus au DOM
+
+Quatre règles du mini-lecteur visaient `.sd-mini-controls` et
+`.sd-mini-progress`, avec un état `is-seeking` — trois noms que le runtime ne
+pose plus (`.sd-mini-row`, `.sd-mini-seek > i`, `is-dragging`) : la ligne de
+progression n'avait pas de fond et le glisser du doigt ne changeait que sa
+largeur. Un `aria-label` du mode paysage était écrit à la main au lieu de venir
+de la liste des textes ; `SEL.npBar` alignait un candidat reste de brouillon
+(`…now-playing-bar"] root`) ; la liste des textes contenait **deux `reload`**
+(dont un introuvable) ; `reassertSurfaces` se gardait avec `this.el.home` /
+`this.el.lib`, deux clés qui n'existent pas — le garde-fou tournait donc à vide ;
+`Content.apply()` empilait ses entrées de diagnostic sans plafond ; le public
+`window.SpotiDuckUI` déclarait `net:` deux fois ; et `UI.el.tabbar` se retirait
+une classe `is-library` que personne n'a jamais posée.
+
+### Le mode « interface Spotify », livré par défaut
+
+C'est l'écran que voit un lancement neuf, et son shim avait quatre défauts, tous
+du même genre : chercher large.
+
+* `playPauseBtn()` acceptait **tout libellé contenant** « play » ou « lecture » :
+  « Activer la lecture aléatoire » est posé avant, sur la page mobile — un appui
+  sur lecture dans la notification changeait donc le mode aléatoire, et la
+  notification répondait « en pause » quelle que soit la lecture réelle ;
+* `seek()` supposait une unité, et son `input[type='range']` isolé pouvait
+  tomber sur le **curseur de volume** (le premier de la page) : une avance de
+  trente secondes baissait le son ;
+* `publish()` devinait l'unité au nombre de chiffres (`184000` = millisecondes,
+  `202` = secondes, `4000` = secondes aussi) : la notification affichait
+  « / 0:00 » et sa barre ne bougeait plus ; la pochette était demandée en `src`,
+  c'est-à-dire la vignette 64 px chargée en attendant la grande ;
+* `like()` cherchait un `button[aria-checked]` dans le widget — la lecture
+  aléatoire est `aria-checked` elle aussi.
+
+Les commandes sont donc désormais trouvées par `data-testid`, puis par **libellé
+entier** (coupé du nom du morceau que Spotify y accole), **à l'intérieur du
+lecteur** ; l'unité est la même fonction, au même seuil, que dans la coque ; la
+pochette vient du `srcset` quand il existe. Le widget, lui, alignait ses trois
+commandes de 40 · 48 · 40 dp sans centre vertical — elles paraissaient de
+travers sur le bureau.
+
+### Ce qui surveille ces corrections
+
+* **banc jsdom : 149/149** (neuf vérifications nouvelles) : unité du curseur
+  lue/écrite/née hors plage, place réservée mesurée et rendue à la feuille quand
+  il n'y a rien à mesurer, onze réglages écrits et relus au second lancement
+  (avec une valeur invalide qui retombe sur le défaut), zéro bouton nommé
+  « undefined » dans toute la coque, « précédent » sans curseur, onglet
+  bibliothèque depuis une playlist, clavier du mini-lecteur, branchement qui ne
+  se répète pas à travers les soixante réessais de `boot`, et — côté shim —
+  leurre « aléatoire » jamais pressé, volume intact, millisecondes respectées,
+  grande pochette ;
+* **audit croisé : 0 erreur**, avec les garde-fous nouveaux qui vont avec :
+  chaque `labels.<nom>` doit exister dans la liste des textes (et n'y être
+  déclaré qu'une fois), chaque clé de `DEFAULTS` doit être dans `PERSIST` et
+  dans `Settings`, les hauteurs de repli du mini-lecteur doivent rester
+  crédibles, la liste des ids du widget doit correspondre à `PlayerWidget.kt`,
+  les deux modes doivent partager le seuil d'unité du curseur, et les
+  identifiants de boutons que cherche le shim doivent être connus de la coque.
+
+  Chaque garde-fou est **éprouvé** en réintroduisant le défaut : `node
+  tools/regress-audit.mjs` applique une à une vingt-trois régressions volontaires
+  (conversion à la main dans `read()`, écoute du curseur rebranchée par copie,
+  `max` sans repli, `trackDurationMs()` contourné, libellé inventé, doublon de
+  texte, réglage retiré de la sauvegarde, repli de hauteur ridicule, mesure qui
+  ne redemande plus, seuil d'unité qui diverge entre les deux modes, pochette
+  non choisie, libellé non ancré, alignement du widget enlevé, id d'un bouton du
+  widget renommé, repère de bouton inventé par le shim…) et exige que l'audit en signale **une sur deux** — le bilan du
+  run : **23/23 détectées**.
+
+### Ce qui n'est pas vérifiable ici
+
+Le banc n'a pas de moteur de rendu : il valide la **logique** (unités, états,
+adresses, valeurs écrites), pas les pixels. La mesure réelle de la hauteur du
+mini-lecteur, l'alignement du widget et le rendu des nouvelles règles CSS
+demandent un appareil ; ils sont vérifiés par la sonde Chrome de CI
+(`tools/probe-*.mjs`), pas par cette machine.
+
+---
+
+## §54 — Le lecteur muet : lire ce qui joue, pas seulement ce qui est écrit (v2.11.19)
+
+Trois versions de suite ont été publiées avec `npm run smoke` **vert** alors que
+le téléphone ne répondait plus. La raison n'est pas un manque de tests : c'est
+que la sonde interroge une **page factice**, dessinée d'après ce que nous
+croyions savoir de Spotify. La mesure qui a manqué est venue de la CI (un vrai
+Chrome, la vraie page), publiée en annotations :
+
+* `play=48x48 dessus=div.sd-mini-row` — à l'endroit de notre bouton lecture,
+  `elementFromPoint` répond la **rangée**, pas le bouton ;
+* `cibles : playPause=AUCUN · next=AUCUN · prev=AUCUN` sur la page réelle ;
+* `playPause=1 candidat(s) → choisi 62x62 DÉSACTIVÉ` ailleurs.
+
+Les deux premières lignes disent la même chose : **la coque s'était verrouillée
+elle-même**. Sans titre lu, `State.hasTrack` est faux ; faux, elle posait
+`btn.disabled = !s.hasTrack` sur ses six commandes du mini-lecteur ; et la
+feuille éteint `button[disabled]` en `pointer-events: none`. Un bouton
+désactivé ne reçoit **aucun** événement : ni commande, ni message, ni
+repli — « les boutons du lecteur ne font rien », littéralement. Et le cercle
+était clos parce que le titre ne se lisait **que** dans les `data-testid` de
+React : renommés (Spotify le fait tous les mois), la coque se croit sans piste,
+donc se verrouille, donc ne peut plus être déverrouillée par un appui.
+
+### Ce qui a été changé
+
+1. **Une source qui ne dépend pas du markup.** `Spotify.mediaEl()` renvoie
+   l'élément `<audio>` (ou le `<video>` de la vue plein écran) qui joue
+   réellement — durée, position, lecture/pause ; `Spotify.session()` lit
+   `navigator.mediaSession`, que la page tient à jour **pour sa propre
+   notification** : titre, artiste, album, plus grande pochette, état.
+   `read()` s'en sert en secours (jamais pour écraser une lecture sûre), et
+   `ready()` les accepte : une barre absente de l'arbre ne rend plus le lecteur
+   « prêt à rien ». `readPlaying()` y tombe aussi, au lieu de répéter la
+   dernière valeur connue.
+2. **Piloter cet élément quand le bouton ne répond pas.** `playPause(want)` se
+   rabat sur `mediaToggle` ; `seek(ms)`, sur `mediaSeek` (borné à la durée,
+   jamais négatif). Dans la coque **et** dans le shim `native-mode.js` — donc la
+   notification, l'écran de verrouillage et le widget retrouvent le même
+   secours. `clickBtn` du shim ne compte plus un bouton `disabled` comme une
+   réussite (il disait « fait » sans que rien ne se passe).
+3. **Plus jamais d'appui muet.** Les commandes du mini ne sont plus verrouillées
+   par `disabled` : l'état s'annonce (`aria-disabled="true"`) et se dessine
+   (`.is-unavailable`, `opacity: .4` avec `pointer-events: auto` exigé par
+   l'audit). L'appui parvient donc à la commande, qui répond « Rien ne joue en
+   ce moment » au lieu de se taire.
+4. **Le dernier recours jugé sur la page.** `Actions.fallback` comparait
+   `State` à une valeur d'avant — mais `State` contient déjà l'affichage
+   optimiste posé par la commande, donc un appui inefficace se croyait réussi.
+   Il compare maintenant à `Spotify.readPlaying()`, la réponse du lecteur.
+5. **L'élément est écouté, pas interrogé.** `Media.watch()` (appelé à chaque
+   synchronisation du DOM) branche `play`, `pause`, `ended`, `timeupdate`,
+   `seeked`, `durationchange` sur l'élément courant. `timeupdate` ne re-ancre la
+   position que si l'écart dépasse 1,5 s et jamais pendant un geste : le ticker
+   extrapole déjà, et l'invariant « aucune boucle de sondage » tient.
+
+### Ce qui vérifie ça, désormais
+
+* Cinq sondes jsdom de plus, écrites **pour ce défaut** : page qui joue sans
+  aucun repère de markup (titre, artiste, pochette 720, durée et position lues
+  dans l'élément) ; pause et reprise **obtenues sur l'élément**, sans message
+  d'échec parasite ; position écrite sur l'élément quand le curseur a disparu,
+  bornes tenues ; bouton sans piste **pressable et répondu** ; et côté shim, la
+  notification qui publie titre/durée/position et commande l'élément sur une
+  page totalement dépourvue de repères.
+* La preuve qui compte : l'**ancienne** source rejouée sous ces sondes les fait
+  tomber les quatre premières (`jamais disabled : un bouton désactivé ne reçoit
+  aucun événement, l'appui devient muet`), la nouvelle les fait passer. Bilan du
+  run : **154/154**.
+* L'audit croisé (`tools/audit-links.mjs`) a un groupe neuf qui verrouille la
+  leçon : les quatre secours présents **dans les deux modes**, `read()` qui les
+  consulte, `seek`/`playPause` qui s'en servent, `disabled` interdit sur nos
+  boutons, `.is-unavailable` explicitement pressable dans la feuille, `fallback`
+  jugé sur la page, `clickBtn` du shim qui refuse un bouton désactivé. Bilan :
+  **0 erreur, 0 avertissement**, et **33/33** régressions volontaires détectées
+  par `node tools/regress-audit.mjs`.
+* Le garde-fou de ce groupe a failli être faux : il testait
+  `includes("function mediaEl")`, ce qui répond encore oui quand la fonction est
+  renommée `mediaElAbsente`. Vérifié jusqu'à la parenthèse d'ouverture
+  (`hasFn`), sinon un garde-fou qui ne tombe pas n'en est pas un.
+* **La CI est devenue barrière**, plus seulement relevé : `tools/probe-coop.mjs`
+  évalue cinq règles dures dans chaque contexte (Chrome réel, CSS réel, appuis
+  réels par hit-test) et fait **échouer** le run si un bouton de la coque est
+  verrouillé, si un appui est recouvert, si la page joue pendant que la coque se
+  croit sans piste, si la place réservée ne suit pas la hauteur mesurée, ou si
+  une de nos barres dépasse l'écran. Ces règles sont délibérément choisies
+  décidables **sans session** : elles portent sur ce que la coque se fait à
+  elle-même, pas sur ce que Spotify veut bien répondre.
+
+### Ce qui n'est pas vérifiable ici
+
+Ce que la CI ne peut pas faire : avoir **une session connectée**. « Appuyer sur
+lecture avec un compte et un morceau en cours » reste le seul point qui exige
+l'appareil de l'utilisateur — c'est lui qui a signalé le défaut, c'est lui qui
+le validera. Et la `mediaSession` de la page réelle n'existe que si Spotify a de
+quoi jouer : sur une page sans session, la coque retombe sur ses autres chemins
+(boutons, clavier), ce que les sondes mesurent séparément.
+
+---
+
+## §55 — Quelle page l'application reçoit, et comment le prouver (v2.11.20)
+
+**Le reproche.** « Tous les affichages sont buggés. » Le signe mesuré depuis deux
+passes : la page de Spotify est **mise en page plus large que l'écran** — sur le
+banc, `div` de 3830 px pour 412 px de viewport (`dépasse=3404`), `control-button-skip-forward`
+rejeté de 75 px hors écran, et un `div` de 412 px coupé par un parent de 555 px.
+L'utilisateur voit une bande vide à droite et des commandes hors du cadre.
+
+**Ce que j'ai mesuré ici, avec Chrome sur la vraie page** (deux courses, 36243902642
+puis 36250802636). En donnant à la WebView l'agent **du téléphone**, Spotify sert
+son lecteur web mobile (`mobile-web-player.447f0d93.js`, 6 scripts) : la mise en
+page tombe à `412px`, `débordement=0` — le défaut d'affichage disparaît. Mais
+`#main-view`, `#global-nav-bar`, `#Desktop_LeftSidebar_Id` y sont **absents** (la
+coque n'y a plus d'ancre) et, surtout, `docs/UI-REWORK.md` §42 a déjà établi,
+mesure après connexion à l'appui, que **cette page refuse la lecture à un compte
+gratuit** (`mwp.playback.error.protected.content`, « Lecture désactivée »).
+
+**Donc : essayé et annulé.** L'inversion de `userAgentFor` a été écrite, vérifiée,
+puis **revertée** dans la même passe. Changer d'agent réglait la largeur en
+cassant le lecteur — et le lecteur passe avant : c'est l'arbitrage §42. La règle
+est maintenant écrite **avec sa raison** au-dessus de `userAgentFor`, et l'audit
+refuse une règle sans sa raison (« sans la cause mesurée, la règle est inversée à
+la prochaine passe ») — parce que c'est exactement ce qui vient de m'arriver.
+
+**Ce qui est gardé**, mesuré et sans contrepartie :
+
+| Changement | Pourquoi |
+| --- | --- |
+| `10-base.css` stationne la barre de lecture **par repère** — `aside`, `footer`, `div` portant `data-testid="now-playing-bar"` | la page du téléphone ne la nomme pas `aside` ; ne connaître que `aside`, c'est la laisser réapparaître sous la nôtre dès qu'un agent change. L'élément reste vivant (1 px, transparent) pour que la coque puisse le commander |
+| la sonde choisit l'agent **par cible** (`agent: "tel"`) | un contexte qui force l'agent de bureau ne mesure pas l'application ; c'est comme ça que « tout atteignable » a pu couvrir une page rognée des deux tiers |
+| deux contextes sur la vraie page : `coque-bureau` (livré) et `coque-mobile` (l'alternative mesurée) | la question est tranchée par un relevé, plus par une préférence |
+| 6ᵉ règle du garde-fou : une mise en page plus large que l'écran, sans ancêtre rognant et hors `position:fixed` → **faute** | le défaut de l'utilisateur devient une course CI qui échoue, avec l'élément fautif nommé |
+| audit groupe 10 + 5 cas de `regress-audit` | ces fils ne passent par aucun fichier que la coque importe : sans eux, la 2.11.19 serait repartie telle quelle |
+
+**Ce que cette version ne prétend pas avoir réglé.** La largeur de la page de
+bureau dans un cadre de 412 px reste le vrai sujet ; elle est confiée à
+`05-original-fit.css`, et le nombre est désormais **publié à chaque course** par
+le contexte `coque-bureau` (`accueil → mise en page=…px débordement=…`). La
+prochaine passe se juge là-dessus : faire tomber ce débordement à zéro côté
+feuille de style, pas en changeant de page.
+
+**Vérifications locales de cette passe** : build 489 866 car. (14 parties), smoke
+154/154, audit 0 erreur / 0 avertissement, `regress-audit` 38/38 régressions
+détectées, `npm run android` 5/5 ressources. Ce que la CI ne peut pas prouver :
+la page **connectée** sur le téléphone — la largeur réelle après ces changements,
+la position des commandes et l'effet des appuis restent à confirmer sur l'appareil.
+
+## §56 — La logique revient à l'application d'origine ; l'affichage attendra (v2.11.21)
+
+Demande de l'utilisateur, dans l'ordre : **d'abord toute la logique, reprise du
+code d'origine ; l'interface après**. Cette passe pose la logique.
+
+`docs/UI-REWORK.md` §55 laissait un aveu : la coque relit Spotify dans son markup
+et clique ses boutons. L'application d'origine ne fait pas ça. Ses huit blocs
+d'origine, **recopiés octet pour octet** dans `dist/spotiduck-logic.js`
+(`tools/build-logic.mjs`, longueurs + md5 verrouillés dans
+`tools/build-logic.locks.json`) :
+
+| Bloc repris | Ce qu'il fait, que la coque ne faisait pas |
+| --- | --- |
+| état + capteur | lit dans le **trafic de la page** l'identifiant d'appareil (`/track-playback/v1/devices`), le `Client-Token`, le `Bearer`, l'URI en cours (`pathfinder` `isCurated`) ; route les requêtes `connect-state` de Spotify **par le pont Android** ; sur « Player Locked » (404 sur une commande), recharge la page après l'avoir annoncé au pont |
+| `playFromUri` | démarre une piste par l'**API Connect** (`endpoint: play`, `license: "tft"`) — un chemin qui ne dépend d'aucun bouton |
+| `manageWake` · `trigUnlock` | l'écran (verrouillé seulement si la lecture tourne en arrière-plan) et le secours du lecteur verrouillé (`disabled` persistant → rechargement) |
+| `act*` (six commandes) | la commande de l'origine, jugée sur **l'icône du bouton de Spotify**, avec son réveil avant un saut |
+| `manageAll` · `updMedia` | la machine d'état : notification, minuteries d'arrêt, rapport à Android dédupliqué |
+
+Ce qui est **resté dehors, volontairement** : tout ce qui dessine dans ces blocs
+(sa barre du haut, son `npBtn`, ses coupures de rangées d'accueil, `addCSSJSHack`)
+— la coque est seule à dessiner, tant que l'affichage n'est pas rouvert. Les
+fonctions que les blocs citent et qui dessinaient sont fournies vides ou minces,
+et marquées « coque » dans le fichier généré.
+
+**Pourquoi un découpage et pas le script entier** : `spotiduck-original.js` est
+un seul IIFE où l'affichage et la logique partagent les mêmes variables de
+closure ; l'injecter en entier redonnerait l'interface d'origine par-dessus la
+nôtre. Le wrapper ne fait donc que **nourrir** le moteur (`feed` : `track`,
+`position`, `repmode`, `isfav`, et le bouton de lecture que l'original cherche
+lui-même), et ne **double pilote rien** : la notification et les minuteries
+restent à la coque (le pont Kotlin les déduit déjà de `recMediaStatus`), `manageAll`
+n'est pas appelé en boucle, et le capteur d'origine ne se déclenche qu'une fois.
+
+**La porte, dans la coque** : module `Engine` (`src/inject/spotiduck-ui.js`).
+`Spotify.playPause` tente maintenant, dans l'ordre : ses candidats de markup →
+`actPlayPause` de l'origine (jugé sur l'icône) → `playFromUri` sur l'URI du
+contexte affiché → l'élément `<audio>`. Deux gardes, mesurés l'un et l'autre :
+`playContext()` **refuse** de commander tant que le capteur n'a pas vu
+d'appareil (sinon l'URL partirait en `from/undefined/to/undefined`, ce qui
+masquerait le secours), et `actSeek` de l'original **lève** sans curseur de
+progression — d'où l'enveloppe `call()` qui avale et répond faux.
+
+**Pose dans l'application** : `logicScript = readAsset("spotiduck-logic.js")` et
+injection dans `onPageStarted` **avant** l'identité et avant la page — le capteur
+rate tout sinon. `MODE_ORIGINAL` n'est pas touché : il reçoit le script d'origine
+complet, qui contient déjà ces blocs.
+
+**Vérifications** : `node tools/smoke-logic.mjs` **26/26** (capteur sur trafic
+simulé, corps de la commande Connect, déduplication du rapport, mécanique des
+`act*`, les trois gardes de la coque) — harnais en contexte `vm` **fidèle** :
+`window` y est l'objet global, sinon les lectures nues de l'original
+(`playing`, `manageWake`) ne signifient plus rien et le test ment ;
+`npm run smoke` 154/154 · audit 0/0 · `regress-audit` 38/38 ·
+`npm run android` 6/6 ressources (dont `spotiduck-logic.js`, 16 338 car.).
+
+**Ce qui reste ouvert, par ordre** : 1) `updMedia`/`manageAll` comme unique
+rapporteur (il faudra retirer le chemin de la coque, pas additionner) ; 2) le
+curseur de position écrit par l'origine (`actSeek` en secondes, la page mobile en
+millisecondes — la coque mesure déjà l'unité, elle doit la passer au moteur) ;
+3) `Net`/`Api` qui devinent leurs jetons pourraient lire `Engine.tokens()` ;
+4) l'affichage, repris plus tard — la page de bureau dans 412 px (§55) garde son
+chiffre à faire tomber à zéro.
+
+## §57 — La touche du bas ne fait rien : deux maillons qui mentent sur leur succès (v2.11.22)
+
+Remonte de l'utilisateur après la 2.11.21 : « icône en bas de l'écran, les touches ne
+fonctionnent pas ». Deux fautes, toutes deux introduites la veille, et toutes deux du
+même genre — **un maillon qui déclare un succès sans avoir agi** :
+
+1. **le capteur du moteur détournait le trafic de la page.** Le bloc d'origine renvoyait
+   toute URL contenant `connect-state` vers `mngFetch`, donc vers `HttpURLConnection` du
+   pont : plus d'`AbortSignal`, pas de streaming, des en-têtes réécrits. Dans
+   l'application d'origine c'était son lecteur entier ; ici la coque n'a besoin que des
+   **jetons**. Le bloc `capteur` s'arrête donc à la ligne d'origine qui précède le
+   `try { let resp;` et se ferme par une ligne de la coque (`return oriFetch.apply(…)`).
+   Le verrou du bloc porte sur le corps recopié ; la décision de ne pas intercepter est
+   écrite dans le commentaire de l'outil.
+2. **`Engine.toggle` comptait l'appel comme un appui.** `actPlayPause` de l'original
+   répond « oui » même quand sa règle d'icône décide de ne rien presser — et la coque,
+   croyant la commande faite, **renonçait à son propre secours** (`mediaToggle` sur
+   l'élément). Le module `Engine` vérifie maintenant l'événement : un écouteur en capture
+   posé sur le bouton ne le quitte que si l'appui est réellement parti (`pressed`).
+   Et la commande `playFromUri` passe **après** les deux voies vérifiées, en répondant
+   `false` : un envoi réseau ne prouve rien sur l'état de la page, c'est le veilleur
+   (`Auto`, `fallback`) qui juge.
+
+**Ordre des secours de `Spotify.playPause`** : candidats de markup de la coque →
+`actPlayPause` d'origine (appui prouvé) → l'élément `<audio>` → l'API Connect. Cet ordre
+est une décision et le garde-fou la vérifie.
+
+**Vérifications** : audit groupe 11 (les six maillons de la chaîne appui → état →
+Android : spy de l'appui, ordre des secours, absence de détourage, injection du moteur
+avant l'identité et la page, verrous des huit blocs, minuteries déduites d'un seul
+rapport) · `regress-audit` **43/43**, dont cinq cas écrits pour ces deux fautes (retirer
+le spy, sauter le moteur, croire l'envoi réussi, réintercepter le trafic, injecter le
+moteur trop tard) · moteur 29/29 · smoke 154/154 · `npm run android` 6/6.
+
+Ce que la CI ne dira pas : si la touche agit **chez toi**, connectée — le bundle de la
+page dépend de la session. Ce qu'elle dira : que la chaîne est entière et que la coque
+ne se ment pas à elle-même.
+
+## §58 — « Tjrs pareil » : la coque dit ce qu'elle voit des commandes (v2.11.23)
+
+Rien de neuf côté symptôme, donc rien de neuf côté hypothèse : la passe
+précédente **ajoutait un danger** au lieu d'en retirer un, et le seul moyen
+honnête de finir est de faire dire à la coque ce qu'elle trouve dans **ta** page.
+
+**Corrigé ici, sur pièces :**
+
+1. **Le capteur pouvait tuer le `fetch` de la page.** Le bloc d'origine relit le
+   corps de certaines requêtes (`JSON.parse(opts.body)`) sans aucun garde-fou :
+   une requête au corps inattendu faisait **rejeter** la promesse de la page —
+   Spotify cessait de piloter son lecteur, ce qui se voit exactement comme
+   « les touches du bas ne font rien ». Le wrapper est refermé sur le capteur
+   (`tools/build-logic.mjs`, bloc *coque* après les huit blocs) : ce qu'il avait
+   à lire est lu, et si sa lecture lève, la requête de la page part quand même,
+   telle quelle. Un compteur, `SpotiDuckLogic.captureErrors()`, dit si cet
+   écart s'est produit (un compteur qui monte = page et capteur ne sont pas
+   d'accord).
+2. **Le geste large a été mesuré puis écarté.** Émettre `pointerdown` +
+   `mousedown` + `pointerup` + `mouseup` + `click` pour attraper un handler
+   branché ailleurs que sur `click` : **neuf commandes de lecture cassées au
+   smoke**, parce que nos propres écouteurs de gestes (`Gestures`, sur le
+   document) capturent le synthetic `pointerdown` et avalent le clic. L'unique
+   `click` revient, et la **consommation** de l'événement (`defaultPrevented`)
+   devient une mesure publiée, plus un portillon de réussite.
+3. **Le diagnostic dit ce que les commandes trouvent.** `Engine.selfTest()`
+   compte, pour chacune des six (lecture/pause, suivant, précédent, aléatoire,
+   répétition, j'aime) : le nombre de candidats de la page, si le meilleur est
+   vif ou désactivé, et l'état du moteur (appareil capté, jeton, auth). **Sans
+   rien presser** — un diagnostic qui change l'état de la lecture est un
+   mensonge. Une ligne de plus dans le diagnostic copiable :
+   `· commandes playPause:candidats=2 vif · next:… · moteur=là appareil=…`.
+   `SpotiDuckUI.selfTest(true)` est la variante qui appuie et publie « consommé
+   / NON CONSOMMÉ », pour la sonde de CI.
+
+**Ce que ça change pour toi** : la prochaine fois que tu copies le diagnostic
+(bouton « Copier le diagnostic »), tu m'envoies *la cause*, et pas une
+description. `candidats=0` partout = la page n'a pas les repères attendus (et
+alors c'est l'API Connect qui doit commander — le capteur dira pourquoi elle ne
+le peut pas encore) ; `vif` mais rien ne se passe = l'appui part et n'est pas
+traité ; `désactivé` = Spotify attend quelque chose (appareil non transféré,
+compte, pause réseau).
+
+**Vérifications** : build du moteur 17 585 car. · smoke 154/154 · moteur 29/29 ·
+audit 0/0 (groupe 11, six maillons de la chaîne appui → Android) · regress
+43/43 · `npm run android` 6/6.
+
+## §59 — Le réparateur de lecture revient de l'application d'origine (v2.11.24)
+
+Le dépôt officiel `23fpsz/SpotiDuck-Releases` ne contient **aucun code** : README,
+hôtes publicitaires, captures, et une release « latest-beta » construite depuis un
+dépôt privé. L'APK y est inaccessible depuis ce sandbox (l'hôte d'assets de release
+refuse la connexion), donc le code d'origine lisible reste `src/original/` — qui est
+déjà le script de l'application d'origine, assemblé depuis la déobfuscation publique.
+
+En le relisant pour le **bug de lecture**, un manque est apparu : la passe précédente
+avait porté huit blocs et **laissé dehors le corps de `firstFuck`** — or c'est lui qui
+répare. Deux blocs de plus, repris tels quel (`veille` 313 car., `installation`
+1135 car.) :
+
+- la branche d'écran (verrouiller seulement si la lecture tourne en arrière-plan,
+  jamais pendant une vidéo) ;
+- **la revendication du bouton lecture/pause de la page** (`.fuckd`, `playLoaded`),
+  et surtout la **danse de déverrouillage** : si dix secondes après une demande de
+  lecture rien ne joue, l'origine annonce `unlock` au pont, **presse suivant** — ce
+  qui force Spotify à élire un appareil de lecture, le vrai mécanisme du
+  « Sélectionnez un appareil » qui rend le lecteur muet — puis arme `trigUnlock`
+  (rechargement tant que le bouton reste désactivé) ;
+- et `ffDone`, dont dépend la resynchronisation d'état par le trafic de la page
+  (`PUT /track-playback/` → `manageAll`) : sans lui le capteur **lit sans décider**.
+
+L'installateur (côté coque, marqué comme tel) rejoue ces deux blocs sur les mutations
+de la page et garde l'intervalle de 5 s d'origine comme filet : le rythme d'origine
+était trop lent pour un premier appui. `Engine.sync`, branché sur le seul endroit où
+l'état part vers Android, tient le moteur au courant de ce qui joue — sans double
+rapport (`updMedia` déduplique, le pont aussi).
+
+**Vérifications** : moteur 21 709 car. (10 blocs verrouillés) · smoke 154/154 ·
+assertions du moteur 29/29 · audit 0/0 · regress 43/43 · `npm run android` 6/6.
+Ce qui manque toujours, et ne peut venir que de ton téléphone : la ligne
+`· commandes …` du diagnostic, qui dira si la page offre des candidats, s'ils sont
+vifs, et si l'appui est consommé.
+
+## §60 — Le dépôt se vérifie tout seul (v2.11.25)
+
+« Rends le projet plus propre et plus structuré pour éviter tous les bugs etc de
+compilateur etc ». Le périmètre choisi est la **sûreté de construction**, pas une
+réécriture : remuer `tools/` en sous-dossiers ou découper la coque (41 modules dans
+une seule IIFE de 9 000 lignes) aurait cassé plus de câblage (scripts npm, workflows,
+chemins attendus par l'audit, portée des variables) que ça n'aurait rapporté de
+propreté. Ce qui a été fait tient en six lignes, et chacune répond à un défaut
+**vécu** dans cette session, pas à un goût.
+
+1. **`tools/check.mjs` — le portique d'hygiène** (`npm run check`, 8 règles, table,
+   code 1). Il parse tout le JS du dépôt avec acorn (le « compilateur » qu'on n'avait
+   pas), compare octet pour octet `dist/*` et `android/app/src/main/assets/*`, vérifie
+   que toute entrée et toute sortie de construction est **suivie par git**, que l'index
+   ne déclare pas « supprimé » un fichier qui existe encore, que les dix verrous du
+   moteur sont posés, que toute méthode citée sur le pont existe côté Kotlin, que les
+   15 XML sont bien formés (faute avant `aapt2`), que les délimiteurs de commentaires
+   Kotlin s'équilibrent, que les scripts npm et les workflows ne pointent dans le
+   vide, que le bundle porte les 14 feuilles CSS **et** la version du dépôt, et que
+   toute référence `§NN` du code a sa section dans cette doc.
+2. **`npm run check:selftest`** : le portique est rejoué sur **cinq mutations
+   réelles** du dépôt (JS non parsable, accent grave dans un gabarit, ressource
+   livrée périmée, fichier non suivi, référence de doc pendante) et **échoue si un
+   de ses détecteurs ne tombe pas**. C'est la traduction de la règle de vérification
+   qu'on s'est donnée : un test qui n'aurait pas rattrapé le défaut ne sert à rien.
+3. **`.github/workflows/ci.yml` — il manquait tout court.** Depuis le début de ce
+   projet, seuls les tags de release lançaient quelque chose : aucune PR n'a jamais
+   exécuté un test. La CI rejoue maintenant build → `git diff --exit-code` sur les
+   fichiers générés → check → selftest → fumée → audit → régressions, plus un filet
+   « la vérification n'a rien laissé de sale » qui attrape un générateur non
+   déterministe.
+4. **Un seul chemin de construction** : `npm run android` = `npm run build &&
+   npm run sync:android` (avant, il rejouait deux générateurs dans son propre ordre,
+   ce qui permettait de livrer une chaîne partielle) ; `verify` enchaîne tout ;
+   `engines.node` + `.nvmrc` + `.editorconfig` posés (le dépôt n'en avait aucun —
+   vérifié) ; un script `silence` pour `tools/make-silence.mjs`, qui était une entrée
+   humaine non déclarée.
+5. **Les verrous ne se posent plus tout seul** (`--record-locks`). Le défaut était
+   le plus fourbe des deux : `build-logic.mjs` enregistrait l'empreinte d'un bloc
+   sans verrou à chaque build ordinaire — un bloc **mal découpé** se trouvait donc
+   certifié « repris tel quel » par le simple fait d'avoir été construit. Et le test
+   de divergence comparait la longueur **avant** l'empreinte : un bloc changé à
+   longueur égale était accepté sans un mot (vérifié en relisant la condition, qui
+   contenait `lock.len === got.len && got.len !== lock.len`, soit faux par
+   construction). Maintenant : aucun build ordinaire ne touche le fichier de verrous,
+   il n'est écrit que sur `--record-locks`, et `check` refuse un dépôt où un verrou
+   manque. L'audit, lui, lit la liste des blocs **dans** `build-logic.mjs` au lieu de
+   la dupliquer — la duplication avait déjà oublié `veille` et `installation`.
+6. **`docs/ARCHITECTURE.md`** : le graphe de construction, la table de qui fait quoi,
+   les huit invariants, et surtout la **carte des garde-fous** — quelle classe de
+   défaut est attrapée par quelle porte, et ce qui n'est volontairement vérifié nulle
+   part ici (le rendu réel, la grammaire Kotlin, le markup de Spotify).
+
+**Ce que le portique a trouvé pendant qu'on l'écrivait** — c'est la mesure qui prouve
+qu'il sert à quelque chose : (a) l'asset `spotiduck-logic.js` **n'était pas suivi**
+par git après un rollback d'environnement, et l'index le déclarait supprimé alors
+qu'il était sur le disque : un `git commit -a` inattentif retirait de la branche la
+ressource que l'application lit ; (b) `dist/spotiduck-ui.js` était resté périmé de
+66 Ko (464 678 au lieu de 505 547 octets) et `npm run android` vérifiait son propre
+`dist` périmé, 6/6 vert ; (c) en retouchant un en-tête de gabarit, **je suis moi-même
+tombé dans le piège de la règle 1** (un accent grave inséré dans un littéral de
+modèle a cassé le parseur de `build-logic.mjs`, trois fois de suite, avec une pile
+d'appels ESM sans numéro de ligne utile) ; (d) ma propre règle « signature Kotlin
+déclarée deux fois » hurlait sur `MainActivity.kt`, qui déclare bien
+`shouldOverrideUrlLoading` deux fois — dans deux `WebViewClient` distincts, ce qui est
+légal : la règle a été **retirée**, parce qu'une règle à faux positifs est retirée la
+semaine suivante et le code se casse ensuite en confiance ; (e) la règle de références
+de doc était **aveugle** (elle effaçait les commentaires avant de chercher des
+références écrites dans des commentaires) — c'est l'auto-test qui l'a montré, en
+échouant.
+
+**Vérifications** : `check` 0 erreur / 0 avertissement · selftest **5/5** mutations
+détectées · moteur 21 684 car. (10 verrous fidèles, en-tête nettoyé de ses accents
+graves) · smoke 154/154 · assertions du moteur 29/29 · audit 0/0 · regress 43/43 ·
+`npm run android` 6/6 · bundle 501 661 car. portant la version 2.11.25. Ce qui manque
+toujours, et ne peut venir que de ton téléphone : la ligne `· commandes …` du
+diagnostic.
+
+## §61 — La coque est découpee : un fichier par section (v2.11.26)
+
+« J'avais dit de structurer au maximum, chaque action, chaque logique dans son
+fichier dédié. » C'était bien la demande, et mon tour précédent s'était arrêté à la
+vérification sans faire la découpe. La voici, et la raison pour laquelle elle est
+acceptable alors qu'une réécriture de 9 108 lignes ne l'est pas : **elle est
+mécanique et prouvée par les octets**.
+
+**La règle de la passe** : après découpe, le bundle reconstruit doit être
+*identique octet pour octet* à celui d'avant. `cmp` sur `dist/spotiduck-ui.js`.
+Si un seul octet bouge, la découpe est rejetée. C'est la mesure qui peut échouer —
+et elle a échoué une première fois pour la bonne raison : le build avait planté sur
+un filtre de noms (`\d\d-` au lieu de `\d{2,3}-`), donc `cmp` comparait l'ancien
+fichier et passait vacuument. La preuve a été refaite en **supprimant la sortie
+avant** de la reconstruire :
+
+    rm -f dist/spotiduck-ui.js && node tools/build.mjs && cmp /tmp/bundle-avant.js dist/spotiduck-ui.js
+    → 505 547 octets, identiques.
+
+**Ce qui vit maintenant où**
+
+- `src/inject/ui/NNN-slug.js` — **39 modules**, un par section de la coque telle
+  qu'elle était déjà écrite (les bannières de section existaient depuis le début,
+  numérotées pour les premières — `0. Tiny helpers`, `10. Actions — optimistic UI +
+  verification` — et muettes pour les autres, nées des passes ultérieures : `Net`,
+  `Home`, `Library`, `Stats`, `Sheets`, `Viewport`, `Device`…). Les fichiers sont
+  **bruts** : le morceau de la coque, indentation comprise. Aucun en-tête ajouté,
+  aucun déindentage — c'est ce qui rend la recollade triviale et vérifiable.
+- `src/inject/spotiduck-ui.js` — réduit à **57 lignes / 2 908 octets** (contre
+  379 371) : le contrat en en-tête, l'ouverture de l'IIFE, le marqueur
+  `/* @@MODULES@@ */`, la fermeture.
+- `tools/ui-source.mjs` — l'assembleur, **unique définition de l'ordre** (tri par
+  nom, donc par numéro gravé dans la bannière). Six outils lisaient le fichier
+  source à la main (audit, deux fumées, régressions, sonde, générateur du moteur,
+  portique) : ils passent tous par lui. Sans ça, la découpe aurait remplacé un
+  monolithe par six monolithes en désaccord — et l'audit aurait déclaré « plus de
+  module X » alors que X est vivant dans un fichier.
+- `tools/split-ui.mjs` — le découpeur, rejouable (`--dry` pour voir le plan). Il
+  **vérifie avant d'écrire** : le recollement doit reproduire le fichier d'origine,
+  sinon rien n'est touché. Il refuse aussi une section qui ne se parse pas seule,
+  ce qui est la définition d'une frontière mal posée.
+- `src/inject/native-mode.js` — le mode « page d'origine habillée » avait **une
+  source dans le dossier livré** : cinq passes de correctifs y avaient été posées
+  directement dans `android/app/src/main/assets/`, si bien que rien ne pouvait dire
+  si l'asset était à jour de quoi que ce soit. C'est un asset **copié** depuis
+  `src/` comme les autres ; les octets livrés sont restés identiques (`cmp` ✓), le
+  téléphone ne verra aucune différence.
+
+**Ce qui empêche la découpe de se refermer** — `npm run check` règle 9, quatre
+contrôles nouveaux, tous déterministes : la forme du nom (`NNN-slug.js` — un module
+mal nommé n'est **pas** assemblé, et le bundle restant valide, rien ne le dit
+avant le téléphone) ; la contiguïté de la numérotation (l'ordre est un contrat :
+`State` avant `Mirror`, `Mirror` avant `UI`) ; chaque module se parse **seul** ;
+l'enveloppe ne contient plus aucune bannière de section et reste sous 8 000 octets.
+L'auto-test du portique (`--selftest`) a gagné une mutation : déposer
+`src/inject/ui/_selftest-oublie.js` doit être signalé. **6/6**.
+
+**Ce que la découpe ne fait pas**, et c'est délibéré : elle ne découpe **pas à
+l'intérieur** d'une section. `Actions` reste un fichier de 311 lignes parce que ses
+membres sont les propriétés d'un objet, pas des unités indépendantes — les sortir
+chacune dans son fichier imposerait de réécrire l'objet en assembleur de morceaux,
+c'est-à-dire de toucher à la sémantique (portée, `this`, ordre d'initialisation)
+pour un gain de découpage nul. La granularité utile est la section ; là où une
+section est grosse, elle l'est pour une raison (`002-spotify-adapter-only`,
+178 lignes qui sont *le* contrat avec le DOM de Spotify).
+
+**Mesures** : bundle identique octet pour octet · smoke **154/154** · assertions du
+moteur **29/29** · audit **0/0** · regress **43/43** (les cas qui visaient la coque
+mutent désormais **le module qui contient le texte** : le motif est localisé, pas
+recollé à la main) · `check` 0 erreur · auto-test **6/6** · asset `native-mode.js`
+livré inchangé.
+
+**Prolongement immédiat (même passe).** Une découpe se lit par ses noms : seize
+modules portaient un nom déformé par les accents (`026-notre-biblioth-que.js`) ou
+réduit à `module` parce que le numéro de passe (`11e-quinquies-bis.`) mangeait le
+mot suivant. Le nom est donc **re-tiré** du titre de section — premier segment avant
+le tiret demi-cadratin, numéro de passe retiré par un motif borné (pas une liste
+d'exceptions à tenir à jour), deux mots au plus. La liste des 39 fichiers est
+désormais une carte de la coque : `002-spotify-adapter`, `003-engine`, `012-actions`,
+`018-device`, `025-home`, `026-library`, `027-net`, `028-stats`, `034-gestures`,
+`038-public-api`.
+
+Et pour que ça le reste, `tools/split-ui.mjs` lit la coque **assemblée** et non
+l'enveloppe : il est rejouable (renommer, renuméroter, rééquilibrer une frontière se
+font avec `npm run split:ui`, jamais à la main dans `src/inject/ui/`). Mesure après
+le renommage : `cmp` du bundle avant/après — **identique**, donc **aucune nouvelle
+release n'est justifiée** : c'est la règle 2 du portique qui l'affirme, et tant
+mieux, elle prouve par là même qu'elle n'est pas qu'un rituel.
+
+
+## §62 — Un appui = une commande (v2.11.27)
+
+La demande était la plus large de toutes : « corrige la lecture des musiques sur
+l'application (boutons etc) ». Plutôt que de réécrire la chaîne de commande au
+juger, j'ai suivi celle qui était livrée, et je l'ai mesurée — avec un test écrit
+**avant** le correctif, qui échouait dessus.
+
+Deux défauts s'y trouvaient, et le second masquait le premier.
+
+**Un appui envoyait deux commandes.** `Engine.playContext()` répondait `false` par
+design — une commande réseau ne prouve rien, et la chaîne ne devait rien affirmer
+que la page n'ait confirmé. Cette pudeur avait un coût non prévu : `Actions.playPause`
+interroge la chaîne pour savoir s'il faut son secours clavier, voit `false`, et
+appelle `fallback(" ", …)` — dont la première ligne envoie un `keydown` Espace
+synthétique, **dans le même tour de boucle** que le `playFromUri` qui venait de
+partir. Deux pilotes sur un doigt : la page démarre, la touche la met en pause.
+Cela ne se voyait que là où la page n'offre pas de bouton de lecture vivant —
+c'est-à-dire précisément dans les configurations où l'utilisateur ne voit rien se
+passer. Mesure avant correctif : `Espace envoyé 1 fois` alors qu'il devait être tu.
+
+**Un appui obtenu n'était pas une lecture obtenue.** Quand le bouton existe et
+consomme l'événement, la chaîne répond `true` — et là, plus rien : pas de secours,
+pas de commande API, pas de verdict. Si Spotify n'est pas l'appareil de lecture,
+l'affichage optimiste se rollbacke tout seul et le seul filet qui reste est
+`Auto.armStuck`, dix secondes plus tard, qui passe par « piste suivante ». Un
+utilisateur qui appuie sur *Lire* et qui obtient un changement de morceau dix
+secondes plus tard a raison de dire que les boutons ne marchent pas.
+
+Ce qui a été changé, dans cet ordre :
+
+| Endroit | Ce qui est désormais vrai |
+| --- | --- |
+| `Engine.playContext` | répond « commande engagée » (et non plus « échec ») et **marque** cette commande dans `Engine._sent` ; jamais « la musique joue » |
+| `Engine.inFlight` / `settleSent` | la marque expire à 4 s, et `Engine.sync` la solde dès que la page dit ce qu'on voulait — un seul endroit, le tunnel qui parle déjà à Android |
+| `Actions.playPause` | si la chaîne échoue **alors qu'une commande roule**, le secours est séquencé (`awaitEngine` : on attend 1,6 s, on relit, on ne corrige que si rien n'a bougé) ; s'il n'y a pas de commande en cours, il part **tout de suite** — zéro latence ajoutée |
+| `Actions.verifyPlay` | après un appui réussi, la page est relue à 1,5 s ; si elle ne joue pas, escalade dans l'ordre : API du moteur, puis clavier, jamais les deux |
+| `Actions.fallback` | accepte une touche nulle : « juge, dis si rien ne joue, n'envoie rien » |
+| les deux verdicts | préviennent le moteur de l'état mesuré (`Engine.feed()`), sinon il rejoue d'après un souvenir |
+| `Actions._pending` | un appui vide le registre des échéances : le verdict d'un appui antérieur n'écrit plus dans un état qui ne le concerne plus |
+
+Le réflexe a été gardé d'exiger la preuve par le test. Trois cas sont entrés au banc
+jsdom, et chacun a été vu **échouer avant** le correctif : 155/156 (le secours
+concurrent), puis 156/157 (l'escalade absente). Le cas complémentaire compte
+autant que les autres : *sans* moteur, le secours doit partir immédiatement — il a
+passé à chaque exécution, ce qui interdit d'avoir réglé le premier défaut en
+endormant le bouton.
+
+Trois accidents de mesure, notés parce qu'ils disent plus que le correctif :
+
+1. un test temporisé écrit avec `check()` rendait une promesse que le harnais ne
+   pouvait pas attendre — **vert affiché, assertion jamais exécutée**. Depuis,
+   `check()` refuse une promesse et renvoie l'oubli vers `await checkAsync(...)` ;
+2. mes échéances à 1,5 s et 1,6 s déborderaient du test sur le suivant et y
+   écrivaient : le banc a fabriqué un faux défaut (`sd-native-modal not cleared`,
+   sans aucun rapport avec la lecture). Le registre `_pending` sert aussi à cela ;
+3. deux assertions du banc « moteur d'origine » et trois règles d'audit défendaient
+   la forme du texte, pas l'intention — elles sont tombées quand j'ai mis le
+   `Engine.feed()` à quatre lignes de distance du `if`. Elles sont écrites à
+   l'ordre, désormais, et tolèrent un commentaire.
+
+Verrous d'audit ajoutés (cinq) : la marque `_sent` et son `return true`, le solde
+branché sur `Engine.sync`, la garde `inFlight` devant le secours, l'existence de
+`awaitEngine` et de `verifyPlay`. Chacun est coupé séparément dans
+`tools/regress-audit.mjs` : **47/47** régressions détectées, donc aucun de ces fils
+ne peut se rompre en silence.
+
+Mesure à la release : `check` 0/0 · auto-test du portique 6/6 · banc jsdom
+**157/157** (deux exécutions de suite, identiques) · assertions du moteur d'origine
+**30/30** · audit des liens 0/0 · audit de régression 47/47.
+
+Ce que cette note ne prétend pas. Les deux défauts étaient réels, reproductibles
+ici, et sont corrigés ici. Ils n'expliquent **pas** à eux seuls tout ce qui a pu
+être observé sur le téléphone : la ligne de diagnostic que la notice demande
+(« · commandes … » sous le titre du lecteur) n'est jamais revenue dans nos
+échanges, et c'est elle qui dirait quel maillon répond sur la vraie page. Sur
+v2.11.27, le texte à recopier est : bouton *Lire* pressé une fois, attendre trois
+secondes, recopier la ligne complète sous le titre. Sans elle, je continue à
+corriger ce que je peux mesurer — pas ce que tu vois.
+
+## §63 — Le relais perdu de vue (v2.11.28)
+
+« Le lecteur ne réponds pas. » Cette fois, avant d'écrire une ligne de correctif,
+j'ai été chercher ce que la CI savait déjà.
+
+**Ce que j'avais sous la main sans le savoir.** Les sondes de lecture, de connexion
+et d'inspection publient leur relevé en *annotations* de check-run. Trois rounds
+durant, j'ai conclu « logs illisibles depuis ici » sur un `404` — je demandais les
+annotations avec l'identifiant du **job** au lieu de celui du **check-run**. Une fois
+le bon identifiant utilisé, la vraie page s'est mise à parler :
+
+| Mesure (Chrome sans tête, agent et identité de l'application) | Relevé |
+| --- | --- |
+| ancres de la page, agent mobile | `page=aucun repère` |
+| ancres de la page, agent de bureau | `page=barreLaterale+barreLecture+accueil` |
+| nos quatre commandes de transport, sur la page | `playPause/next/prev/repeat = 1 candidat(s) → choisi 62x62 DÉSACTIVÉ`, `shuffle=AUCUN`, `like=AUCUN` |
+| nos propres boutons | `play=48x48 dessus=lui-même` (les huit), `30 boutons (22 visibles) tous atteignables` |
+| trafic de l'API, IP de centre de données | `/me → navigateur 429`, `jeton capté · pas de compte` |
+
+Trois hypothèses sont mortes là : nos barres ne recouvrent rien (hit-test conforme),
+aucun de nos boutons n'est verrouillé, et la coque se construit sur la page réelle.
+Une quatrième est née : **la page est dans l'état « un autre appareil tient la
+lecture »** — tous les boutons présents, tous désactivés. Dans cet état, une seule
+chose répond : le relais « Écouter sur cet appareil ».
+
+**Deux maillons cassés, et une idée fausse.** En lisant le chemin du relais :
+
+1. `SEL.takeover` et `SEL.takeoverRows` étaient punaisés sur `aside` (et `div`) alors
+   que `SEL.npBar` connaît trois formes et que notre propre `10-base.css` écrit,
+   depuis le 26/09, que la barre servie est un **`footer`**. Sur la page du
+   téléphone, le relais n'était donc jamais trouvé — et le bouton de la liste des
+   appareils non plus, ce qui laisse le relais pressé mais la lecture ailleurs.
+2. `Actions.playPause` ne tentait le relais **que** quand un appui avait déjà
+   réussi. Or un appui réussi est exactement ce qui n'arrive pas dans l'état
+   « désactivé » : le seul cas où le relais sert était le seul où on ne le
+   tentait pas.
+3. J'ai cru un moment que `Auto.watch()` n'était branché nulle part (`grep` sur
+   `Auto.watch()` : aucun appelant). C'est faux — `Auto.start()` l'appelle, et
+   `startPlayer()` est rappelé par la sonde du miroir dès que la barre apparaît.
+   L'hypothèse n'a pas été livrée. Elle a en revanche révélé le vrai défaut de
+   branchement : l'observateur est posé **sur le nœud** de la barre, et React
+   remplace ce nœud à chaque redessin ; le guetteur survivait sur un nœud détaché.
+
+Correctifs, dans l'ordre de ces fils :
+
+| Endroit | Ce qui est désormais vrai |
+| --- | --- |
+| `SEL.takeover`, `SEL.takeoverRows` | une forme **sans étiquette de balise** (`[data-testid="now-playing-bar"] …`) en tête de liste, les formes connues derrière |
+| `Auto.TAKEOVER_RE` | reconnaît les libellés relevés dans les fichiers de langue du lecteur mobile (`« Vous écoutez sur »`, `« Lecture sur cet appareil »`) — la sonde les avait recopiés, personne ne les avait lus |
+| `Auto.takeoverButton` | fait confiance à `data-testid="takeover-button"` sans filtrer par traduction : une langue ne doit pas décider si la lecture revient ici |
+| `Actions.playPause` | quand la page **refuse** la commande, le relais est tenté d'abord, et le clavier reste séquencé derrière (`maybeTakeover` rend un verdict, plus un silence) |
+| `Auto.watch` | rebranchable et rappelé à chaque mutation de page : une barre remplacée ne tue plus le guetteur |
+| `Actions.blame` | la **deuxième** commande sans effet ouvre la carte du diagnostic — la carte de la page vide, avec son bouton « copier » |
+| `Content.diagnose` | dit `relais proposé` ou `relais absent` : c'est la ligne qui sépare « Spotify occupé ailleurs » de « pas de session » |
+
+Mesure, sur la configuration livrée : `check` 0/0 · portique auto-testé 6/6 · banc
+jsdom **161/161** · assertions du moteur d'origine **30/30** · audit des liens 0/0 ·
+**52/52** régressions détectées. Deux des trois nouveaux cas de lecture ont échoué
+avant le correctif, comme de juste ; et c'est un test **existant** (l'escalade au
+moteur) qui a attrapé la faute que je viens de commettre en chemin — un `this` repris
+dans un rappel où le récepteur s'appelle `self`, qui fermait `verifyPlay` en
+permanence. C'est à peu près ce à quoi sert un banc.
+
+Ce qui reste hors de portée d'ici : le bac n'a pas de réseau vers `open.spotify.com`
+(TLS interrompu) et la CI ne peut pas se connecter à un compte — ses relevés sont
+donc faits **sans session**, ce qui explique des `429` et le `titre=""` du zap.
+D'où la carte : pour la première fois, un téléphone qui ne répond pas peut envoyer
+lui-même la phrase exacte qui dira quel maillon a manqué, sans rien recopier.
+
+## §64 — La carte qui faisait taire le lecteur (v2.11.29)
+
+Six heures après la 2.11.28, un contrôle de la CI est passé en échec, et il avait
+raison. Message relevé sur deux cibles :
+
+```
+accueil : l'appui ne parvient pas au bouton :
+  button.sd-iconbtn recouvert par div.sd-content-alert   (×3)
+page-fr : idem
+```
+
+C'était ma carte du diagnostic. Je l'avais branchée sur la deuxième commande restée
+sans effet — donc, sur une page qui affiche très bien mais dont les commandes ne
+répondent pas, elle s'ouvrait… en **modale plein écran**, posée sur la barre
+d'onglets et sur le lecteur. Comme notre couche donne `pointer-events: auto` à ses
+enfants directs, la carte avalait tous les appuis : **la coque devenait muette parce
+qu'elle signalait qu'elle était muette.** Un cercle que seul un écran réel pouvait
+montrer — jsdom ne hit-teste pas, et le banc est resté vert pendant que la sonde
+rougeait.
+
+Cinq choses tirées de là, écrites dans le dépôt pour qu'elles ne dépendent plus de
+la chance :
+
+| Règle | Pourquoi |
+| --- | --- |
+| une carte de diagnostic ne remplace jamais ce qu'elle diagnostique | la bande se cale `inset: auto … calc(var(--sd-bottom) + 8px) …`, au-dessus de l'espace du lecteur, jamais `inset: 0` |
+| elle se referme seule (45 s) et sur le premier succès | `blameClear` appelle `hideAlert` ; `hideAlert` annule l'échéance — sinon une fermeture à la main serait suivie d'une réouverture fantôme |
+| `Recharger` disparaît en mode bande | recharger une page qui affiche n'est pas la réponse à une commande muette |
+| la forme plein écran reste pour la page vide | là, rien d'autre ne mérite les appuis : la modale est la bonne forme |
+| quatre verrous d'audit, chacun coupé dans `regress-audit` | dont un sur la **feuille CSS** elle-même : la classe sans la règle correspondante ne protège de rien |
+
+Pour que le cas soit rejouable, `tools/regress-audit.mjs` a gagné une entrée
+`orig:` vers `src/inject/70-original.css` — sans fichier enregistré dans sa table,
+un cas qui mute du CSS n'est rejoué **nulle part** et tombe donc pour la mauvaise
+raison (cinq autres feuilles y étaient déjà, celle-ci manquait).
+
+Mesure : `check` 0/0 · portique 6/6 · banc **161/161** · moteur d'origine **30/30** ·
+audit 0/0 · **56/56** régressions. Et la leçon de méthode, qui vaut plus que le
+correctif : les annotations des sondeurs se lisent avec l'identifiant du *check-run*,
+pas celui du job — depuis que je les ouvre, c'est la deuxième fois qu'elles me
+reprennent, et les deux fois sur un défaut que **je** venais d'introduire.

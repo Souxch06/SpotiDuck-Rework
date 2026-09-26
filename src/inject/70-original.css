@@ -368,6 +368,49 @@ html.sd-mobile .sd-layer .sd-content-alert {
 html.sd-mobile .sd-layer .sd-content-alert[hidden] {
   display: none;
 }
+
+/* --------------------------------------------------------------------------
+   Mode « le lecteur ne répond pas » : la même carte, mais **posée dans la
+   marge**, jamais sur l'écran entier.
+
+   La 2.11.28 l'ouvrait en modale plein écran — et la sonde de CI l'a prise en
+   flagrant délit, sur deux cibles : « button.sd-iconbtn recouvert par
+   div.sd-content-alert ». Nos propres boutons devenaient morts parce qu'on
+   annonçait qu'ils ne répondaient pas : c'est exactement le symptôme que la
+   carte devait servir à mesurer. Une carte de diagnostic ne doit jamais
+   remplacer ce qu'elle diagnostique.
+
+   D'où : une bande calée **au-dessus** de l'espace réservé du lecteur et de la
+   barre d'onglets, jamais `inset: 0`. Les appuis parviennent encore à tout le
+   reste, y compris aux commandes qu'on est en train d'accuser.
+   -------------------------------------------------------------------------- */
+html.sd-mobile .sd-layer .sd-content-alert.sd-content-alert-compact {
+  inset: auto var(--sd-safe-r) calc(var(--sd-bottom) + 8px) var(--sd-safe-l);
+  z-index: 44; /* au-dessus du lecteur, sous les feuilles (30-sheets) */
+  display: block;
+  padding: 0;
+  background: none;
+}
+html.sd-mobile .sd-layer .sd-content-alert-compact .sd-content-alert-card {
+  width: auto;
+  max-height: 34vh;
+  overflow: hidden;
+  padding: calc(12px * var(--sd-u));
+  border: 1px solid var(--sd-line, rgba(255, 255, 255, 0.14));
+  border-radius: calc(12px * var(--sd-u));
+  background: var(--sd-surface, #121212);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+}
+html.sd-mobile .sd-layer .sd-content-alert-compact .sd-content-alert-diag {
+  max-height: 12vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+/* Recharger une page qui affiche très bien n'est pas la réponse à une commande
+   muette : le bouton reste dans le DOM (l'audit le compte) mais ne se montre pas. */
+html.sd-mobile .sd-layer .sd-content-alert-compact .sd-content-alert-reload {
+  display: none;
+}
 html.sd-mobile .sd-layer .sd-content-alert-card {
   display: flex;
   flex-direction: column;

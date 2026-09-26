@@ -318,7 +318,11 @@ html.sd-mobile .sd-root [data-testid="card-click-handler"] {
 html.sd-mobile .sd-layer .sd-iconbtn:active {
   background: var(--sd-state);
 }
-html.sd-mobile .sd-layer .sd-tab:active .sd-tab-icon {
+/* Les icônes des onglets portent `.sd-icon-line` / `.sd-icon-solid` (il n'y a
+   jamais eu de `.sd-tab-icon`) : la règle d'enfoncement à l'appui ne
+   s'appliquait donc à rien. */
+html.sd-mobile .sd-layer .sd-tab:active .sd-icon-line,
+html.sd-mobile .sd-layer .sd-tab:active .sd-icon-solid {
   transform: scale(0.92);
 }
 html.sd-mobile .sd-layer .sd-ctrl-play:active,
@@ -444,9 +448,11 @@ html.sd-mobile .sd-layer .sd-seek-thumb {
 html.sd-mobile .sd-layer .sd-seek.is-dragging .sd-seek-track {
   height: 6px;
 }
-html.sd-mobile .sd-layer .sd-mini-progress i {
-  height: 2px;
-  background: var(--sd-accent);
+/* Même geste, même épaississement que la barre du lecteur plein écran (M3 :
+   la piste grossit pendant le déplacement du doigt). */
+html.sd-mobile .sd-layer .sd-mini-seek.is-dragging > i,
+html.sd-mobile .sd-layer .sd-mini-seek.is-dragging::before {
+  height: 6px;
 }
 
 /* --------------------------------------------------------------------------

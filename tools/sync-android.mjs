@@ -26,7 +26,18 @@ const jobs = [
   { from: join(root, "dist/spotiduck-original.js"), to: join(assets, "spotiduck-original.js") },
   { from: join(root, "dist/original-fingerprint.js"), to: join(assets, "original-fingerprint.js") },
   { from: join(root, "dist/spotiduck-identity.js"), to: join(assets, "spotiduck-identity.js") },
+  /* Le **moteur** de lecture (blocs d'origine repris tels quels) : sans lui, la
+     coque retombe sur le seul markup de Spotify — et « le lecteur ne fait rien »
+     revient dès qu'un repère change de nom. */
+  { from: join(root, "dist/spotiduck-logic.js"), to: join(assets, "spotiduck-logic.js") },
   { from: join(root, "adblock_hosts.txt"), to: join(assets, "adblock_hosts.txt") },
+  /* Le mode « page d'origine habillée » est **la**界面 par défaut d'un compte
+     gratuit : il a donc le même droit que les autres ressources d'être écrit dans
+     src/ et copié ici, plutôt que d'être édité à même le dossier livré. Cinq
+     passes de correctifs y ont été posées directement dans assets/ : rien, avant
+     ce patch, ne pouvait dire si la copie livrée était bien à jour de quelque
+     source — et « npm run check » n'avait rien à comparer. */
+  { from: join(root, "src/inject/native-mode.js"), to: join(assets, "native-mode.js") },
 ];
 
 mkdirSync(assets, { recursive: true });

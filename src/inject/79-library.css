@@ -467,6 +467,15 @@ html.sd-mobile .sd-layer .sd-lib-note.is-warn .sd-lib-note-glyph {
 html.sd-mobile .sd-layer .sd-lib-note.is-warn .sd-lib-note-text {
   color: var(--sd-text);
 }
+/* Le ton « information » (ces lignes viennent de Spotify, elles sont à
+   moitié pleines, un filtre est actif) : la phrase porte une bordure
+   d'accent, pour qu'elle ne se lise pas comme une panne. */
+html.sd-mobile .sd-layer .sd-lib-note.is-info {
+  box-shadow: inset 3px 0 0 var(--sd-accent, #1db954);
+}
+html.sd-mobile .sd-layer .sd-lib-note.is-info .sd-lib-note-glyph {
+  color: var(--sd-accent, #1db954);
+}
 html.sd-mobile .sd-layer .sd-lib-note-text {
   min-width: 0;
 }

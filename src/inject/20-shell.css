@@ -96,6 +96,15 @@ html.sd-mobile .sd-iconbtn[disabled] {
   opacity: 0.4;
   pointer-events: none;
 }
+/* Le mini-lecteur ne se met **jamais** hors d'usage : `.is-unavailable` est un
+   état dessiné, pas un verrou. Un bouton désactivé par le navigateur ne reçoit
+   aucun événement — c'est comme ça que « rien ne se passe quand j'appuie sur
+   lecture » est arrivé, sans le moindre message. Ici l'appui parvient à la
+   commande, qui répond « aucun titre en lecture ». */
+html.sd-mobile .sd-iconbtn.is-unavailable {
+  opacity: 0.4;
+  pointer-events: auto;
+}
 /* `display: inline-flex` above would otherwise beat the UA's `[hidden]` rule,
    so a capability the web player does not expose (paroles, appareils…) would
    still show a dead button. */
@@ -256,17 +265,25 @@ html.sd-mobile .sd-mini-artist {
   line-height: 14px;
   color: var(--sd-sub);
 }
-html.sd-mobile .sd-mini-controls {
+/* Les deux rangées de commandes du mini-lecteur. Elles s'appellent
+   `.sd-mini-row` et `.sd-mini-row2` dans le DOM (voir `UI.build`) ; la feuille
+   visait `.sd-mini-controls`, une classe que plus rien ne pose : ces tailles
+   n'étaient donc jamais lues, et seul le correctif tardif de
+   `70-original.css` donnait une apparence aux boutons. Remis sur le vrai nom —
+   la coque tient debout sans dépendre d'une feuille de rattrapage. */
+html.sd-mobile .sd-mini-row,
+html.sd-mobile .sd-mini-row2 {
   display: flex;
   align-items: center;
   gap: 0;
   flex: 0 0 auto;
 }
-html.sd-mobile .sd-mini-controls .sd-iconbtn {
+html.sd-mobile .sd-mini-row .sd-iconbtn,
+html.sd-mobile .sd-mini-row2 .sd-iconbtn {
   width: 40px;
   height: 40px;
 }
-html.sd-mobile .sd-mini-controls .sd-iconbtn svg {
+html.sd-mobile .sd-mini-row .sd-iconbtn svg {
   width: 22px;
   height: 22px;
 }
@@ -281,30 +298,46 @@ html.sd-mobile .sd-mini-like.is-active svg {
   fill: currentColor;
 }
 
-/* Progress: 2px line pinned to the very bottom edge of the mini player, the
-   way the native app draws it (the old layer had no progress at all in the
-   bar, and up to 2 s of latency when it did report one to Android). */
-html.sd-mobile .sd-mini-progress {
+/* La progression du mini-lecteur : `.sd-mini-seek` (la zone tactile) et son
+   `<i>` (le remplissage posé par `UI.paintProgress`). Deux noms fantômes —
+   `.sd-mini-progress` et l'état `is-seeking` — faisaient que ces règles ne
+   s'appliquaient jamais : la ligne de progression restait sans fond, et le
+   glisser du doigt ne changeait rien d'autre que sa largeur. Raccordés au DOM,
+   avec l'état réellement posé (`is-dragging`, voir `Gestures.miniSeekDrag`). */
+html.sd-mobile .sd-mini-seek {
+  position: relative;
+}
+html.sd-mobile .sd-mini-seek::before {
+  content: "";
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 0;
+  /* Centré au lieu d'épinglé en bas : la piste garde son axe quel que soit
+     l'épaisseur qu'une feuille plus tardive lui donne (2 px au repos, 6 px au
+     glissement — voir `50-android.css`). */
+  top: 50%;
+  transform: translateY(-50%);
   height: 2px;
-  background: rgba(255, 255, 255, 0.18);
-  overflow: hidden;
+  border-radius: 2px;
+  /* `--sd-bg-tint` est déjà la teinte de fond selon le thème : une couleur
+     écrite à la main ici serait écrasée par `70-original.css` (ou écraserait le
+     thème clair). */
+  background: var(--sd-bg-tint);
 }
-html.sd-mobile.sd-theme-light .sd-mini-progress {
-  background: rgba(0, 0, 0, 0.16);
-}
-html.sd-mobile .sd-mini-progress > i {
+html.sd-mobile .sd-mini-seek > i {
   display: block;
-  height: 100%;
+  height: 2px;
   width: 0;
+  border-radius: 2px;
   background: var(--sd-text);
   transform-origin: left center;
   transition: width 300ms linear;
 }
-html.sd-mobile .sd-mini.is-seeking .sd-mini-progress > i {
+html.sd-mobile .sd-mini-seek.is-dragging {
+  touch-action: none;
+}
+html.sd-mobile .sd-mini-seek.is-dragging > i,
+html.sd-mobile .sd-mini-seek.is-dragging::before {
   background: var(--sd-accent);
   transition: none;
 }

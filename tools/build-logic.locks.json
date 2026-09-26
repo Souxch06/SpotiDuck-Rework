@@ -1,0 +1,48 @@
+{
+  "bundle": {
+    "len": 21709,
+    "md5": "194cc149ad"
+  },
+  "blocks": {
+    "état": {
+      "len": 363,
+      "md5": "da562e5365"
+    },
+    "capteur": {
+      "len": 2922,
+      "md5": "3804831276"
+    },
+    "playFromUri": {
+      "len": 959,
+      "md5": "50d9662164"
+    },
+    "manageWake": {
+      "len": 250,
+      "md5": "e0cec65422"
+    },
+    "trigUnlock": {
+      "len": 310,
+      "md5": "7551615c84"
+    },
+    "act": {
+      "len": 2193,
+      "md5": "0746d315af"
+    },
+    "manageAll": {
+      "len": 519,
+      "md5": "a9e69bea1b"
+    },
+    "updMedia": {
+      "len": 584,
+      "md5": "ea9be6efc0"
+    },
+    "veille": {
+      "len": 313,
+      "md5": "83ef026a63"
+    },
+    "installation": {
+      "len": 1135,
+      "md5": "4305820bb1"
+    }
+  }
+}

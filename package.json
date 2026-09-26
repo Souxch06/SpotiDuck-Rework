@@ -1,19 +1,26 @@
 {
   "name": "spotiduck-ui",
-  "version": "2.11.17",
+  "version": "2.11.29",
   "private": true,
   "description": "Mobile UI layer (Spotify-app-like shell) injected into the SpotiDuck WebView",
   "type": "module",
   "scripts": {
-    "build": "node tools/build-original-fit.mjs && node tools/build.mjs && node tools/build-original.mjs",
-    "watch": "node tools/build.mjs --watch",
-    "smoke": "node tools/smoke.mjs",
+    "build": "node tools/build-original-fit.mjs && node tools/build.mjs && node tools/build-original.mjs && node tools/build-logic.mjs",
+    "android": "npm run build && npm run sync:android",
+    "check": "node tools/check.mjs",
+    "check:selftest": "node tools/check.mjs --selftest",
+    "smoke": "node tools/smoke.mjs && node tools/smoke-logic.mjs",
+    "smoke:logic": "node tools/smoke-logic.mjs",
+    "audit": "node tools/audit-links.mjs",
+    "regress-audit": "node tools/regress-audit.mjs",
+    "verify": "npm run build && npm run check && npm run check:selftest && npm run smoke && npm run audit && npm run regress-audit",
     "sync:android": "node tools/sync-android.mjs",
-    "android": "node tools/build.mjs && node tools/sync-android.mjs",
+    "build:original": "node tools/build-original.mjs && node tools/build-original-fit.mjs",
+    "build:logic": "node tools/build-logic.mjs",
     "demo": "node tools/serve.mjs",
     "shots": "node tools/screenshots.mjs",
-    "audit": "node tools/audit-links.mjs",
-    "build:original": "node tools/build-original.mjs && node tools/build-original-fit.mjs"
+    "silence": "node tools/make-silence.mjs",
+    "split:ui": "node tools/split-ui.mjs"
   },
   "keywords": [
     "spotiduck",
@@ -26,5 +33,8 @@
   "devDependencies": {
     "acorn": "^8.18.0",
     "jsdom": "^25.0.1"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

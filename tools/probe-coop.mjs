@@ -34,10 +34,24 @@ const DESKTOP_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " +
   "Chrome/150.0.0.0 Safari/537.36";
 
+/** L'agent que `MainActivity.userAgentFor` réserve à `MODE_NATIVE`, et qui
+ *  sert ici à mesurer **l'alternative** : la page du téléphone, que la coque
+ *  ne reçoit pas — le lecteur web mobile de Spotify refuse la lecture à un
+ *  compte gratuit (`docs/UI-REWORK.md` §42), et c'est ce refus qui a fait
+ *  choisir la page de bureau. Ce qui reste vrai, et qui est la leçon de la
+ *  2.11.20 : la sonde doit mesurer **l'agent que l'application donne
+ *  vraiment**. Mesurer la coque avec un agent qu'elle n'utilise pas, c'est
+ *  valider une configuration que personne ne voit. */
+const MOBILE_UA =
+  "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) " +
+  "Chrome/150.0.0.0 Mobile Safari/537.36";
+
 const OUT = "/tmp/probe-coop";
 mkdirSync(OUT, { recursive: true });
 
 const report = { at: new Date().toISOString(), pages: [] };
+/* Les règles dures, celles qui doivent faire échouer le run (voir GUARD). */
+const fautes = [];
 
 const clean = (text, max = 700) => String(text).replace(/\s+/g, " ").slice(0, max);
 const note = (title, text) => {
@@ -50,6 +64,125 @@ const warn = (title, text) => {
   console.log(`::warning title=${title}::${line}`);
   console.log(`[Sonde coque] ⚠ ${title} — ${line}`);
 };
+/* -------------------------------------------------------------------------- *
+ * **Le garde-fou.** Ce qui suit n'est pas un relevé : ce sont des règles qui
+ * font **échouer** la sonde. Trois versions de suite ont été publiées « tout
+ * vert » alors que le téléphone ne répondait plus, parce que `npm run smoke`
+ * interroge une page **factice** — et qu'ici, la coque se verrouillait
+ * elle-même (boutons posés en `disabled`, donc incapables de recevoir un
+ * appui) sans que personne ne le voie.
+ *
+ * Les règles sont choisies pour être décidables **sans session** : elles portent
+ * sur ce que la coque se fait à elle-même, pas sur ce que Spotify veut bien
+ * répondre. Une alarme à tort est un défaut — donc rien ici ne dépend du
+ * contexte (page réelle, banc, connexion) ni de ce qui joue.
+ * -------------------------------------------------------------------------- */
+const GUARD = () => {
+  const fautes = [];
+  const root = document.documentElement;
+  const vw = root.clientWidth;
+  const vh = root.clientHeight;
+  const tous = [].slice.call(document.querySelectorAll(".sd-layer .sd-iconbtn"));
+  const boites = new Map();
+  tous.forEach((b) => boites.set(b, b.getBoundingClientRect()));
+  const visibles = tous.filter((b) => {
+    const r = boites.get(b);
+    return r.width > 3 && r.height > 3;
+  });
+  const nom = (el) =>
+    (String(el.className).split(" ").find((c) => /^sd-(mini|ctrl|tab|top)/.test(c)) ||
+      el.tagName.toLowerCase()) + (el.className ? "." + String(el.className).split(" ")[0] : "");
+
+  /* 1. Un bouton de la coque posé en `disabled` ne reçoit **aucun** événement :
+        l'appui ne déclenche ni commande ni message. C'est « le lecteur ne fait
+        rien », et c'est exactement ce que la coque se faisait à elle-même. */
+  const verrouilles = visibles.filter((b) => b.disabled === true);
+  if (verrouilles.length) {
+    fautes.push(`${verrouilles.length} bouton(s) de la coque verrouillés en \`disabled\` : ${verrouilles.slice(0, 3).map(nom).join(", ")} — un appui y est perdu sans message`);
+  }
+
+  /* 2. Un bouton visible et non verrouillé doit **recevoir** l'appui posé en son
+        centre. S'il est recouvert, l'utilisateur touche et il ne se passe rien. */
+  const muets = [];
+  visibles.forEach((b) => {
+    if (b.disabled === true) return;
+    const r = boites.get(b);
+    if (r.bottom > vh + 1 || r.right > vw + 1 || r.top < -1 || r.left < -1) return; // hors écran : pas un appui perdu
+    let hit = null;
+    try {
+      hit = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+    } catch (e) {
+      hit = null;
+    }
+    if (!hit) return;
+    if (hit === b || b.contains(hit)) return;
+    muets.push(`${nom(b)} recouvert par ${hit.tagName.toLowerCase()}${hit.className ? "." + String(hit.className).split(" ")[0] : ""}`);
+  });
+  if (muets.length) fautes.push(`l'appui ne parvient pas au bouton : ${muets.slice(0, 3).join(" · ")}`);
+
+  /* 3. « Aucun titre » alors que la page joue : la coque est aveugle à son propre
+        lecteur, et c'est ce qui la faisait se verrouiller. */
+  const quiJoue = [].slice.call(document.querySelectorAll("audio")).find((m) => !m.paused && Number(m.duration) > 0);
+  if (quiJoue && root.classList.contains("sd-mini-empty")) {
+    fautes.push("la page joue un titre et la coque se croit sans piste (`sd-mini-empty`) : elle redevient muette");
+  }
+
+  /* 4. La place réservée en bas doit être la hauteur **mesurée** du lecteur :
+        fausse, la page est coupée ou laisse une bande morte. */
+  const mini = document.querySelector(".sd-mini");
+  if (mini && !root.classList.contains("sd-player-open") && !root.classList.contains("sd-login")) {
+    const h = Math.ceil(mini.getBoundingClientRect().height || 0);
+    const reserve = parseFloat(getComputedStyle(mini).getPropertyValue("--sd-mini-h-current")) || 0;
+    if (h > 3 && Math.abs(reserve - h) > 6) {
+      fautes.push(`place réservée ${Math.round(reserve)}px pour un lecteur réellement haut de ${h}px`);
+    }
+  }
+
+  /* 5. Nos barres ne débordent pas de l'écran (la mise en page est forcée à la
+        largeur du téléphone par la WebView : un débordement = rogné). */
+  const depassent = [].slice
+    .call(document.querySelectorAll(".sd-layer > *"))
+    .filter((el) => {
+      const r = el.getBoundingClientRect();
+      return r.width > 3 && (r.right > vw + 1 || r.left < -1);
+    })
+    .map((el) => `${String(el.className).split(" ")[0]} jusqu'à ${Math.round(el.getBoundingClientRect().right)} pour ${vw}`);
+  if (depassent.length) fautes.push(`nos barres dépassent l'écran : ${depassent.slice(0, 3).join(" · ")}`);
+
+  /* 6. **Une page de bureau dans un écran de téléphone.** C'est le défaut mère :
+        la coque demandait l'agent de bureau (page pensée pour 1280 px et plus)
+        tout en étant mise en page sur 412 px — la grille était rognée des deux
+        tiers et les commandes de la barre tombaient hors écran. Un élément plus
+        large que la fenêtre n'est pas une faute en soi (les carrousels débordent
+        exprès) : ne sont comptés que ceux qu'**aucun** ancêtre ne rogne, parce
+        que ceux-là sont réellement coupés à l'écran. */
+  const principal = document.querySelector("#main-view") || document.querySelector("main") || document.body;
+  const rogneurs = /auto|scroll|hidden|clip/;
+  let coupes = 0;
+  let exempleCoupe = "";
+  [].slice.call(principal.querySelectorAll("*"), 0, 500).forEach((el) => {
+    if (coupes > 3) return;
+    const r = el.getBoundingClientRect();
+    /* Seulement les débordements **manifestes** (un quart de plus que l'écran) :
+       un carrousel de 430 px sur 412 est voulu, une grille de bureau de 1280 px
+       ne l'est pas. Et un élément fixe n'est pas « dans » la page. */
+    if (r.width <= Math.max(vw + 8, vw * 1.25)) return;
+    if (!el.getClientRects().length) return;
+    if (getComputedStyle(el).position === "fixed") return;
+    for (let a = el.parentElement; a && a !== principal.parentElement; a = a.parentElement) {
+      const s = getComputedStyle(a);
+      if (rogneurs.test(s.overflowX) || rogneurs.test(s.overflow)) return;
+    }
+    coupes++;
+    if (!exempleCoupe) {
+      exempleCoupe = (el.tagName.toLowerCase() + (el.className ? "." + String(el.className).split(" ")[0] : "") + " " + Math.round(r.width) + "px pour " + vw);
+    }
+  });
+  if (coupes) fautes.push(`mise en page trop large pour l'écran : ${coupes} élément(s) non rogné(s) débordent (${exempleCoupe}) — la page servie n'est pas celle du mobile`);
+
+  return { fautes, boutons: tous.length, visibles: visibles.length, joue: quiJoue ? 1 : 0, largeur: vw };
+};
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /* Ce que la sonde va interroger sur chaque page. Renvoie un objet plat : tout
@@ -1233,6 +1366,31 @@ async function main() {
        d'injection, pour voir (capture) et chiffrer ce que la coque rend sur un
        téléphone. */
     { label: "banc-tel", url: "http://127.0.0.1:5173/demo/player.html", mode: "notre", mobile: true },
+    /* **La configuration de l'application, mesurée comme telle** : la vraie page
+       de Spotify, l'agent Android que la WebView annonce, le meta viewport que
+       l'application pose, et notre coque. C'est le seul contexte qui répond à
+       « ce que le téléphone affiche » sans avoir besoin de la session de
+       l'utilisateur : la mise en page, elle, se juge sans être connecté. */
+    {
+      label: "coque-mobile",
+      url: "https://open.spotify.com/intl-fr/",
+      mode: "notre",
+      agent: "tel",
+      mobile: true,
+    },
+    /* **La configuration livrée, mesurée telle quelle** : la vraie page en
+       `/intl-fr/`, l'agent de bureau que l'application annonce à Spotify pour
+       les modes habillés, le meta `device-width` posé par l'application — donc
+       une page de bureau mise en page sur 412 px. C'est **la** mesure qui
+       répond à « tous les affichages sont buggés » : si la page déborde du
+       cadre ici, la règle « mise en page trop large pour l'écran » fait échouer
+       la course, avec l'élément fautif nommé. */
+    {
+      label: "coque-bureau",
+      url: "https://open.spotify.com/intl-fr/",
+      mode: "notre",
+      mobile: true,
+    },
   ];
 
   /* **Mesurer une cible à la fois.** La sonde complète prend plusieurs minutes
@@ -1271,7 +1429,7 @@ async function main() {
     });
 
     try {
-      if (target.mode === "notre") {
+      if (target.mode === "notre" && /127\.0\.0\.1/.test(target.url)) {
         /* Le banc monte lui-même le faux lecteur puis la coque : on ne pose ni
            identité ni meta viewport. */
       } else if (target.mode === "original") {
@@ -1296,7 +1454,7 @@ async function main() {
           setTimeout(put, 1200);
         });
       }
-      await page.evaluateOnNewDocument(identity);
+      if (target.mode === "original") await page.evaluateOnNewDocument(identity);
       if (target.mobile === true || target.mode === "telephone") {
         /* Exactement ce que fait `MainActivity` : la WebView est en
            `useWideViewPort`, aucun `<meta viewport>` n'existe au départ, et le
@@ -1348,7 +1506,15 @@ async function main() {
         setTimeout(put, 1200);
       });
 
-      await page.setUserAgent(DESKTOP_UA);
+      /* L'interface d'origine sert la page de bureau (agent de bureau + son
+         empreinte de géométrie) ; la coque, elle, est mesurée dans les
+         conditions de l'application : agent Android, meta `device-width`. */
+      /* L'agent suit le contrat de `MainActivity.userAgentFor` : page de
+         bureau pour les modes habillés (`DESKTOP_UA`), agent du téléphone pour
+         `MODE_NATIVE` et pour les contextes marqués `agent: "tel"`. Un contexte
+         qui ignorerait ce champ mesurerait une configuration que l'application
+         ne livre pas. */
+      await page.setUserAgent(target.agent === "tel" ? MOBILE_UA : DESKTOP_UA);
       /* `isMobile: true` = les règles de mise en page de Chrome mobile, donc la
          même que la WebView : sans meta, largeur de mise en page de 980 px et
          dézoom pour tenir à l'écran. Les autres pages restent en mode bureau
@@ -1560,6 +1726,23 @@ async function main() {
           report.pages.push({ label: `${target.label} (lecture)`, transport, canary });
         } else {
           warn(`Lecture — ${target.label}`, "aucune mesure n'est remontée du lecteur");
+        }
+        /* **Le garde-fou de la coque**, mesuré sur ce contexte : Chrome réel,
+           CSS réel, appuis réels (hit-test), pas une page factice. */
+        {
+          const garde = await safely(() => page.evaluate(GUARD));
+          if (garde && garde.fautes) {
+            report.pages.push({ label: `${target.label} (garde-fou)`, garde });
+            if (garde.fautes.length) {
+              for (const f of garde.fautes) fautes.push(`${target.label} : ${f}`);
+              warn(`Garde-fou — ${target.label}`, garde.fautes.join(" || "));
+            } else {
+              note(
+                `Garde-fou — ${target.label}`,
+                `${garde.boutons} boutons (${garde.visibles} visibles) tous atteignables · ${garde.joue ? "la page joue, la coque le voit" : "rien ne joue"} · place réservée conforme · écran ${garde.largeur}px`
+              );
+            }
+          }
         }
       }
 
@@ -1892,6 +2075,19 @@ async function main() {
   const allErrors = report.pages.flatMap((p) => (p.errors || []).map((e) => `${p.label}: ${e}`));
   if (allErrors.length) warn("Erreurs de la page", allErrors.slice(0, 5).join("  ||  "));
   else note("Erreurs de la page", "aucune");
+
+  if (fautes.length) {
+    console.log(`::error title=La coque est cassée::${clean(fautes.join(" || "), 1500)}`);
+    console.log(`[Sonde coque] ECHEC — ${fautes.length} règle(s) dure(s) enfreinte(s)`);
+    try {
+      writeFileSync(`${OUT}/ECHEC`, fautes.join("\n"));
+    } catch (e) {
+      /* le dossier peut manquer : le verdict est déjà dans la sortie */
+    }
+    process.exitCode = 1;
+  } else {
+    console.log("::notice title=La coque tient::aucun bouton verrouillé, aucun appui perdu, place réservée mesurée conforme");
+  }
 
   await browser.close().catch(() => {});
   writeFileSync(`${OUT}/rapport.json`, JSON.stringify(report, null, 2));

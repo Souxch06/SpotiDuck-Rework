@@ -11,6 +11,13 @@
    Les classes sont posées sur `<html>` par la coque, jamais devinées en CSS :
    une WebView ne connaît ni les pouces de l'écran, ni le réglage de taille du
    système. Ce sont donc des mesures, pas des suppositions.
+
+   **Ces `--sd-mini-h` ne sont que le premier rendu** : dès que la coque tient
+   son lecteur, `UI.measure()` remplace `--sd-mini-h-current` par la hauteur
+   **réellement rendue** (la feuille passe le mini-lecteur en `height: auto`,
+   donc son contenu decide de sa taille). Un palier trop court ne peut plus
+   laisser la dernière rangée du lecteur par-dessus la page ; un palier trop
+   long ne peut plus laisser de bande vide en bas.
    ========================================================================== */
 
 /* Téléphone étroit (≤ 379 px de large) : des barres plus fines, du texte intact.
@@ -18,20 +25,20 @@
    plus fine ne doit pas donner des boutons intouchables. */
 html.sd-mobile.sd-size-compact {
   --sd-nav-h: calc(52px * var(--sd-u));
-  --sd-mini-h: calc(108px * var(--sd-u));
+  --sd-mini-h: calc(168px * var(--sd-u));
   --sd-tabbar-h: calc(54px * var(--sd-u));
 }
 /* Téléphone courant (380–599 px) : la référence du projet. */
 html.sd-mobile.sd-size-normal {
   --sd-nav-h: calc(56px * var(--sd-u));
-  --sd-mini-h: calc(120px * var(--sd-u));
+  --sd-mini-h: calc(184px * var(--sd-u));
   --sd-tabbar-h: calc(64px * var(--sd-u));
 }
 /* Écran large (≥ 600 px : tablette, pliable ouvert) : les barres prennent de
    l'air, et le contenu garde toute la largeur — c'est lui qui en profite. */
 html.sd-mobile.sd-size-wide {
   --sd-nav-h: calc(60px * var(--sd-u));
-  --sd-mini-h: calc(136px * var(--sd-u));
+  --sd-mini-h: calc(200px * var(--sd-u));
   --sd-tabbar-h: calc(68px * var(--sd-u));
   --m-pad: calc(20px * var(--sd-u));
 }
@@ -41,7 +48,11 @@ html.sd-mobile.sd-size-wide {
    été le reproche d'une version précédente. */
 html.sd-mobile.sd-orient-landscape {
   --sd-nav-h: calc(46px * var(--sd-u));
-  --sd-mini-h: calc(96px * var(--sd-u));
+  /* Quatre rangées serrées (pochette 40 · commandes 34 · progression ·
+     raccourcis), pas trois : 96 px, c'était la hauteur du mini-lecteur à deux
+     rangées. La réserve du bas doit couvrir ce qui est rendu, sinon la dernière
+     rangée recouvre la page. */
+  --sd-mini-h: calc(150px * var(--sd-u));
   --sd-tabbar-h: calc(50px * var(--sd-u));
   --sd-player-header-h: calc(48px * var(--sd-u));
 }

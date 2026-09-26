@@ -129,16 +129,28 @@ jobs:
           print(f"Compiled {len(sorted_domains)} unique ad domains.")
 
           # Write out clean compiled adblock_hosts.txt file at repository root
+          header = (
+              "# SpotiDuck Compiled AdBlock Hostlist\n"
+              "# Auto-updated daily from Brave Shields, uBlock Origin, & AdGuard Mobile Filter\n\n"
+          )
+          body = "".join(f"0.0.0.0 {d}\n" for d in sorted_domains)
           with open("adblock_hosts.txt", "w", encoding="utf-8") as f:
-              f.write("# SpotiDuck Compiled AdBlock Hostlist\n")
-              f.write("# Auto-updated daily from Brave Shields, uBlock Origin, & AdGuard Mobile Filter\n\n")
-              for d in sorted_domains:
-                  f.write(f"0.0.0.0 {d}\n")
+              f.write(header + body)
+          # Et la copie que l'application lit reellement. Ce workflow ecrivait
+          # uniquement la racine : l'asset Android, lui, restait a la liste de la
+          # derniere fois ou un humain avait lance « npm run sync:android » — donc
+          # une liste rafraichie chaque nuit ne parvenait jamais au telephone, et
+          # c'est exactement ce que « npm run check » (regle 2) refuse desormats.
+          # Copier ici coute une ligne et rend la liste utile.
+          import os
+          os.makedirs("android/app/src/main/assets", exist_ok=True)
+          with open("android/app/src/main/assets/adblock_hosts.txt", "w", encoding="utf-8") as f:
+              f.write(header + body)
           EOF
 
       - name: Commit and Push Updated Hostlist
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add adblock_hosts.txt
-          git diff --quiet && git diff --staged --quiet || (git commit -m "chore(adblock): auto-update compiled adblock_hosts.txt" && git push)
+          git add adblock_hosts.txt android/app/src/main/assets/adblock_hosts.txt
+          git diff --quiet && git diff --staged --quiet || (git commit -m "chore(adblock): auto-update compiled adblock_hosts.txt (racine + asset Android)" && git push)
