@@ -86,8 +86,14 @@ const CASES = [
      versions. */
   ["ui", "      Engine._sent = { want: true, uri: uri, at: Date.now() };\n", "", "ne marque plus la commande « partie »"],
   ["ui", "      Engine.settleSent(!!st.playing);\n", "", "solde de commande n'est plus branché"],
-  ["ui", "      if (want && Engine.inFlight()) {\n", "      if (true) {\n", "n'est plus séquencé derrière la commande"],
+  ["ui", "        if (want && (relais || Engine.inFlight())) {\n", "        if (false) {\n", "n'est plus séquencé derrière la commande"],
   ["ui", "        this.verifyPlay(ref);\n", "", "plus de `verifyPlay`"],
+  /* Les cinq fils du relais (2.11.28) : coupés séparément, l'audit doit les nommer. */
+  ["ui", "      '[data-testid=\"now-playing-bar\"] div.encore-bright-accent-set button',\n      ", "", "quelle que soit sa balise"],
+  ["ui", "|vous écoutez sur", "", "libellé réel du lecteur mobile"],
+  ["ui", "        var relais = want ? Auto.maybeTakeover() : false;", "        var relais = false;", "relais n'est plus tenté"],
+  ["ui", "      if (this._watchBar === bar) return;\n", "", "n'est plus rebranché"],
+  ["ui", "        Content.commandFailure();\n", "", "n'ouvrent plus la carte du rapport"],
   ["ui", "    awaitEngine: function (key, watch, ref, delay) {\n", "    awaitEngine: function () {\n", "plus d'`awaitEngine`"],
   ["logi", "  return oriFetch.apply(this, args);", "  resp = await mngFetch(url,opts);\n  return oriFetch.apply(this, args);", "intercepte à nouveau le trafic"],
   ["kt", 'view.evaluateJavascript(logicScript, null)', '/* retiré */', "n'est plus injecté **avant**"],

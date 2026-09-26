@@ -146,12 +146,23 @@
       return true;
     },
 
+    /**
+     * Une commande est restée sans effet. `blame` l'appelle quand le doute n'est
+     * plus permis : à ce moment-là, un message qui s'efface en 2,8 s ne laisse
+     * **rien** dans les mains de celui qui doit décrire la panne. La carte existe
+     * déjà pour la page vide — même rapport, même bouton « copier » — on l'ouvre
+     * donc ici au lieu d'inventer un second écran que personne ne maintiendra.
+     */
+    commandFailure: function () {
+      this.showAlert("commandes", true);
+    },
+
     hideAlert: function () {
       document.documentElement.classList.remove("sd-content-blank");
       if (this.alert) this.alert.hidden = true;
     },
 
-    showAlert: function (why) {
+    showAlert: function (why, transport) {
       if (!this.alert) {
         var el = document.createElement("div");
         el.className = "sd-content-alert";
@@ -198,15 +209,22 @@
           self.hideAlert();
         });
       }
-      $(".sd-content-alert-title", this.alert).textContent = Settings.labels.blankTitle;
-      $(".sd-content-alert-text", this.alert).textContent = Settings.labels.blankText.replace("%s", why);
+      $(".sd-content-alert-title", this.alert).textContent = transport
+        ? Settings.labels.stuckTitle
+        : Settings.labels.blankTitle;
+      $(".sd-content-alert-text", this.alert).textContent = transport
+        ? Settings.labels.stuckText
+        : Settings.labels.blankText.replace("%s", why);
       $(".sd-content-alert-diag", this.alert).textContent = this.diagnose();
       $(".sd-content-alert-reload", this.alert).textContent = Settings.labels.reload;
       $(".sd-content-alert-copy", this.alert).textContent = Settings.labels.copyDiagnostic;
       $(".sd-content-alert-close", this.alert).textContent = Settings.labels.close;
       this.alert.hidden = false;
       /* Le contenu peut encore arriver (un chargement lent, pas un échec) : on
-         revérifie sans boucle serrée, et le panneau s'efface tout seul. */
+         revérifie sans boucle serrée, et le panneau s'efface tout seul. Pour les
+         commandes, rien de tel : la page peut très bien afficher pendant que la
+         lecture ne répond pas — la carte ne se ferme donc que par la main. */
+      if (transport) return;
       var self = this;
       var tries = 0;
       (function recheck() {
@@ -270,6 +288,11 @@
            le diagnostic ne doit pas changer l'état de la lecture. `SpotiDuckUI
            .selfTest(true)` est la version qui appuie, pour la sonde de CI. */
         " · commandes " + Engine.selfTest().text +
+        /* Le relais, dit séparément : « commandes DÉSACTIVÉ » ne distingue pas
+           Spotify occupé ailleurs (le relais est à l'écran, un clic suffit) de
+           l'absence de session (rien à cliquer). C'est la ligne qui décide du
+           correctif à écrire, et elle ne peut venir que de l'appareil. */
+        " · relais " + (Auto.takeoverButton() ? "proposé" : "absent") +
         (extrait ? ' · extrait \"' + extrait + '\"' : "") +
         /* La session **réelle** (cookie du lecteur), qui ne se devine pas dans
            le DOM : la page peut afficher un accueil sans qu'un compte soit

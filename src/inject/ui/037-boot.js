@@ -154,6 +154,10 @@
            n'affiche rien, on le dit (avec de quoi recharger). */
         UI.reassertSurfaces();
         Content.alertSoon(1500);
+        /* La barre de lecture a pu être remplacée au passage : le guetteur du
+           relais « Écouter sur cet appareil » se rebranche ici, pas ailleurs —
+           c'est le seul endroit de la coque qui sache qu'une page a changé. */
+        Auto.watch();
       }, 250));
       pageObs.observe(main, { childList: true, subtree: false });
     }

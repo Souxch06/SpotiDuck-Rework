@@ -62,6 +62,19 @@
      */
     blame: function () {
       Toast.show(State.title ? Settings.labels.transportMissing : Settings.labels.transportNoTrack, 2800);
+      /* **Un blâme de trop ouvre la carte du diagnostic.** Une commande ratée est un
+         hasard ; deux, une panne ; et la seule chose qui manque alors est de savoir
+         *quel maillon* a tu. Ce n'est pas une demande de plus faite à l'utilisateur :
+         le rapport est déjà écrit, le bouton déjà posé. */
+      this._blames = (this._blames || 0) + 1;
+      if (this._blames >= 2) {
+        this._blames = 0;
+        Content.commandFailure();
+      }
+    },
+    /** Une page qui obéit solde les blâmes : on ne parle pas d'une panne qui n'est plus là. */
+    blameClear: function () {
+      this._blames = 0;
     },
     /**
      * **Dernier recours : le clavier du lecteur.**
@@ -121,7 +134,8 @@
         }
         if (dom !== null && String(dom) !== ref) {
           Engine.settleSent(!!(dom === "true" || dom === true));
-          return; /* la page a obéi : rien à dire, rien à ajouter */
+          self.blameClear(); /* la page a obéi : rien à dire, rien à ajouter */
+          return;
         }
         self.fallback(key, watch, ref);
       }, delay || 1600);
@@ -141,7 +155,10 @@
            propres décisions d'après un état qui a changé sans lui. */
         Engine.feed();
         var dom = Spotify.readPlaying();
-        if (dom !== null && String(dom) !== ref) return; /* la page a obéi */
+        if (dom !== null && String(dom) !== ref) {
+          self.blameClear(); /* la page a obéi : le compte des commandes ratées repart */
+          return;
+        }
         if (Engine.inFlight()) return; /* une commande du moteur roule déjà */
         if (Engine.playContext()) {
           /* L'API prend le relais : on la juge, sans seconde commande à côté.
@@ -198,7 +215,15 @@
          avec elle qu'on jugera si quoi que ce soit a changé quelque chose. */
       var ref = String(!want);
       if (!Spotify.playPause(want)) {
-        if (want && Engine.inFlight()) {
+        /* **La page vient de refuser la commande.** C'est exactement le cas où
+           Spotify tient la lecture sur un autre appareil : ses boutons sont là,
+           désactivés, et rien de ce qu'on presse ne peut marcher tant que le relais
+           « Écouter sur cet appareil » n'a pas été cliqué. Ce relais n'était tenté
+           que当 le bouton avait répondu — donc jamais dans le seul cas où il sert.
+           On le tente donc ici, **avant** le clavier, et le clavier reste séquencé
+           derrière lui (un secours pendant un relais, c'est un relais annulé). */
+        var relais = want ? Auto.maybeTakeover() : false;
+        if (want && (relais || Engine.inFlight())) {
           /* **Ne rien envoyer maintenant.** Une commande du moteur est en cours :
              presser Espace par-dessus, c'est l'annuler. On attend l'échéance, on
              relit la page, et ce n'est que si rien n'a bougé que le clavier du

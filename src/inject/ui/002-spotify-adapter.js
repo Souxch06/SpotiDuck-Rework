@@ -163,13 +163,29 @@
     /* Spotify's "this device is not playing" call-to-action. The native app
        auto-clicks it (the old layer did it from a 5 s interval); we look for
        it with an explicit selector first and a label regex as a fallback. */
+    /* Le relais « Écouter sur cet appareil » : le seul élément qui rend la main
+       quand Spotify tient la lecture ailleurs — et c'est l'état que la sonde de CI
+       a relevé sur la page réelle (nos quatre commandes de transport trouvées mais
+       `DÉSACTIVÉ`). Ces listes étaient punaisées sur `aside` et `div` alors que la
+       barre livrée est un `footer` (notre 10-base.css le dit depuis le 26/09) : le
+       relais n'était donc jamais trouvé. On garde les formes connues et on ajoute
+       la forme **sans étiquette**, qui ne dépend plus du choix de balise de Spotify. */
     takeover: [
       'button[data-testid="takeover-button"]',
+      '[data-testid="now-playing-bar"] div.encore-bright-accent-set button',
+      'footer[data-testid="now-playing-bar"] div.encore-bright-accent-set button',
+      'footer[data-testid="now-playing-bar"] button[aria-label]',
       'div[data-testid="now-playing-bar"] div.encore-bright-accent-set button',
       'aside[data-testid="now-playing-bar"] div.encore-bright-accent-set button',
       'aside[data-testid="now-playing-bar"] button[aria-label]',
     ],
-    takeoverRows: ['aside[data-testid="now-playing-bar"] ul[role="list"] li[role="listitem"] div[role="button"]'],
+    /* La liste des appareils, une fois le relais pressé : `aside` seul ne suffisait
+       pas, et sans cette ligne le relais s'ouvrait sur un choix jamais cliqué. */
+    takeoverRows: [
+      '[data-testid="now-playing-bar"] ul[role="list"] li[role="listitem"] div[role="button"]',
+      'footer[data-testid="now-playing-bar"] ul[role="list"] li[role="listitem"] div[role="button"]',
+      'aside[data-testid="now-playing-bar"] ul[role="list"] li[role="listitem"] div[role="button"]',
+    ],
     loginPage: ['div[data-testid="login-page"]', 'form[data-testid="login-form"]', '#login-username'],
     webPlayerLink: ['button[data-testid="web-player-link"]', 'a[data-testid="web-player-link"]'],
     pageH1: ['main h1', '#main-view h1'],

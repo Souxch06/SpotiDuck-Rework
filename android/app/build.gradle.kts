@@ -23,7 +23,7 @@ android {
         // Overridable from the command line (CI passes the run number and the
         // version from package.json).
         versionCode = (findProperty("sdVersionCode") as String?)?.toIntOrNull() ?: 38
-        versionName = (findProperty("sdVersionName") as String?)?.takeIf { it.isNotBlank() } ?: "2.11.27"
+        versionName = (findProperty("sdVersionName") as String?)?.takeIf { it.isNotBlank() } ?: "2.11.28"
     }
 
     /**

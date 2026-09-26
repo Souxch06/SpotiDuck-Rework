@@ -1555,7 +1555,7 @@ for (const [appel, quoi] of [
    lire, la musique ne démarre pas » — la touche appuyait deux fois, une fois pour
    lancer, une fois pour mettre en pause, dans le même tour de boucle. La garde est
    donc un fil aussi solide que le repli lui-même. */
-if (!/if \(want && Engine\.inFlight\(\)\) \{[\s\S]{0,260}?this\.awaitEngine\(/.test(stripComments(runtime))) {
+if (!/if \(want && \(relais \|\| Engine\.inFlight\(\)\)\) \{[\s\S]{0,260}?this\.awaitEngine\(/.test(stripComments(runtime))) {
   errors.push("le secours clavier n'est plus séquencé derrière la commande en cours : deux pilotes peuvent se contredire et annuler la lecture (défaut corrigé en 2.11.27)");
 }
 if (!/awaitEngine: function \(key, watch, ref, delay\)/.test(stripComments(runtime))) {
@@ -2078,6 +2078,40 @@ for (const m of libraryCode.matchAll(/(?:Settings|this)\.labels\[([^\]]+)\]/g)) 
   } else {
     errors.push("`tools/build-logic.locks.json` est absent : rien ne garantit que le moteur soit encore du code d'origine");
   }
+  /* 5ter · le relais « Écouter sur cet appareil », qui conditionne tout le reste.
+     La sonde de CI a relevé nos quatre commandes de transport trouvées mais
+     DÉSACTIVÉES sur la page réelle : tant que le relais n'est pas pressé, aucun
+     bouton du lecteur ne peut répondre. Les quatre fils ci-dessous sont ce qui fait
+     que la coque le trouve, le tente et s'en souvient après un redessin de la page.
+     Chacun a été cassé un par un dans `tools/regress-audit.mjs`. */
+  {
+    /* `]` clamp dans chaque sélecteur entre guillemets : la liste doit être saisie
+       jusqu'à sa virgule de fin de ligne, sinon on sonde un tronçon. */
+    const takeover = (runtime.match(/takeover: \[[\s\S]{0,900}?\],\n/) || [""])[0];
+    const rows = (runtime.match(/takeoverRows: \[[\s\S]{0,500}?\],\n/) || [""])[0];
+    /* Une punaise sur `aside` ne suffit plus depuis que la barre livrée est un
+       `footer` (dit notre 10-base.css) : la forme sans étiquette est la seule qui
+       ne dépende pas d'un choix de balise fait par Spotify ce mois-ci. */
+    /* Un sélecteur punaisé sur `footer[…]" en contient aussi un `[data-testid=…]` :
+       ce qui compte, c'est la forme **sans étiquette de balise**, donc celle qui
+       commence par le crochet. */
+    if (!/'\[data-testid="now-playing-bar"\]/.test(takeover) || !/'\[data-testid="now-playing-bar"\]/.test(rows)) {
+      errors.push("les candidats du relais ne couvrent plus la barre quelle que soit sa balise : sur la page où le lecteur est un <footer>, le relais ne sera jamais trouvé et les commandes resteront désactivées");
+    }
+    if (!/vous écoutez sur/.test(runtime)) {
+      errors.push("le libellé réel du lecteur mobile (« Vous écoutez sur », relevé dans ses fichiers de langue par la sonde) n'est plus reconnu : le relais ne serait pas cliqué hors de la traduction française du web player de bureau");
+    }
+    if (!/var relais = want \? Auto\.maybeTakeover\(\) : false;/.test(runtime)) {
+      errors.push("le relais n'est plus tenté quand la page refuse la commande : c'est pourtant le seul cas où il sert (boutons présents mais désactivés)");
+    }
+    if (!/this\._watchBar === bar/.test(runtime) || !/Auto\.watch\(\);/.test(runtime)) {
+      errors.push("le guetteur du relais n'est plus rebranché quand la barre est remplacée : après un redessin du lecteur, plus aucun relais ne serait tenté de la session");
+    }
+    if (!/if \(this\._blames >= 2\) \{\s*this\._blames = 0;\s*Content\.commandFailure\(\);/.test(runtime)) {
+      errors.push("deux commandes sans effet n'ouvrent plus la carte du rapport : « le lecteur ne répond pas » redevient un symptôme sans mesure, et la seule voie pour la décrire disparaît");
+    }
+  }
+
   /* 6 · le rapport d'état, un seul maître. */
   if (!/fun recMediaStatus\(/.test(bridgeSource) || !/manageTSleep\(/.test(bridgeSource)) {
     errors.push("le pont ne déduit plus les minuteries de l'état rapporté : la coque et le moteur devraient commander chacun de leur côté");

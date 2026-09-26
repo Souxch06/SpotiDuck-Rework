@@ -5846,6 +5846,152 @@ await checkAsync("un bouton qui ne joue pas est escaladé au moteur, pas rollbac
   }
 });
 
+/* ─── Le relais « Écouter sur cet appareil » ───────────────────────────────
+   La sonde de CI, sur la vraie page, a relevé nos quatre commandes de transport
+   trouvées mais **DÉSACTIVÉES** — c'est l'état de Spotify quand un autre appareil
+   tient la lecture. Sur cette page, le seul élément qui remet la main ici est le
+   bouton de relais. Deux maillons cassent ce chemin, et les deux se mesurent ici.
+   -------------------------------------------------------------------------- */
+check("le bouton de relais est reconnu sous un <footer>", () => {
+  const saved = doc.body.innerHTML;
+  try {
+    /* La forme livrée aujourd'hui : la barre est un `footer[data-testid]`, plus
+       un `aside` — c'est écrit dans notre propre feuille (10-base.css). Les
+       candidats du relais, eux, ne connaissaient qu'`aside` et `div`. */
+    doc.body.innerHTML =
+      '<footer data-testid="now-playing-bar">' +
+      '<div class="encore-bright-accent-set">' +
+      '<button type="button" aria-label="\u00c9couter sur cet appareil">Relais</button>' +
+      "</div></footer>";
+    SD.state.hasTrack = true; /* interdit le dernier recours « bouton vert » */
+    const btn = SD._internals.Auto.takeoverButton();
+    assert(btn, "le relais est introuvable sur une barre en `footer` : la liste de candidats ne couvre que `aside` et `div`");
+    return "relais reconnu sous footer";
+  } finally {
+    doc.body.innerHTML = saved;
+    SD.state.hasTrack = false;
+  }
+});
+
+await checkAsync("une commande refusée tente le relais avant de parler", async () => {
+  const saved = doc.body.innerHTML;
+  const savedPlaying = SD.state.playing;
+  let clicks = 0;
+  const onClick = () => {
+    clicks++;
+  };
+  try {
+    /* Toutes les commandes de la page sont désactivées (autre appareil actif) et
+       le relais, lui, est cliquable : c'est l'état relevé par la sonde. */
+    doc.body.innerHTML =
+      '<footer data-testid="now-playing-bar">' +
+      '<button data-testid="play-pause" type="button" disabled aria-label="Lecture"></button>' +
+      '<button data-testid="next-track" type="button" disabled></button>' +
+      /* Pas de libellé : seul le testid de Spotify parle, et une traduction ne doit
+         pas décider si la lecture revient sur cet appareil. */
+      '<button data-testid="takeover-button" type="button"></button>' +
+      "</footer>";
+    const relay = doc.body.querySelector('[data-testid="takeover-button"]');
+    relay.addEventListener("click", onClick);
+    SD.state.playing = false;
+    SD.state.title = "Morceau";
+    SD.state.hasTrack = true;
+    SD._internals.Auto.takeoverBusy = false;
+    SD._internals.Actions.playPause();
+    await tick(700); /* +400 ms : le moment où le relais est tenté aujourd'hui */
+    assert(
+      clicks >= 1,
+      "la commande a été refusée par la page et le relais n'a pas été tenté : sur une barre où tout est DÉSACTIVÉ, plus rien ne répond jamais"
+    );
+    return "relais tenté sur le chemin d'échec";
+  } finally {
+    SD._internals.Actions._clearPending();
+    clearTimeout(SD._internals.Actions._t);
+    clearTimeout(SD._internals.Auto._stuck);
+    SD._internals.Auto.wantPlay = false;
+    SD._internals.Auto.takeoverBusy = false;
+    SD._internals.Engine._sent = null;
+    SD.state.playing = savedPlaying;
+    SD.state.hasTrack = false;
+    doc.body.innerHTML = saved;
+  }
+});
+
+/* Le lecteur mobile ne dit pas « Écouter sur cet appareil » : la sonde de CI a
+   recopié `mwp.header.listening` = « Vous écoutez sur » depuis le fichier de
+   langue français de Spotify. Sans ce libellé dans notre expression, le relais
+   restait introuvable sur la page réellement servie. */
+check("le relais du lecteur mobile est reconnu à son libellé", () => {
+  const saved = doc.body.innerHTML;
+  const savedTrack = SD.state.hasTrack;
+  try {
+    doc.body.innerHTML =
+      '<footer data-testid="now-playing-bar">' +
+      '<div class="encore-bright-accent-set">' +
+      "<button type=3D\"button\">Vous \u00e9coutez sur Bureau</button>" +
+      "</div></footer>";
+    SD.state.hasTrack = true;
+    assert(
+      SD._internals.Auto.takeoverButton(),
+      "« Vous écoutez sur » (libellé relevé par la sonde) ne déclenche rien : le relais ne sera jamais pressé"
+    );
+    return "libellé du lecteur mobile reconnu";
+  } finally {
+    SD.state.hasTrack = savedTrack;
+    doc.body.innerHTML = saved;
+  }
+});
+
+/* « Le lecteur ne répond pas » est une phrase que personne ne peut vérifier à
+   distance. Depuis la 2.11.28, la coque répond à ce doute par ce qu'elle sait :
+   la deuxième commande restée sans effet ouvre la carte du diagnostic — le même
+   rapport, le même bouton « copier » que pour une page vide. Ce qui est testé ici
+   est donc le seul canal qui reste entre la panne d'un téléphone et une correction :
+   il doit s'ouvrir tout seul, contenir la ligne `commandes`, et ne pas jacter au
+   premier succès. */
+check("deux commandes sans effet ouvrent la carte du rapport", () => {
+  const A = SD._internals.Actions;
+  const C = SD._internals.Content;
+  /* La carte est posée dans **notre couche** (`.sd-layer`) : vider le `<body>`
+     pour préparer la page, c'était jeter la couche avec — le test cherchait alors
+     une carte dans un arbre détaché. On ajoute donc notre faux lecteur, et on le
+     retire. */
+  const fixture = doc.createElement("footer");
+  fixture.setAttribute("data-testid", "now-playing-bar");
+  doc.body.appendChild(fixture);
+  const savedTitle = SD.state.title;
+  const alerte = () => C.alert; /* l'élément, qu'il soit rattaché ou non */
+  try {
+    SD.state.title = "Morceau";
+    A.blameClear();
+    C.hideAlert();
+    A.blame();
+    const avant = alerte();
+    /* La carte est créée à la première ouverture : « absente » et « cachée » sont
+       deux états à accepter également — un raté n'est pas une panne, le reste
+       relève de la construction. */
+    assert(!avant || avant.hidden, "la carte s'est ouverte dès la première commande ratée");
+    A.blame();
+    const carte = alerte();
+    assert(carte && !carte.hidden, "la carte ne s'est pas ouverte après deux commandes sans effet : l'utilisateur reste sans moyen de dire ce qui a manqué");
+    const rapport = carte.querySelector(".sd-content-alert-diag").textContent;
+    assert(/commandes /.test(rapport), "le rapport ne contient pas la ligne « commandes » : il ne dirait pas quels maillons répondent");
+    assert(/relais (proposé|absent)/.test(rapport), "le rapport ne dit pas si le relais « Écouter sur cet appareil » est proposé : la panne resterait indécidable entre un autre appareil et une absence de session");
+    assert(/Le lecteur ne r\u00e9pond pas/.test(carte.querySelector(".sd-content-alert-title").textContent), "titre incohérent avec la panne signalée");
+    assert(carte.querySelector(".sd-content-alert-copy"), "plus de bouton pour copier : la carte serait un texte à recopier à la main");
+    A.blameClear();
+    C.hideAlert();
+    A.blame();
+    assert(alerte().hidden, "le compteur n'a pas été soldé par un succès : la carte se rouvrirait trop tôt");
+    return "carte ouverte à la deuxième panne, rapport copiable";
+  } finally {
+    A.blameClear();
+    C.hideAlert();
+    fixture.remove();
+    SD.state.title = savedTitle;
+  }
+});
+
 /* ------------------------------------------------------------------ report */
 const pad = Math.max(...results.map((r) => r.name.length));
 let failed = 0;

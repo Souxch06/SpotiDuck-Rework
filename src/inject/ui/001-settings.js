@@ -163,6 +163,11 @@
       weekdays: ["Dimanche", "Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"],
       weekdaysShort: ["D", "L", "M", "M", "J", "V", "S"],
       likedSongs: "Titres likés",
+      stuckTitle: "Le lecteur ne répond pas",
+      stuckText:
+        "Trois commandes n'ont rien déplacé sur la page. Le texte ci-dessous dit " +
+        "exactement ce que la page nous renvoie — copie-le et envoie-le tel quel, " +
+        "il se lit mieux qu'une description.",
       blankTitle: "La page n'a rien affiché",
       blankText:
         "Spotify a bien répondu, mais son contenu est resté vide (%s). C'est presque toujours un chargement qui n'a pas abouti : rechargez. Si ça recommence, copiez le diagnostic et envoyez-le.",

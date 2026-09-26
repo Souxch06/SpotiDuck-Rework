@@ -4310,3 +4310,72 @@ ici, et sont corrigés ici. Ils n'expliquent **pas** à eux seuls tout ce qui a 
 v2.11.27, le texte à recopier est : bouton *Lire* pressé une fois, attendre trois
 secondes, recopier la ligne complète sous le titre. Sans elle, je continue à
 corriger ce que je peux mesurer — pas ce que tu vois.
+
+## §63 — Le relais perdu de vue (v2.11.28)
+
+« Le lecteur ne réponds pas. » Cette fois, avant d'écrire une ligne de correctif,
+j'ai été chercher ce que la CI savait déjà.
+
+**Ce que j'avais sous la main sans le savoir.** Les sondes de lecture, de connexion
+et d'inspection publient leur relevé en *annotations* de check-run. Trois rounds
+durant, j'ai conclu « logs illisibles depuis ici » sur un `404` — je demandais les
+annotations avec l'identifiant du **job** au lieu de celui du **check-run**. Une fois
+le bon identifiant utilisé, la vraie page s'est mise à parler :
+
+| Mesure (Chrome sans tête, agent et identité de l'application) | Relevé |
+| --- | --- |
+| ancres de la page, agent mobile | `page=aucun repère` |
+| ancres de la page, agent de bureau | `page=barreLaterale+barreLecture+accueil` |
+| nos quatre commandes de transport, sur la page | `playPause/next/prev/repeat = 1 candidat(s) → choisi 62x62 DÉSACTIVÉ`, `shuffle=AUCUN`, `like=AUCUN` |
+| nos propres boutons | `play=48x48 dessus=lui-même` (les huit), `30 boutons (22 visibles) tous atteignables` |
+| trafic de l'API, IP de centre de données | `/me → navigateur 429`, `jeton capté · pas de compte` |
+
+Trois hypothèses sont mortes là : nos barres ne recouvrent rien (hit-test conforme),
+aucun de nos boutons n'est verrouillé, et la coque se construit sur la page réelle.
+Une quatrième est née : **la page est dans l'état « un autre appareil tient la
+lecture »** — tous les boutons présents, tous désactivés. Dans cet état, une seule
+chose répond : le relais « Écouter sur cet appareil ».
+
+**Deux maillons cassés, et une idée fausse.** En lisant le chemin du relais :
+
+1. `SEL.takeover` et `SEL.takeoverRows` étaient punaisés sur `aside` (et `div`) alors
+   que `SEL.npBar` connaît trois formes et que notre propre `10-base.css` écrit,
+   depuis le 26/09, que la barre servie est un **`footer`**. Sur la page du
+   téléphone, le relais n'était donc jamais trouvé — et le bouton de la liste des
+   appareils non plus, ce qui laisse le relais pressé mais la lecture ailleurs.
+2. `Actions.playPause` ne tentait le relais **que** quand un appui avait déjà
+   réussi. Or un appui réussi est exactement ce qui n'arrive pas dans l'état
+   « désactivé » : le seul cas où le relais sert était le seul où on ne le
+   tentait pas.
+3. J'ai cru un moment que `Auto.watch()` n'était branché nulle part (`grep` sur
+   `Auto.watch()` : aucun appelant). C'est faux — `Auto.start()` l'appelle, et
+   `startPlayer()` est rappelé par la sonde du miroir dès que la barre apparaît.
+   L'hypothèse n'a pas été livrée. Elle a en revanche révélé le vrai défaut de
+   branchement : l'observateur est posé **sur le nœud** de la barre, et React
+   remplace ce nœud à chaque redessin ; le guetteur survivait sur un nœud détaché.
+
+Correctifs, dans l'ordre de ces fils :
+
+| Endroit | Ce qui est désormais vrai |
+| --- | --- |
+| `SEL.takeover`, `SEL.takeoverRows` | une forme **sans étiquette de balise** (`[data-testid="now-playing-bar"] …`) en tête de liste, les formes connues derrière |
+| `Auto.TAKEOVER_RE` | reconnaît les libellés relevés dans les fichiers de langue du lecteur mobile (`« Vous écoutez sur »`, `« Lecture sur cet appareil »`) — la sonde les avait recopiés, personne ne les avait lus |
+| `Auto.takeoverButton` | fait confiance à `data-testid="takeover-button"` sans filtrer par traduction : une langue ne doit pas décider si la lecture revient ici |
+| `Actions.playPause` | quand la page **refuse** la commande, le relais est tenté d'abord, et le clavier reste séquencé derrière (`maybeTakeover` rend un verdict, plus un silence) |
+| `Auto.watch` | rebranchable et rappelé à chaque mutation de page : une barre remplacée ne tue plus le guetteur |
+| `Actions.blame` | la **deuxième** commande sans effet ouvre la carte du diagnostic — la carte de la page vide, avec son bouton « copier » |
+| `Content.diagnose` | dit `relais proposé` ou `relais absent` : c'est la ligne qui sépare « Spotify occupé ailleurs » de « pas de session » |
+
+Mesure, sur la configuration livrée : `check` 0/0 · portique auto-testé 6/6 · banc
+jsdom **161/161** · assertions du moteur d'origine **30/30** · audit des liens 0/0 ·
+**52/52** régressions détectées. Deux des trois nouveaux cas de lecture ont échoué
+avant le correctif, comme de juste ; et c'est un test **existant** (l'escalade au
+moteur) qui a attrapé la faute que je viens de commettre en chemin — un `this` repris
+dans un rappel où le récepteur s'appelle `self`, qui fermait `verifyPlay` en
+permanence. C'est à peu près ce à quoi sert un banc.
+
+Ce qui reste hors de portée d'ici : le bac n'a pas de réseau vers `open.spotify.com`
+(TLS interrompu) et la CI ne peut pas se connecter à un compte — ses relevés sont
+donc faits **sans session**, ce qui explique des `429` et le `titre=""` du zap.
+D'où la carte : pour la première fois, un téléphone qui ne répond pas peut envoyer
+lui-même la phrase exacte qui dira quel maillon a manqué, sans rien recopier.
