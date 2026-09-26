@@ -96,6 +96,15 @@ html.sd-mobile .sd-iconbtn[disabled] {
   opacity: 0.4;
   pointer-events: none;
 }
+/* Le mini-lecteur ne se met **jamais** hors d'usage : `.is-unavailable` est un
+   état dessiné, pas un verrou. Un bouton désactivé par le navigateur ne reçoit
+   aucun événement — c'est comme ça que « rien ne se passe quand j'appuie sur
+   lecture » est arrivé, sans le moindre message. Ici l'appui parvient à la
+   commande, qui répond « aucun titre en lecture ». */
+html.sd-mobile .sd-iconbtn.is-unavailable {
+  opacity: 0.4;
+  pointer-events: auto;
+}
 /* `display: inline-flex` above would otherwise beat the UA's `[hidden]` rule,
    so a capability the web player does not expose (paroles, appareils…) would
    still show a dead button. */

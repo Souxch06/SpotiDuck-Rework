@@ -1,6 +1,6 @@
 {
   "name": "spotiduck-ui",
-  "version": "2.11.18",
+  "version": "2.11.19",
   "private": true,
   "description": "Mobile UI layer (Spotify-app-like shell) injected into the SpotiDuck WebView",
   "type": "module",

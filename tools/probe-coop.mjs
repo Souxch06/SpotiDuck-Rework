@@ -38,6 +38,8 @@ const OUT = "/tmp/probe-coop";
 mkdirSync(OUT, { recursive: true });
 
 const report = { at: new Date().toISOString(), pages: [] };
+/* Les règles dures, celles qui doivent faire échouer le run (voir GUARD). */
+const fautes = [];
 
 const clean = (text, max = 700) => String(text).replace(/\s+/g, " ").slice(0, max);
 const note = (title, text) => {
@@ -50,6 +52,94 @@ const warn = (title, text) => {
   console.log(`::warning title=${title}::${line}`);
   console.log(`[Sonde coque] ⚠ ${title} — ${line}`);
 };
+/* -------------------------------------------------------------------------- *
+ * **Le garde-fou.** Ce qui suit n'est pas un relevé : ce sont des règles qui
+ * font **échouer** la sonde. Trois versions de suite ont été publiées « tout
+ * vert » alors que le téléphone ne répondait plus, parce que `npm run smoke`
+ * interroge une page **factice** — et qu'ici, la coque se verrouillait
+ * elle-même (boutons posés en `disabled`, donc incapables de recevoir un
+ * appui) sans que personne ne le voie.
+ *
+ * Les règles sont choisies pour être décidables **sans session** : elles portent
+ * sur ce que la coque se fait à elle-même, pas sur ce que Spotify veut bien
+ * répondre. Une alarme à tort est un défaut — donc rien ici ne dépend du
+ * contexte (page réelle, banc, connexion) ni de ce qui joue.
+ * -------------------------------------------------------------------------- */
+const GUARD = () => {
+  const fautes = [];
+  const root = document.documentElement;
+  const vw = root.clientWidth;
+  const vh = root.clientHeight;
+  const tous = [].slice.call(document.querySelectorAll(".sd-layer .sd-iconbtn"));
+  const boites = new Map();
+  tous.forEach((b) => boites.set(b, b.getBoundingClientRect()));
+  const visibles = tous.filter((b) => {
+    const r = boites.get(b);
+    return r.width > 3 && r.height > 3;
+  });
+  const nom = (el) =>
+    (String(el.className).split(" ").find((c) => /^sd-(mini|ctrl|tab|top)/.test(c)) ||
+      el.tagName.toLowerCase()) + (el.className ? "." + String(el.className).split(" ")[0] : "");
+
+  /* 1. Un bouton de la coque posé en `disabled` ne reçoit **aucun** événement :
+        l'appui ne déclenche ni commande ni message. C'est « le lecteur ne fait
+        rien », et c'est exactement ce que la coque se faisait à elle-même. */
+  const verrouilles = visibles.filter((b) => b.disabled === true);
+  if (verrouilles.length) {
+    fautes.push(`${verrouilles.length} bouton(s) de la coque verrouillés en \`disabled\` : ${verrouilles.slice(0, 3).map(nom).join(", ")} — un appui y est perdu sans message`);
+  }
+
+  /* 2. Un bouton visible et non verrouillé doit **recevoir** l'appui posé en son
+        centre. S'il est recouvert, l'utilisateur touche et il ne se passe rien. */
+  const muets = [];
+  visibles.forEach((b) => {
+    if (b.disabled === true) return;
+    const r = boites.get(b);
+    if (r.bottom > vh + 1 || r.right > vw + 1 || r.top < -1 || r.left < -1) return; // hors écran : pas un appui perdu
+    let hit = null;
+    try {
+      hit = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+    } catch (e) {
+      hit = null;
+    }
+    if (!hit) return;
+    if (hit === b || b.contains(hit)) return;
+    muets.push(`${nom(b)} recouvert par ${hit.tagName.toLowerCase()}${hit.className ? "." + String(hit.className).split(" ")[0] : ""}`);
+  });
+  if (muets.length) fautes.push(`l'appui ne parvient pas au bouton : ${muets.slice(0, 3).join(" · ")}`);
+
+  /* 3. « Aucun titre » alors que la page joue : la coque est aveugle à son propre
+        lecteur, et c'est ce qui la faisait se verrouiller. */
+  const quiJoue = [].slice.call(document.querySelectorAll("audio")).find((m) => !m.paused && Number(m.duration) > 0);
+  if (quiJoue && root.classList.contains("sd-mini-empty")) {
+    fautes.push("la page joue un titre et la coque se croit sans piste (`sd-mini-empty`) : elle redevient muette");
+  }
+
+  /* 4. La place réservée en bas doit être la hauteur **mesurée** du lecteur :
+        fausse, la page est coupée ou laisse une bande morte. */
+  const mini = document.querySelector(".sd-mini");
+  if (mini && !root.classList.contains("sd-player-open") && !root.classList.contains("sd-login")) {
+    const h = Math.ceil(mini.getBoundingClientRect().height || 0);
+    const reserve = parseFloat(getComputedStyle(mini).getPropertyValue("--sd-mini-h-current")) || 0;
+    if (h > 3 && Math.abs(reserve - h) > 6) {
+      fautes.push(`place réservée ${Math.round(reserve)}px pour un lecteur réellement haut de ${h}px`);
+    }
+  }
+
+  /* 5. Nos barres ne débordent pas de l'écran (la mise en page est forcée à la
+        largeur du téléphone par la WebView : un débordement = rogné). */
+  const depassent = [].slice
+    .call(document.querySelectorAll(".sd-layer > *"))
+    .filter((el) => {
+      const r = el.getBoundingClientRect();
+      return r.width > 3 && (r.right > vw + 1 || r.left < -1);
+    })
+    .map((el) => `${String(el.className).split(" ")[0]} jusqu'à ${Math.round(el.getBoundingClientRect().right)} pour ${vw}`);
+  if (depassent.length) fautes.push(`nos barres dépassent l'écran : ${depassent.slice(0, 3).join(" · ")}`);
+
+  return { fautes, boutons: tous.length, visibles: visibles.length, joue: quiJoue ? 1 : 0, largeur: vw };
+};
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /* Ce que la sonde va interroger sur chaque page. Renvoie un objet plat : tout
@@ -1561,6 +1651,23 @@ async function main() {
         } else {
           warn(`Lecture — ${target.label}`, "aucune mesure n'est remontée du lecteur");
         }
+        /* **Le garde-fou de la coque**, mesuré sur ce contexte : Chrome réel,
+           CSS réel, appuis réels (hit-test), pas une page factice. */
+        {
+          const garde = await safely(() => page.evaluate(GUARD));
+          if (garde && garde.fautes) {
+            report.pages.push({ label: `${target.label} (garde-fou)`, garde });
+            if (garde.fautes.length) {
+              for (const f of garde.fautes) fautes.push(`${target.label} : ${f}`);
+              warn(`Garde-fou — ${target.label}`, garde.fautes.join(" || "));
+            } else {
+              note(
+                `Garde-fou — ${target.label}`,
+                `${garde.boutons} boutons (${garde.visibles} visibles) tous atteignables · ${garde.joue ? "la page joue, la coque le voit" : "rien ne joue"} · place réservée conforme · écran ${garde.largeur}px`
+              );
+            }
+          }
+        }
       }
 
       /* **Une playlist ouverte : écran noir ? lecteur disparu ?** Le parcours
@@ -1892,6 +1999,19 @@ async function main() {
   const allErrors = report.pages.flatMap((p) => (p.errors || []).map((e) => `${p.label}: ${e}`));
   if (allErrors.length) warn("Erreurs de la page", allErrors.slice(0, 5).join("  ||  "));
   else note("Erreurs de la page", "aucune");
+
+  if (fautes.length) {
+    console.log(`::error title=La coque est cassée::${clean(fautes.join(" || "), 1500)}`);
+    console.log(`[Sonde coque] ECHEC — ${fautes.length} règle(s) dure(s) enfreinte(s)`);
+    try {
+      writeFileSync(`${OUT}/ECHEC`, fautes.join("\n"));
+    } catch (e) {
+      /* le dossier peut manquer : le verdict est déjà dans la sortie */
+    }
+    process.exitCode = 1;
+  } else {
+    console.log("::notice title=La coque tient::aucun bouton verrouillé, aucun appui perdu, place réservée mesurée conforme");
+  }
 
   await browser.close().catch(() => {});
   writeFileSync(`${OUT}/rapport.json`, JSON.stringify(report, null, 2));

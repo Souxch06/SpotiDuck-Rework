@@ -1,7 +1,9 @@
 /**
- * Contrôle des garde-fous : chaque correction de la 2.11.18 est annulée une par
- * une, et l'audit doit la signaler. Les nombres cités dans `docs/UI-REWORK.md`
- * viennent d'ici (`node tools/.regress.mjs`), pas d'une estimation.
+ * Contrôle des garde-fous : chaque correction de la 2.11.18 et de la 2.11.19 est
+ * annulée une par une, et l'audit doit la signaler. Les nombres cités dans
+ * `docs/UI-REWORK.md` viennent d'ici (`node tools/regress-audit.mjs`), pas d'une
+ * estimation : un garde-fou qui ne tombe pas quand on réintroduit le défaut
+ * n'est pas un garde-fou.
  */
 import { readFileSync, writeFileSync, renameSync } from "node:fs";
 import { execSync } from "node:child_process";
@@ -13,6 +15,7 @@ const files = {
   dev: "src/inject/76-device.css",
   shim: "android/app/src/main/assets/native-mode.js",
   widget: "android/app/src/main/res/layout/widget_player.xml",
+  shell: "src/inject/20-shell.css",
 };
 const originals = {};
 for (const k of Object.keys(files)) originals[k] = readFileSync(join(root, files[k]), "utf8");
@@ -41,6 +44,17 @@ const CASES = [
   ["widget", "            android:gravity=\"center_vertical\"\n            android:orientation=\"horizontal\">", "            android:orientation=\"horizontal\">", "alignée au centre"],
   ["widget", "android:id=\"@+id/widget_next\"", "android:id=\"@+id/widget_next2\"", "widget_next"],
   ["shim", '"add-button", "now-playing-widget-like-button"', '"button-like-invent"', "comme commande du lecteur"],
+  /* Les secours de lecture de la 2.11.19 (« les boutons ne font rien »). */
+  ["ui", "mediaEl: function () {", "mediaElInutilise: function () {", "n'a plus de mediaEl"],
+  ["ui", "var sess = this.session();", "var sess = null;", "ne consulte plus ce que la page joue"],
+  ["ui", "if (!input) return this.mediaSeek(ms);", "if (!input) return false;", "refuse de chercher"],
+  ["ui", "return this.mediaToggle(go === null ? !this.readPlaying() : go);", "return false;", "plus de secours sur l'\u00e9l\u00e9ment"],
+  ["ui", "          if (btn.disabled) btn.disabled = false;", "          btn.disabled = !s.hasTrack;", "verrouill"],
+  ["ui", "var dom = Spotify.readPlaying();", "var dom = State.playing;", "état optimiste"],
+  ["shell", "html.sd-mobile .sd-iconbtn.is-unavailable {\n  opacity: 0.4;\n  pointer-events: auto;\n}", "html.sd-mobile .sd-iconbtn.is-unavailable {\n  opacity: 0.4;\n}", "pressable"],
+  ["shim", "function mediaEl() {", "function mediaElAbsente() {", "n'a plus function mediaEl"],
+  ["shim", "if (!btn || btn.disabled === true) return false;", "if (!btn) return false;", "comme une réussite"],
+  ["shim", "var sess = session();", "var sess = {};", "ne lit plus la session m\u00e9dia"],
 ];
 
 const restore = () => {

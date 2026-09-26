@@ -4479,6 +4479,195 @@ await checkAsync("une commande ne reste pas muette quand l'élément de Spotify 
   return "remis au début si possible, piste précédente sinon ✓";
 });
 
+/* ------------------------------------------------------------------ *
+ * L'élément qui joue, pas seulement le markup.
+ *
+ * Relevé en CI (Chrome réel, vraie page Spotify) le 26/09 : « les boutons
+ * du lecteur ne font rien ». Deux causes, toutes deux muettes : la coque ne
+ * lisait la piste **que** par les `data-testid` de React (renommés : la coque
+ * se croyait sans titre), et sans titre elle posait `disabled` sur ses propres
+ * boutons — un bouton désactivé ne reçoit aucun événement, donc l'appui ne
+ * déclenchait ni commande ni message. Ces quatre sondes reproduisent une page
+ * qui joue sans le dire par son markup.
+ * ------------------------------------------------------------------ */
+async function barePlayerPage(dom, opts) {
+  const w = dom.window;
+  const doc = w.document;
+  const seleteurs = [
+    '[data-testid="now-playing-widget"]',
+    '[data-testid="now-playing-bar"]',
+    "aside",
+    "footer",
+    'div[data-testid="playback-progressbar"]',
+    'button[data-testid^="control-button"]',
+    '[data-testid="add-like-button"]',
+    '[data-testid="context-item-info-title"]',
+    "[data-testid='playback-progressbar']",
+  ];
+  seleteurs.forEach((sel) => {
+    doc.querySelectorAll(sel).forEach((n) => n.remove());
+  });
+  if (opts && opts.sansMedia) return { pos: () => 0, isPaused: () => true };
+
+  let paused = false;
+  let at = 42;
+  const audio = doc.createElement("audio");
+  Object.defineProperty(audio, "currentSrc", {
+    value: "https://sd.example/track.mp3",
+    configurable: true,
+  });
+  Object.defineProperty(audio, "duration", { value: 214, configurable: true });
+  Object.defineProperty(audio, "currentTime", {
+    get: () => at,
+    set: (v) => {
+      at = Number(v);
+    },
+    configurable: true,
+  });
+  Object.defineProperty(audio, "paused", { get: () => paused, configurable: true });
+  Object.defineProperty(audio, "ended", { value: false, configurable: true });
+  audio.play = function () {
+    paused = false;
+    audio.dispatchEvent(new w.Event("play"));
+    return Promise.resolve();
+  };
+  audio.pause = function () {
+    paused = true;
+    audio.dispatchEvent(new w.Event("pause"));
+  };
+  (doc.querySelector("#main-view") || doc.body).appendChild(audio);
+  Object.defineProperty(w.navigator, "mediaSession", {
+    configurable: true,
+    value: {
+      metadata: {
+        title: "Baarishein",
+        artist: "Anuv Jain",
+        album: "Anuv Jain",
+        artwork: [
+          { src: "https://sd.example/300.jpg", sizes: "300x300" },
+          { src: "https://sd.example/720.jpg", sizes: "720x720" },
+        ],
+      },
+      playbackState: "playing",
+    },
+  });
+  return {
+    audio: audio,
+    pos: () => at,
+    isPaused: () => paused,
+    /* Un mutation dans la vue : c'est ce qui réveille l'observateur de la
+       coque, comme le fait la page réelle quand elle remplace un bloc. */
+    remuer: () => {
+      const n = doc.createElement("i");
+      (doc.querySelector("#main-view") || doc.body).appendChild(n);
+      setTimeout(() => n.remove(), 0);
+    },
+  };
+}
+
+await checkAsync("la coque lit la piste dans l'élément qui joue, pas seulement dans le markup", async () => {
+  const dom = await bootWithMock();
+  const w = dom.window;
+  const doc = w.document;
+  const api = w.SpotiDuckUI;
+  const Spotify = api._internals.Spotify;
+  const p = await barePlayerPage(dom);
+
+  const lu = Spotify.read();
+  assert(lu.title === "Baarishein", `titre attendu de mediaSession, lu « ${lu.title} »`);
+  assert(lu.artist === "Anuv Jain", "artiste attendu de mediaSession");
+  assert(lu.cover === "https://sd.example/720.jpg", `plus grande pochette attendue, lue ${lu.cover}`);
+  assert(lu.duration === 214000, `durée de l'élément en millisecondes attendue, lue ${lu.duration}`);
+  assert(lu.position === 42000, `position de l'élément attendue, lue ${lu.position}`);
+  assert(lu.playing === true, "l'élément joue : la coque doit dire « en lecture »");
+  assert(Spotify.ready(), "un <audio> qui joue déclare le lecteur prêt, barre absente ou non");
+
+  /* Et l'état suit, sans qu'on le lui demande : l'écoute de l'élément et
+     l'observateur de la page se充 chargent de la resynchronisation. */
+  p.remuer();
+  await tick(700);
+  assert(api.state.title === "Baarishein", `état attendu nourri par la page, lu « ${api.state.title} »`);
+  assert(api.state.hasTrack === true, "la coque ne doit plus se croire sans piste");
+  const btn = doc.querySelector(".sd-mini-play");
+  assert(!btn.disabled, "une piste lue doit rendre le bouton pressable");
+  assert(btn.getAttribute("aria-disabled") === "false", "bouton disponible : aria-disabled=false");
+  w.close();
+  return "mediaSession + <audio> lus · durée, position, pochette justes · état nourri ✓";
+});
+
+await checkAsync("lecture et pause agissent sur l'élément quand le bouton de Spotify est introuvable", async () => {
+  const dom = await bootWithMock();
+  const w = dom.window;
+  const doc = w.document;
+  const api = w.SpotiDuckUI;
+  const p = await barePlayerPage(dom);
+  p.remuer();
+  await tick(700);
+  assert(p.isPaused() === false, "la page doit partir en lecture dans cette sonde");
+
+  doc.querySelector(".sd-mini-play").click();
+  await tick(120);
+  assert(p.isPaused() === true, "appuyer sur pause doit mettre l'élément en pause");
+  await tick(700);
+  assert(api.state.playing === false, "et l'état de la coque doit le dire");
+
+  doc.querySelector(".sd-mini-play").click();
+  await tick(120);
+  assert(p.isPaused() === false, "un second appui reprend la lecture de l'élément");
+  const toast = (doc.querySelector(".sd-layer .sd-toast") || {}).textContent || "";
+  assert(
+    !/ne répondent pas|rien ne joue/i.test(toast),
+    `une commande qui a agi ne doit pas s'excuser : « ${toast.trim()} »`
+  );
+  w.close();
+  return "pause puis reprise obtenues sur l'élément · aucun message d'échec ✓";
+});
+
+await checkAsync("la position se pose sur l'élément quand le curseur de la page a disparu", async () => {
+  const dom = await bootWithMock();
+  const w = dom.window;
+  const api = w.SpotiDuckUI;
+  const Spotify = api._internals.Spotify;
+  const p = await barePlayerPage(dom);
+  assert(Spotify.progressInput() === null, "cette sonde doit être sans curseur de progression");
+  assert(Spotify.seek(90000) === true, "chercher doit réussir sur l'élément");
+  assert(Math.abs(p.pos() - 90) < 0.5, `90 secondes attendues sur l'élément, obtenu ${p.pos()}`);
+  assert(Spotify.seek(-4000) === true && p.pos() === 0, "une demande négative va au début, jamais avant");
+  assert(Spotify.seek(9999999) === true && Math.abs(p.pos() - 214) < 0.5, `la demande est bornée à la durée (${p.pos()})`);
+  w.close();
+  return "écriture sur l'élément · bornes tenues ✓";
+});
+
+await checkAsync("un bouton du lecteur sans piste reste pressable et le dit", async () => {
+  const dom = await bootWithMock();
+  const w = dom.window;
+  const doc = w.document;
+  const api = w.SpotiDuckUI;
+  await barePlayerPage(dom, { sansMedia: true });
+  api.state.title = "";
+  api.state.hasTrack = false;
+  api._internals.UI.paint(api.state, "sonde");
+
+  const btn = doc.querySelector(".sd-mini-play");
+  assert(btn, "le mini-lecteur doit garder ses commandes en place");
+  assert(
+    !btn.disabled,
+    "jamais `disabled` : un bouton désactivé ne reçoit aucun événement, l'appui devient muet"
+  );
+  assert(btn.getAttribute("aria-disabled") === "true", "l'indisponibilité s'annonce par aria-disabled");
+  assert(btn.classList.contains("is-unavailable"), "…et se dessine par .is-unavailable");
+
+  const toast = doc.querySelector(".sd-layer .sd-toast");
+  if (toast) toast.textContent = "";
+  btn.click();
+  await tick(1400);
+  const dit = ((doc.querySelector(".sd-layer .sd-toast") || {}).textContent || "").trim();
+  assert(dit.length > 0, "l'appui doit recevoir une réponse, même sans piste");
+  assert(/ne joue|titre|piste/i.test(dit), `réponse attendue sur l'absence de piste, lue : « ${dit} »`);
+  w.close();
+  return "bouton pressable, état annoncé, appui répondu ✓";
+});
+
 await checkAsync("l'onglet bibliothèque mène bien quelque part", async () => {
   /* Depuis une playlist, l'appui sur « Bibliothèque » allumait l'onglet et ne
      montrait rien : notre page se range devant une sous-page, et aucune
@@ -5068,6 +5257,64 @@ check("native mode: seek and metadata use the right units", () => {
   assert(payload.duration === 200000, "duration should be milliseconds, got " + payload.duration);
   assert(payload.cover.indexOf("i.scdn.co") > -1, "cover art not forwarded");
   return "42 s dans la barre · 200 000 ms au pont";
+});
+
+/* La page d'accueil du téléphone n'a parfois **aucun** repère de lecture dans
+   son arbre (barre remplacée, repères renommés). Le shim ne doit pas pour
+   autant se taire : il publie ce que la page annonce au système et pilote
+   l'élément qui joue réellement. Sans ces deux secours, la notification
+   restait figée sur « rien » et ses boutons ne cliquaient rien du tout. */
+await checkAsync("native mode: la notification suit et commande l'élément qui joue", async () => {
+  const d = new JSDOM(
+    "<!doctype html><html><body><main id='main-view'>aucun lecteur dans cette page</main></body></html>",
+    { url: "https://open.spotify.com/", pretendToBeVisual: true, runScripts: "dangerously" }
+  );
+  const w = d.window;
+  w.eval(
+    "window.__c = []; window.AndBridge = new Proxy({}, { get: function (t, p) { return function () {" +
+      "var a = Array.prototype.slice.call(arguments); window.__c.push([String(p), a]);" +
+      " if (String(p) === 'isWoke') return false; return undefined; }; } });"
+  );
+  w.eval(
+    "(function () { var a = document.createElement('audio');" +
+      "Object.defineProperty(a, 'currentSrc', { value: 'https://sd.example/track.mp3', configurable: true });" +
+      "Object.defineProperty(a, 'duration', { value: 200, configurable: true });" +
+      "var t = 42; var paused = false;" +
+      "Object.defineProperty(a, 'currentTime', { get: function () { return t; }, set: function (v) { t = Number(v); }, configurable: true });" +
+      "Object.defineProperty(a, 'paused', { get: function () { return paused; }, configurable: true });" +
+      "Object.defineProperty(a, 'ended', { value: false, configurable: true });" +
+      "a.play = function () { paused = false; }; a.pause = function () { paused = true; };" +
+      "window.__audio = a; window.__pos = function () { return t; }; window.__paused = function () { return paused; };" +
+      "document.body.appendChild(a);" +
+      "Object.defineProperty(navigator, 'mediaSession', { configurable: true, value: { metadata: {" +
+      "title: 'Baarishein', artist: 'Anuv Jain', artwork: [{ src: 'https://sd.example/720.jpg', sizes: '720x720' }] }," +
+      " playbackState: 'playing' } });" +
+      "})();"
+  );
+  w.eval(await read("android/app/src/main/assets/native-mode.js"));
+  const sd = w.SpotiDuckUI;
+  assert(sd && sd.mode === "native", "le shim n'a pas été installé sur cette page nue");
+
+  const publie = () => {
+    const c = w.__c.filter((x) => x[0] === "recMediaStatus").slice(-1)[0];
+    return c ? JSON.parse(c[1][0]) : null;
+  };
+  const s0 = publie();
+  assert(s0, "la notification n'a rien publié alors que la page joue");
+  assert(s0.track === "Baarishein" && s0.artist === "Anuv Jain", `titre et artiste attendus de la session média, lus « ${s0.track} » / « ${s0.artist} »`);
+  assert(s0.duration === 200000, `durée de l'élément en millisecondes attendue, lue ${s0.duration}`);
+  assert(s0.position === 42000, `position de l'élément attendue, lue ${s0.position}`);
+  assert(s0.playing === true, "la page joue : la notification doit le dire");
+  assert(/scdn|sd\.example/.test(s0.cover), `pochette attendue de la session média, lue « ${s0.cover} »`);
+
+  assert(sd.pause() === true, "pause doit répondre avoir agi");
+  assert(w.__paused() === true, "l'élément doit être en pause après pause()");
+  assert(sd.play() === true && w.__paused() === false, "play doit reprendre l'élément");
+  assert(sd.seek(90000) === true, "seek doit écrire une position");
+  assert(Math.abs(w.__pos() - 90) < 0.5, `90 secondes attendues sur l'élément, obtenu ${w.__pos()}`);
+  assert(sd.seek(-5000) === true && w.__pos() === 0, "une position négative va au début");
+  d.window.close();
+  return "médias publiés sans aucun repère de markup · lecture, pause et course obtenues sur l'élément ✓";
 });
 
 /* **Le mode livré par défaut : la page mobile de Spotify.** Nos boutons ne sont

@@ -1203,6 +1203,91 @@
     return out || img.currentSrc || img.src || img.getAttribute("src") || "";
   }
 
+  /* ------------------------------------------------------------------ *
+   * L'élément qui joue, et ce que la page annonce au système.
+   *
+   * La page mobile de Spotify renomme ses `data-testid` plus souvent qu'à son
+   * tour, et le shim d'alors n'avait que ça : sans bouton trouvé, la
+   * notification ne publiait rien et ses commandes ne cliquaient rien du tout —
+   * le même défaut que dans la coque (« les commandes ne font rien »). Or la
+   * page tient un `<audio>` (ce qu'elle met en pause, ce qui avance) et tient
+   * `mediaSession` à jour **pour sa propre notification** : ces deux sources ne
+   * dépendent d'aucun nom de classe. Elles servent de lecture de secours, et de
+   * point d'attaque quand un bouton de la page est absent ou désactivé.
+   * ------------------------------------------------------------------ */
+  function mediaEl() {
+    var all = document.querySelectorAll("audio");
+    for (var i = 0; i < all.length; i++) {
+      var m = all[i];
+      if (!(m.currentSrc || m.src)) continue;
+      var d = Number(m.duration);
+      if (isFinite(d) && d > 0) return m;
+    }
+    var v = q(".VideoPlayer__container video");
+    return v && (v.currentSrc || v.src) ? v : null;
+  }
+
+  function session() {
+    try {
+      var ms = navigator.mediaSession;
+      if (!ms) return {};
+      var out = {};
+      var md = ms.metadata;
+      if (md) {
+        if (md.title) out.title = String(md.title).trim();
+        if (md.artist) out.artist = String(md.artist).trim();
+        var art = md.artwork;
+        if (art && art.length) {
+          var best = "";
+          var size = -1;
+          for (var i = 0; i < art.length; i++) {
+            var w = parseInt(String(art[i].sizes || "").split("x")[0], 10) || 0;
+            if (w >= size && art[i].src) {
+              size = w;
+              best = art[i].src;
+            }
+          }
+          if (best) out.cover = best;
+        }
+      }
+      if (ms.playbackState === "playing") out.playing = true;
+      else if (ms.playbackState === "paused") out.playing = false;
+      return out;
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function mediaToggle(want) {
+    var m = mediaEl();
+    if (!m) return false;
+    try {
+      if (want) {
+        var p = m.play();
+        if (p && p.catch) p.catch(function () {});
+      } else {
+        m.pause();
+      }
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function mediaSeek(ms) {
+    var m = mediaEl();
+    if (!m) return false;
+    try {
+      var dur = Number(m.duration);
+      var t = Math.max(0, ms / 1000);
+      if (isFinite(dur) && dur > 0) t = Math.min(t, dur);
+      m.currentTime = t;
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
   function playPauseBtn() {
     return (
       q("button[data-testid='control-button-playpause']") ||
@@ -1211,7 +1296,10 @@
   }
 
   function clickBtn(btn) {
-    if (!btn) return false;
+    /* Un bouton **désactivé** ne déclenche aucun gestionnaire : le compter comme
+       une réussite laissait la notification dire « fait » sans que rien ne se
+       passe. On le signale absent, et la commande se rabat sur l'élément. */
+    if (!btn || btn.disabled === true) return false;
     try {
       btn.click();
       return true;
@@ -1246,15 +1334,22 @@
          veut dire « déjà en lecture », mais « Lecture » (FR) / « Play » (EN)
          veut dire « en pause, appuie pour reprendre » — il faut donc cliquer. */
       if (b && /pause/i.test(b.getAttribute("aria-label") || "")) return true;
-      return clickBtn(b);
+      return clickBtn(b) || mediaToggle(true);
     },
     pause: function () {
       var b = playPauseBtn();
       if (b && /play|lecture/i.test(b.getAttribute("aria-label") || "")) return true; // déjà en pause
-      return clickBtn(b);
+      return clickBtn(b) || mediaToggle(false);
     },
     playPause: function () {
-      return clickBtn(playPauseBtn());
+      var b = playPauseBtn();
+      if (b) {
+        /* Le bouton de la page d'abord : c'est lui qui tient la file et la
+           session média. L'élément ne sert que s'il ne répond pas. */
+        var clique = clickBtn(b);
+        if (clique) return true;
+      }
+      return mediaToggle(!readPlaying());
     },
     next: function () {
       return clickBtn(playerButton(["control-button-skip-forward", "control-button-next"], /^(next|suivant|suivante|titre suivant|passer à la piste suivante)$/i));
@@ -1274,13 +1369,20 @@
        « NaN » dans le curseur. */
     seek: function (ms) {
       var input = progressInput();
-      if (!input) return false;
+      if (!input) return mediaSeek(ms);
       var max = parseFloat(input.getAttribute("max"));
       if (!(max > 0)) return false;
       var factor = cursorUnitFactor(max);
       var value = msToTicks(ms, factor);
       if (value < 0) return false;
-      return setNativeInput(input, String(Math.max(0, Math.min(max, value))));
+      if (setNativeInput(input, String(Math.max(0, Math.min(max, value))))) return true;
+      /* Le curseur de la page n'a pas voulu de l'écriture (React le garde sous
+         clef, ou il a été remplacé entre-temps) : l'élément, lui, obéit. */
+      return mediaSeek(ms);
+    },
+    /* Aucun curseur du tout dans cette page : même issue, l'élément. */
+    seekRaw: function (ms) {
+      return mediaSeek(ms);
     },
     sync: function () {
       publish(true);
@@ -1314,6 +1416,12 @@
     var label = (b && (b.getAttribute("aria-label") || "")) || "";
     if (/pause/i.test(label)) return true;
     if (/play|lecture|reprendre/i.test(label)) return false;
+    /* Ni bouton, ni libellé : ce que joue l'élément est la réponse, et c'est
+       toujours mieux que de répéter la dernière valeur connue. */
+    var m = mediaEl();
+    if (m) return !m.paused && !m.ended;
+    var etat = session().playing;
+    if (etat !== undefined) return !!etat;
     return lastPlaying;
   }
 
@@ -1329,12 +1437,16 @@
     var img = q("[data-testid='cover-art-image']") || q("img[data-testid='cover-art-image']");
     var range = progressInput();
 
-    var title = titleEl ? (titleEl.textContent || "").trim() : "";
-    var artist = artistEl ? (artistEl.textContent || "").trim() : "";
+    /* Le markup d'abord (il sait des choses que la session ne dit pas), la
+       session média ensuite : c'est elle qui tient le titre quand la barre a
+       disparu de l'arbre, ou que ses repères ont changé de nom. */
+    var sess = session();
+    var title = (titleEl ? (titleEl.textContent || "").trim() : "") || sess.title || "";
+    var artist = (artistEl ? (artistEl.textContent || "").trim() : "") || sess.artist || "";
     /* La pochette : `src` est parfois une image 64 px en attendant la vraie
        (Spotify charge en différé et annonce la grande dans `srcset`) ; la
        notification demandait donc la plus petite, floue en grand format. */
-    var cover = bestCoverUrl(img);
+    var cover = bestCoverUrl(img) || sess.cover || "";
     /* **La durée et la position, dans l'unité lue sur le curseur** — même règle
        que pour l'écriture, donc même règle que la couche injectée. L'ancien
        test (« quatre chiffres ou plus = des millisecondes ») prenait une chanson
@@ -1346,6 +1458,13 @@
     var factor = cursorUnitFactor(max);
     var duration = ticksToMs(max, factor);
     var position = ticksToMs(val, factor);
+    var media = mediaEl();
+    if (media) {
+      var mdur = Number(media.duration);
+      var mpos = Number(media.currentTime);
+      if (!(duration > 0) && isFinite(mdur) && mdur > 0) duration = mdur * 1000;
+      if (!range && isFinite(mpos)) position = mpos * 1000;
+    }
     var playing = readPlaying();
     if (!title) return;
 

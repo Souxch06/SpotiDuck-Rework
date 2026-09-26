@@ -921,6 +921,14 @@ if (!/unitFactor: function/.test(libraryCode) || !/calibrate: function/.test(lib
    les passages par le curseur passent bien par la conversion mesurée, au lieu
    de multiplier ou diviser « à la main » à un endroit et pas à un autre (c'est
    exactement ainsi que la lecture était juste et l'écriture fausse). */
+/* Un nom de fonction, vérifié **jusqu'à sa parenthèse** : `includes("function
+   mediaEl")` répondrait encore oui après un renommage en `mediaElAbsente`, et
+   un garde-fou qui ne tombe pas quand on renomme la fonction n'en est pas un. */
+const hasFn = (text, name) => {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(escaped + "\\s*\\(").test(text);
+};
+
 const bodyOf = (name) => {
   const at = libraryCode.indexOf(name);
   if (at < 0) return "";
@@ -935,13 +943,16 @@ const bodyOf = (name) => {
   }
   return "";
 };
+/* `dur * 1000` vise **la** conversion à la main du curseur ; les bornes écrites
+   au pluriel (« mdur », « adur ») sont la lecture de l'élément qui joue, et ne
+   sont pas le même geste — d'où la frontière de mot. */
 const readBody = bodyOf("read: function");
 const seekBody = bodyOf("seek: function");
 if (
   !/this\.ticksToMs\(dur\)/.test(readBody) ||
   !/this\.ticksToMs\(pos\)/.test(readBody) ||
-  /dur \* 1000/.test(readBody) ||
-  /pos \* 1000/.test(readBody)
+  /(^|[^\w])dur \* 1000/.test(readBody) ||
+  /(^|[^\w])pos \* 1000/.test(readBody)
 ) {
   errors.push("la lecture de la position ne passe plus par l'unité mesurée (conversion à la main dans Spotify.read())");
 }
@@ -1800,7 +1811,7 @@ for (const m of libraryCode.matchAll(/(?:Settings|this)\.labels\[([^\]]+)\]/g)) 
   const shell = libraryCode;
   const shim = stripComments(nativeCalls);
   for (const need of ["function cursorUnitFactor", "function ticksToMs", "function msToTicks"]) {
-    if (!shim.includes(need)) {
+    if (!hasFn(shim, need)) {
       errors.push(`le shim du mode « interface Spotify » n'a plus de ${need}() : il redevine l'unité du curseur pour son propre compte`);
     }
   }
@@ -1832,8 +1843,74 @@ for (const m of libraryCode.matchAll(/(?:Settings|this)\.labels\[([^\]]+)\]/g)) 
       }
     }
   }
-  if (!/function bestCoverUrl/.test(shim)) {
+  if (!hasFn(shim, "function bestCoverUrl")) {
     errors.push("le shim ne demande plus la plus grande pochette : la notification afficherait la vignette 64 px");
+  }
+}
+
+/* --------------------------------------------------------------------------
+   9. Les secours de lecture : ce que la page **joue**, pas seulement ce
+   qu'elle affiche.
+   La coque et le shim ne savaient lire que les `data-testid` de React. Renommés
+   (et c'est tous les mois), la coque se croyait sans piste, posait `disabled`
+   sur ses propres boutons — un bouton désactivé ne reçoit aucun événement — et
+   l'utilisateur ne voyait plus rien se passer, sans le moindre message. Les
+   trois garde-fous ci-dessous verrouillent la leçon : une source indépendante du
+   markup, un appui jamais muet, et les deux modes d'accord.
+   -------------------------------------------------------------------------- */
+{
+  const shell = libraryCode;
+  for (const need of ["mediaEl: function", "session: function", "mediaToggle: function", "mediaSeek: function"]) {
+    if (!hasFn(shell, need)) {
+      errors.push(`la coque n'a plus de ${need.replace(": function", "")}() : elle redevient aveugle dès que le markup de Spotify change de nom`);
+    }
+  }
+  const read = (shell.match(/read: function \(\) \{[\s\S]*?\n    \},/) || [""])[0];
+  if (!/this\.session\(\)/.test(read) || !/this\.mediaEl\(\)/.test(read)) {
+    errors.push("`read()` ne consulte plus ce que la page joue : titre et durée dépendent de nouveau d'un seul repère de markup");
+  }
+  if (!/!!this\.mediaEl\(\)|this\.session\(\)/.test(shell)) {
+    errors.push("la coque ne déclare plus le lecteur prêt sur l'élément qui joue");
+  }
+  const seek = (shell.match(/seek: function \(ms\) \{[\s\S]*?\n    \},/) || [""])[0];
+  if (!/this\.mediaSeek\(/.test(seek)) {
+    errors.push("`seek()` refuse de chercher quand le curseur de la page est absent : l'appui reste muet");
+  }
+  const playPause = (shell.match(/playPause: function \(want\) \{[\s\S]*?\n    \},/) || [""])[0];
+  if (!/this\.mediaToggle\(/.test(playPause)) {
+    errors.push("`playPause()` n'a plus de secours sur l'élément : sans bouton vivant, la commande ne fait rien");
+  }
+  /* Un appui ne doit jamais être perdu par la feuille elle-même. */
+  if (/btn\.disabled = !s\.hasTrack/.test(shell)) {
+    errors.push("les commandes du mini-lecteur sont verrouillées par `disabled` : un bouton désactivé ne reçoit aucun événement, l'appui devient muet");
+  }
+  if (!/aria-disabled/.test(shell) || !/is-unavailable/.test(shell)) {
+    errors.push("l'indisponibilité d'une commande n'est plus annoncée (`aria-disabled` + `.is-unavailable`) : elle ne peut plus être dessinée sans verrouiller l'appui");
+  }
+  if (!/\.sd-iconbtn\.is-unavailable\s*\{[^}]*pointer-events:\s*auto/.test(css)) {
+    errors.push("`.is-unavailable` n'est pas explicitement pressable dans la feuille : le bouton indisponible redeviendrait muet");
+  }
+  /* Le raccourci de dernier recours doit être jugé sur la page, pas sur notre
+     affichage optimiste : sinon un appui qui n'a rien fait se croit réussi. */
+  const fallback = (shell.match(/fallback: function \(key, watch, avant\) \{[\s\S]*?\n    \},/) || [""])[0];
+  if (!/Spotify\.readPlaying\(\)/.test(fallback)) {
+    errors.push("`fallback()` juge le raccourci sur l'état optimiste de la coque : un appui muet ne sera plus jamais signalé");
+  }
+  /* Et le shim, même secours. */
+  const shim = stripComments(nativeCalls);
+  for (const need of ["function mediaEl", "function session", "function mediaToggle", "function mediaSeek"]) {
+    if (!hasFn(shim, need)) {
+      errors.push(`le shim n'a plus ${need}() : la notification redevient muette quand la page ne pose pas ses repères`);
+    }
+  }
+  if (!/btn\.disabled === true/.test(shim)) {
+    errors.push("le shim compte un bouton désactivé comme une réussite : la notification dirait « fait » sans que rien ne se passe");
+  }
+  if (!/var sess = session\(\)/.test(shim)) {
+    errors.push("la publication du shim ne lit plus la session média de la page");
+  }
+  if (!/mediaSeek\(/.test(shim) || !/mediaToggle\(/.test(shim)) {
+    errors.push("les commandes du shim n'ont plus de secours sur l'élément qui joue");
   }
 }
 

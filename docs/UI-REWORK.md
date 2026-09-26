@@ -3730,3 +3730,102 @@ adresses, valeurs écrites), pas les pixels. La mesure réelle de la hauteur du
 mini-lecteur, l'alignement du widget et le rendu des nouvelles règles CSS
 demandent un appareil ; ils sont vérifiés par la sonde Chrome de CI
 (`tools/probe-*.mjs`), pas par cette machine.
+
+---
+
+## §54 — Le lecteur muet : lire ce qui joue, pas seulement ce qui est écrit (v2.11.19)
+
+Trois versions de suite ont été publiées avec `npm run smoke` **vert** alors que
+le téléphone ne répondait plus. La raison n'est pas un manque de tests : c'est
+que la sonde interroge une **page factice**, dessinée d'après ce que nous
+croyions savoir de Spotify. La mesure qui a manqué est venue de la CI (un vrai
+Chrome, la vraie page), publiée en annotations :
+
+* `play=48x48 dessus=div.sd-mini-row` — à l'endroit de notre bouton lecture,
+  `elementFromPoint` répond la **rangée**, pas le bouton ;
+* `cibles : playPause=AUCUN · next=AUCUN · prev=AUCUN` sur la page réelle ;
+* `playPause=1 candidat(s) → choisi 62x62 DÉSACTIVÉ` ailleurs.
+
+Les deux premières lignes disent la même chose : **la coque s'était verrouillée
+elle-même**. Sans titre lu, `State.hasTrack` est faux ; faux, elle posait
+`btn.disabled = !s.hasTrack` sur ses six commandes du mini-lecteur ; et la
+feuille éteint `button[disabled]` en `pointer-events: none`. Un bouton
+désactivé ne reçoit **aucun** événement : ni commande, ni message, ni
+repli — « les boutons du lecteur ne font rien », littéralement. Et le cercle
+était clos parce que le titre ne se lisait **que** dans les `data-testid` de
+React : renommés (Spotify le fait tous les mois), la coque se croit sans piste,
+donc se verrouille, donc ne peut plus être déverrouillée par un appui.
+
+### Ce qui a été changé
+
+1. **Une source qui ne dépend pas du markup.** `Spotify.mediaEl()` renvoie
+   l'élément `<audio>` (ou le `<video>` de la vue plein écran) qui joue
+   réellement — durée, position, lecture/pause ; `Spotify.session()` lit
+   `navigator.mediaSession`, que la page tient à jour **pour sa propre
+   notification** : titre, artiste, album, plus grande pochette, état.
+   `read()` s'en sert en secours (jamais pour écraser une lecture sûre), et
+   `ready()` les accepte : une barre absente de l'arbre ne rend plus le lecteur
+   « prêt à rien ». `readPlaying()` y tombe aussi, au lieu de répéter la
+   dernière valeur connue.
+2. **Piloter cet élément quand le bouton ne répond pas.** `playPause(want)` se
+   rabat sur `mediaToggle` ; `seek(ms)`, sur `mediaSeek` (borné à la durée,
+   jamais négatif). Dans la coque **et** dans le shim `native-mode.js` — donc la
+   notification, l'écran de verrouillage et le widget retrouvent le même
+   secours. `clickBtn` du shim ne compte plus un bouton `disabled` comme une
+   réussite (il disait « fait » sans que rien ne se passe).
+3. **Plus jamais d'appui muet.** Les commandes du mini ne sont plus verrouillées
+   par `disabled` : l'état s'annonce (`aria-disabled="true"`) et se dessine
+   (`.is-unavailable`, `opacity: .4` avec `pointer-events: auto` exigé par
+   l'audit). L'appui parvient donc à la commande, qui répond « Rien ne joue en
+   ce moment » au lieu de se taire.
+4. **Le dernier recours jugé sur la page.** `Actions.fallback` comparait
+   `State` à une valeur d'avant — mais `State` contient déjà l'affichage
+   optimiste posé par la commande, donc un appui inefficace se croyait réussi.
+   Il compare maintenant à `Spotify.readPlaying()`, la réponse du lecteur.
+5. **L'élément est écouté, pas interrogé.** `Media.watch()` (appelé à chaque
+   synchronisation du DOM) branche `play`, `pause`, `ended`, `timeupdate`,
+   `seeked`, `durationchange` sur l'élément courant. `timeupdate` ne re-ancre la
+   position que si l'écart dépasse 1,5 s et jamais pendant un geste : le ticker
+   extrapole déjà, et l'invariant « aucune boucle de sondage » tient.
+
+### Ce qui vérifie ça, désormais
+
+* Cinq sondes jsdom de plus, écrites **pour ce défaut** : page qui joue sans
+  aucun repère de markup (titre, artiste, pochette 720, durée et position lues
+  dans l'élément) ; pause et reprise **obtenues sur l'élément**, sans message
+  d'échec parasite ; position écrite sur l'élément quand le curseur a disparu,
+  bornes tenues ; bouton sans piste **pressable et répondu** ; et côté shim, la
+  notification qui publie titre/durée/position et commande l'élément sur une
+  page totalement dépourvue de repères.
+* La preuve qui compte : l'**ancienne** source rejouée sous ces sondes les fait
+  tomber les quatre premières (`jamais disabled : un bouton désactivé ne reçoit
+  aucun événement, l'appui devient muet`), la nouvelle les fait passer. Bilan du
+  run : **154/154**.
+* L'audit croisé (`tools/audit-links.mjs`) a un groupe neuf qui verrouille la
+  leçon : les quatre secours présents **dans les deux modes**, `read()` qui les
+  consulte, `seek`/`playPause` qui s'en servent, `disabled` interdit sur nos
+  boutons, `.is-unavailable` explicitement pressable dans la feuille, `fallback`
+  jugé sur la page, `clickBtn` du shim qui refuse un bouton désactivé. Bilan :
+  **0 erreur, 0 avertissement**, et **33/33** régressions volontaires détectées
+  par `node tools/regress-audit.mjs`.
+* Le garde-fou de ce groupe a failli être faux : il testait
+  `includes("function mediaEl")`, ce qui répond encore oui quand la fonction est
+  renommée `mediaElAbsente`. Vérifié jusqu'à la parenthèse d'ouverture
+  (`hasFn`), sinon un garde-fou qui ne tombe pas n'en est pas un.
+* **La CI est devenue barrière**, plus seulement relevé : `tools/probe-coop.mjs`
+  évalue cinq règles dures dans chaque contexte (Chrome réel, CSS réel, appuis
+  réels par hit-test) et fait **échouer** le run si un bouton de la coque est
+  verrouillé, si un appui est recouvert, si la page joue pendant que la coque se
+  croit sans piste, si la place réservée ne suit pas la hauteur mesurée, ou si
+  une de nos barres dépasse l'écran. Ces règles sont délibérément choisies
+  décidables **sans session** : elles portent sur ce que la coque se fait à
+  elle-même, pas sur ce que Spotify veut bien répondre.
+
+### Ce qui n'est pas vérifiable ici
+
+Ce que la CI ne peut pas faire : avoir **une session connectée**. « Appuyer sur
+lecture avec un compte et un morceau en cours » reste le seul point qui exige
+l'appareil de l'utilisateur — c'est lui qui a signalé le défaut, c'est lui qui
+le validera. Et la `mediaSession` de la page réelle n'existe que si Spotify a de
+quoi jouer : sur une page sans session, la coque retombe sur ses autres chemins
+(boutons, clavier), ce que les sondes mesurent séparément.

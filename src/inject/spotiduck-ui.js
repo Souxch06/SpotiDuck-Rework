@@ -758,7 +758,10 @@
 
     /** True when the web player has booted far enough to be driven. */
     ready: function () {
-      return !!(pick(SEL.npBar) && (pick(SEL.play) || this.progressInput()));
+      if (pick(SEL.npBar) && (pick(SEL.play) || this.progressInput())) return true;
+      /* La barre n'est pas dans l'arbre (rendu différé, repère renommé) mais la
+         page joue : le lecteur est prêt, et nos commandes ont un point d'attaque. */
+      return !!this.mediaEl() || !!this.session();
     },
 
     /* ---------------------------------------------------------------- *
@@ -766,6 +769,100 @@
      * Everything is defensive: a missing node means "keep last value",
      * never "reset to null" (that bug made the notification flicker).
      * ---------------------------------------------------------------- */
+    /**
+     * **L'élément qui joue vraiment.**
+     *
+     * Le lecteur web de Spotify tient un `<audio>` (et un `<video>` pour la vue
+     * plein écran) : c'est lui que la page met en pause, c'est lui qui avance.
+     * Tout le reste — les `data-testid` de la barre — est du markup React qui
+     * change de nom à chaque version, et c'est précisément ce qui rendait la
+     * coque muette sur la page réelle (« les boutons du lecteur ne font rien »,
+     * 26/09) : sans titre lu, la coque se croyait sans piste.
+     */
+    mediaEl: function () {
+      var aud = $$("audio");
+      for (var i = 0; i < aud.length; i++) {
+        if (ours(aud[i])) continue;
+        var d = Number(aud[i].duration);
+        if (!(aud[i].currentSrc || aud[i].src)) continue;
+        /* Une durée lisible, ou rien du tout : un élément sans durée n'a pas
+           encore de piste chargée et ne nous dira rien de vrai. */
+        if (isFinite(d) && d > 0) return aud[i];
+      }
+      var v = $(".VideoPlayer__container video");
+      if (v && (v.currentSrc || v.src)) return v;
+      return null;
+    },
+
+    /**
+     * **Ce que la page annonce au système.** Spotify tient `mediaSession` à
+     * jour pour sa propre notification Android : titre, artiste, pochette,
+     * état. C'est la seule source qui ne dépend d'aucun repère de markup, et
+     * elle est là même quand la barre de lecture n'est pas dans l'arbre.
+     */
+    session: function () {
+      try {
+        var ms = navigator.mediaSession;
+        if (!ms) return null;
+        var md = ms.metadata;
+        var out = {};
+        var any = false;
+        if (md) {
+          if (md.title) { out.title = String(md.title).trim(); any = true; }
+          if (md.artist) { out.artist = String(md.artist).trim(); any = true; }
+          if (md.album) { out.album = String(md.album).trim(); any = true; }
+          var art = md.artwork;
+          if (art && art.length) {
+            var best = "", size = -1;
+            for (var i = 0; i < art.length; i++) {
+              var w = parseInt(String(art[i].sizes || "").split("x")[0], 10) || 0;
+              if (w >= size && art[i].src) { size = w; best = art[i].src; }
+            }
+            if (best) { out.cover = best; any = true; }
+          }
+        }
+        if (ms.playbackState === "playing") { out.playing = true; any = true; }
+        else if (ms.playbackState === "paused") { out.playing = false; any = true; }
+        return any ? out : null;
+      } catch (e) {
+        return null;
+      }
+    },
+
+    /** Bascule lecture/pause **sur l'élément** : le dernier recours qui marche
+     *  quand le bouton de la page est absent ou désactivé. */
+    mediaToggle: function (want) {
+      var m = this.mediaEl();
+      if (!m) return false;
+      try {
+        if (want) {
+          var p = m.play();
+          if (p && p.catch) p.catch(function () {});
+        } else {
+          m.pause();
+        }
+        return true;
+      } catch (e) {
+        return false;
+      }
+    },
+
+    /** Position demandée (ms) écrite **sur l'élément**, quand le curseur de la
+     *  page est introuvable. Sans ça, « avancer de dix secondes » restait muet. */
+    mediaSeek: function (ms) {
+      var m = this.mediaEl();
+      if (!m) return false;
+      try {
+        var dur = Number(m.duration);
+        var t = Math.max(0, ms / 1000);
+        if (isFinite(dur) && dur > 0) t = Math.min(t, dur);
+        m.currentTime = t;
+        return true;
+      } catch (e) {
+        return false;
+      }
+    },
+
     read: function () {
       var out = {};
       var titleEl = pick(SEL.title);
@@ -813,6 +910,26 @@
       if (playing !== null) out.playing = playing;
 
       out.isEpisode = !!(pick(['a[data-testid="context-item-info-show"]']));
+
+      /* **Et ce que la page joue en réalité.** Le markup n'a rien donné (barre
+         absente, repères renommés) : la session média et l'élément `<audio>`
+         disent la vérité, et c'est ce qui empêche la coque de se croire sans
+         piste — donc de désactiver tout le lecteur. */
+      var sess = this.session();
+      if (sess) {
+        if (!out.title && sess.title) out.title = sess.title;
+        if (!out.artist && sess.artist) out.artist = sess.artist;
+        if (!out.cover && sess.cover) out.cover = sess.cover;
+        if (out.playing === undefined && sess.playing !== undefined) out.playing = sess.playing;
+      }
+      var m = this.mediaEl();
+      if (m) {
+        var mdur = Number(m.duration);
+        var mpos = Number(m.currentTime);
+        if (out.duration === undefined && isFinite(mdur) && mdur > 0) out.duration = mdur * 1000;
+        if (out.position === undefined && isFinite(mpos)) out.position = mpos * 1000;
+        if (out.playing === undefined) out.playing = !m.paused && !m.ended;
+      }
       return out;
     },
 
@@ -839,6 +956,10 @@
         }
       }
       if (document.querySelector(".VideoPlayer__container video")) return true;
+      /* Ni bouton, ni libellé, ni glyphe exploitable : l'élément qui joue répond
+         mieux que rien, et il ne ment pas. */
+      var m = this.mediaEl();
+      if (m) return !m.paused && !m.ended;
       return null; // unknown → caller keeps its optimistic value
     },
 
@@ -904,8 +1025,12 @@
         return false;
       }
     },
-    playPause: function () {
-      return this.click(SEL.play);
+    playPause: function (want) {
+      if (this.click(SEL.play)) return true;
+      /* Aucun bouton vivant : on agit sur l'élément. C'est la même chose que
+         pressez le bouton de Spotify du point de vue de la lecture. */
+      var go = want === undefined ? null : !!want;
+      return this.mediaToggle(go === null ? !this.readPlaying() : go);
     },
     next: function () {
       return this.click(SEL.next);
@@ -944,7 +1069,7 @@
     },
     seek: function (ms) {
       var input = this.progressInput();
-      if (!input) return false;
+      if (!input) return this.mediaSeek(ms);
       var max = this.maxTicks();
       /* La graduation du curseur, celle avec laquelle on **lit** : on écrit
          donc la même. (Écrire toujours des secondes déplaçait le curseur au
@@ -1237,6 +1362,9 @@
   var lastPush = { key: "", at: 0 };
 
   function syncFromDom(reason) {
+    /* L'élément qui joue a peut-être été remplacé (nouvelle piste, vue changée) :
+       c'ici qu'on le re-écoute, au rythme des mutations du DOM. */
+    Media.watch();
     var patch = Spotify.read();
     if (patch.position !== undefined) {
       State.anchorPos = patch.position;
@@ -1314,6 +1442,67 @@
       if (!input || (node && node !== input && !(node.closest && node.closest('[data-testid="playback-progressbar"]')))) return;
       State.anchorPos = Spotify.ticksToMs(input.value);
       State.anchorAt = performance.now();
+    },
+  };
+
+  /* ------------------------------------------------------------------ *
+   * 5 bis. L'élément qui joue, **écouté** (aucun interrogateur périodique)
+   *
+   * La page tient son état dans un `<audio>` ; les mutations du DOM, elles,
+   * peuvent être rares (le lecteur ne touch pas à l'arbre pendant qu'il joue,
+   * ou n'y touche plus du tout quand la barre est hors écran). Sans cette
+   * écoute, la coque restait sur une position figée et sur « aucun titre » —
+   * et « aucun titre » désactivait ses propres commandes. Les événements de
+   * l'élément sont la source la plus directe qui existe.
+   * ------------------------------------------------------------------ */
+  var MEDIA_EVENTS = ["play", "pause", "ended", "timeupdate", "seeked", "durationchange"];
+  var Media = {
+    el: null,
+    onEvent: function (ev) {
+      var m = Media.el;
+      if (!m || !ev) return;
+      if (ev.type === "timeupdate") {
+        /* Le ticker extrapole déjà la position depuis la dernière ancre ; on ne
+           recale que si l'écart devient visible, et jamais pendant un geste. */
+        if (State.seeking) return;
+        var p = Math.round(Number(m.currentTime) * 1000) || 0;
+        if (Math.abs(p - livePosition()) > 1500) {
+          emit({ position: p, anchorPos: p, anchorAt: performance.now() }, "media");
+        }
+        return;
+      }
+      syncFromDom("media");
+    },
+    /** Branché sur l'élément courant, s'il a changé. Appelé à chaque
+     *  synchronisation du DOM : c'est l'événement qui nous prévient, pas une
+     *  boucle. */
+    watch: function () {
+      var m = null;
+      try {
+        m = Spotify.mediaEl();
+      } catch (e) {
+        m = null;
+      }
+      if (m === Media.el) return;
+      if (Media.el) {
+        for (var i = 0; i < MEDIA_EVENTS.length; i++) {
+          try {
+            Media.el.removeEventListener(MEDIA_EVENTS[i], Media.onEvent);
+          } catch (e) {
+            /* élément déjà jeté */
+          }
+        }
+      }
+      Media.el = m;
+      if (!m) return;
+      for (var j = 0; j < MEDIA_EVENTS.length; j++) {
+        try {
+          m.addEventListener(MEDIA_EVENTS[j], Media.onEvent);
+        } catch (e) {
+          /* un <video> sans ces événements : tant pis, on garde les autres */
+        }
+      }
+      syncFromDom("media");
     },
   };
 
@@ -2034,7 +2223,20 @@
          masquées — on voit ce que l'application sait faire. */
       [e.miniPrev, e.miniPlay, e.miniNext, e.miniShuffle, e.miniRepeat, e.miniLike].forEach(
         function (btn) {
-          if (btn) btn.disabled = !s.hasTrack;
+          if (!btn) return;
+          /* **Jamais `disabled`.** Un bouton désactivé ne reçoit aucun événement :
+             l'appui ne déclenchait ni commande ni message — exactement « les
+             boutons du lecteur ne font rien ». Mesuré en CI le 26/09 : à l'endroit
+             du bouton, `elementFromPoint` répondait la rangée, pas le bouton, car
+             la feuille éteint les `button[disabled]`. L'état est donc annoncé
+             (`aria-disabled`) et dessiné (`.is-unavailable`), **mais l'appui
+             arrive à la commande**, qui répond « aucun titre en lecture ».
+             Un `disabled` laissé par une autre voie est retiré ici. */
+          if (btn.disabled) btn.disabled = false;
+          var off = !s.hasTrack && !Spotify.mediaEl();
+          btn.setAttribute("aria-disabled", off ? "true" : "false");
+          if (btn.classList.contains("is-unavailable") === off) return;
+          btn.classList.toggle("is-unavailable", off);
         }
       );
       e.play.setAttribute("aria-label", s.playing ? Settings.labels.pause : Settings.labels.play);
@@ -2770,9 +2972,18 @@
       Spotify.key(key);
       /* **Vérifier, comme partout ailleurs.** Le raccourci a très bien pu agir :
          on relit le lecteur peu après, et on ne parle que si rien n'a bougé —
-         une alarme à tort est un défaut, un bouton muet aussi. */
+         une alarme à tort est un défaut, un bouton muet aussi.
+         **Jugé sur la page, pas sur notre affichage :** `playPause` a déjà posé
+         l'état optimiste, donc comparer `State` à une valeur d'avant ne prouve
+         rien (c'est exactement comme ça qu'un appui muet restait sans message).
+         Sur l'état de lecture, c'est donc ce que le lecteur répond qui décide. */
       setTimeout(function () {
         syncFromDom("fallback");
+        if (watch === "playing") {
+          var dom = Spotify.readPlaying();
+          if (dom === null || String(dom) === ref) self.blame();
+          return;
+        }
         if (self.snapshot(watch) === ref) self.blame();
       }, 800);
     },
@@ -2796,7 +3007,7 @@
       /* Le bouton de Spotify d'abord ; s'il n'y en a pas de vivant, le clavier
          du lecteur — et on ne revient sur l'affichage optimiste que si rien ne
          joue, seule situation où l'on sait que rien n'a pu se passer. */
-      if (!Spotify.playPause()) {
+      if (!Spotify.playPause(want)) {
         /* La référence est la **vérité du DOM avant l'affichage optimiste** :
            c'est avec elle qu'on jugera si le raccourci a changé quelque chose. */
         this.fallback(" ", "playing", String(!want));
