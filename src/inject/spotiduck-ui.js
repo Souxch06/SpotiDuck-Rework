@@ -383,12 +383,23 @@
       haptics: "Retour haptique",
       viewArtist: "Voir l'artiste",
       viewAlbum: "Voir l'album",
-      reload: "Recharger le lecteur",
+      /* `reload` est lu à deux endroits qui ne demandent pas la même phrase :
+         le bouton de l'alerte (« la page n'a rien affiché ») dit simplement
+         « Recharger », la ligne des réglages dit ce qu'elle recharge. Une seule
+         clé pour les deux écrasait l'une par l'autre — la deuxième écriture
+         gagnait, et l'alerte proposait « Recharger le lecteur » pour une page
+         qui n'a justement pas de lecteur. */
+      reloadPlayerAction: "Recharger le lecteur",
       reset: "Réinitialiser les réglages",
       version: "Version de l'interface",
       takeover: "Lecture transférée sur cet appareil",
       unlock: "Déblocage du lecteur…",
       reloadPlayer: "Session expirée — rechargement du lecteur…",
+      /* Deux phrases qui manquaient à l'appel : sans elles, le message était
+         `undefined` — un message qui affiche « undefined » est plus trompeur
+         qu'un silence (vu sur le téléphone, après une session fermée). */
+      sessionLost: "Session perdue — reconnecte-toi pour reprendre la lecture.",
+      lyricsUnavailable: "Pas de paroles pour ce titre sur cette page",
       resetDone: "Réglages réinitialisés",
       copied: "Lien copié",
       classicLogin: "Se connecter avec e-mail et mot de passe",
@@ -408,37 +419,62 @@
     },
   };
 
+  /**
+   * **Ce qui est gardé d'un lancement à l'autre.**
+   *
+   * La liste était écrite à la main, en deux endroits (la lecture et
+   * l'écriture), et trois réglages n'y figuraient pas : « Statistiques »,
+   * « Accueil SpotiDuck » et « Bibliothèque SpotiDuck ». L'utilisateur les
+   * changeait, l'application obéissait — puis le moindre redémarrage les
+   * remettait en place (« mes réglages ne sont pas gardés »). Une seule liste,
+   * lue et écrite au même endroit : un réglage ajouté est persisté par
+   * construction, il ne peut plus être oublié à moitié.
+   */
+  var PERSIST = [
+    "theme",
+    "density",
+    "haptics",
+    "accentFromArt",
+    "tabbar",
+    "takeControl",
+    "resume",
+    "reduceMotion",
+    "stats",
+    "homeBoard",
+    "libraryBoard",
+  ];
+
   function loadSettings() {
     try {
       var raw = localStorage.getItem("sd.ui.settings");
       if (!raw) return;
       var o = JSON.parse(raw);
-      if (o && typeof o === "object") {
-        if (o.theme) Settings.theme = o.theme;
-        if (o.density) Settings.density = o.density;
-        ["haptics", "accentFromArt", "tabbar", "takeControl", "resume", "reduceMotion"].forEach(function (k) {
+      if (!o || typeof o !== "object") return;
+      PERSIST.forEach(function (k) {
+        var kind = typeof Settings[k];
+        if (kind === "boolean") {
           if (typeof o[k] === "boolean") Settings[k] = o[k];
-        });
-      }
+        } else if (kind === "string" && typeof o[k] === "string" && o[k]) {
+          Settings[k] = o[k];
+        }
+      });
+      /* Deux valeurs ne sont pas acceptées n'importe comment : un thème et une
+         densité inconnus laisseraient la feuille sans règle (ni sombre, ni
+         clair) plutôt que de retomber sur le réglage par défaut. */
+      if (!/^(auto|dark|light)$/.test(Settings.theme)) Settings.theme = "auto";
+      if (!/^(compact|normal|large)$/.test(Settings.density)) Settings.density = "normal";
     } catch (e) {
       /* private mode / quota — defaults are fine */
     }
   }
   function saveSettings() {
     try {
-      localStorage.setItem(
-        "sd.ui.settings",
-        JSON.stringify({
-          theme: Settings.theme,
-          haptics: Settings.haptics,
-          accentFromArt: Settings.accentFromArt,
-          tabbar: Settings.tabbar,
-          takeControl: Settings.takeControl,
-          resume: Settings.resume,
-          reduceMotion: Settings.reduceMotion,
-          density: Settings.density,
-        })
-      );
+      var out = {};
+      for (var i = 0; i < PERSIST.length; i++) {
+        var k = PERSIST[i];
+        if (k in Settings) out[k] = Settings[k];
+      }
+      localStorage.setItem("sd.ui.settings", JSON.stringify(out));
     } catch (e) {
       /* ignore */
     }
@@ -487,7 +523,15 @@
       'button[data-testid="search-button"]',
     ],
     searchInput: ['input[data-testid="search-input"]', 'form[role="search"] input'],
-    npBar: ['aside[data-testid="now-playing-bar"]', 'aside[data-testid="now-playing-bar"] root'],
+    /* Le second candidat de cette liste était un reste de brouillon
+       (`…now-playing-bar"] root`) : `pick` essaie les repères dans l'ordre, il
+       ne servait donc jamais — mais il faisait croire à une variante prévue.
+       Les seules formes connues du lecteur sont `aside` et `footer`. */
+    npBar: [
+      'aside[data-testid="now-playing-bar"]',
+      'footer[data-testid="now-playing-bar"]',
+      'div[data-testid="now-playing-bar"]',
+    ],
     widget: ['div[data-testid="now-playing-widget"]'],
     cover: [
       'div[data-testid="now-playing-widget"] img[data-testid="cover-art-image"]',
@@ -650,8 +694,9 @@
     },
 
     /**
-     * Ce que vaut **une graduation** du curseur, en millisecondes : 1000 si la
-     * page compte en millisecondes, 1 si elle compte en secondes.
+     * Ce que vaut **une graduation** du curseur, en millisecondes : 1 si la page
+     * compte en millisecondes (une graduation = 1 ms), 1000 si elle compte en
+     * secondes (une graduation = 1 s = 1000 ms).
      *
      * Les deux chemins qui touchent au curseur doivent lire **la même**
      * graduation : lire avec l'une et écrire avec l'autre donnait un
@@ -660,6 +705,26 @@
      */
     scale: function () {
       return this.unitFactor() === 1000 ? 1 : 1000;
+    },
+
+    /**
+     * Les deux seules conversions à utiliser partout.
+     *
+     * `ticksToMs` lit le curseur, `msToTicks` y écrit. Trois endroits
+     * (l'écoute de `input`, la confirmation d'un déplacement, l'écriture du
+     * `seek`) multipliaient ou divisaient par 1000 pour leur propre compte :
+     * sur une page graduée en millisecondes, la position sautait à la fin dès
+     * qu'on lâchait la barre — le geste était bon, l'affichage mentait.
+     */
+    ticksToMs: function (ticks) {
+      var v = Number(ticks);
+      if (!isFinite(v)) return 0;
+      return (v / this.unitFactor()) * 1000;
+    },
+    msToTicks: function (ms) {
+      var v = Number(ms);
+      if (!isFinite(v) || v < 0) return 0;
+      return v / this.scale();
     },
     calibrate: function () {
       var input = this.progressInput();
@@ -718,11 +783,10 @@
 
       var input = this.progressInput();
       if (input) {
-        var factor = this.unitFactor();
         var dur = parseFloat(input.getAttribute("max"));
         var pos = parseFloat(input.value);
-        if (isFinite(dur) && dur > 0) out.duration = (dur / factor) * 1000;
-        if (isFinite(pos)) out.position = (pos / factor) * 1000;
+        if (isFinite(dur) && dur > 0) out.duration = this.ticksToMs(dur);
+        if (isFinite(pos)) out.position = this.ticksToMs(pos);
       }
 
       var like = pick(SEL.like);
@@ -867,16 +931,27 @@
      *  • it wrote `pos + 1` (a 1-second offset) with no clamping.
      * We clamp, use the native setter, and dispatch both `input` and `change`.
      */
+    /** La course du curseur, en graduations — et un repli raisonnable. */
+    maxTicks: function () {
+      var input = this.progressInput();
+      var max = input ? parseFloat(input.getAttribute("max")) : 0;
+      if (isFinite(max) && max > 0) return max;
+      /* Sans `max` lisible, `clamp(valeur, 0, 0)` ramenait **tout** déplacement
+         à zéro : la barre restait collée au début de la piste, quel que soit
+         l'endroit où l'on posait le doigt. On se rabat sur la durée connue. */
+      var known = Number(State.duration) || 0;
+      return known > 0 ? this.msToTicks(known) : 0;
+    },
     seek: function (ms) {
       var input = this.progressInput();
       if (!input) return false;
-      var max = parseFloat(input.getAttribute("max")) || 0;
+      var max = this.maxTicks();
       /* La graduation du curseur, celle avec laquelle on **lit** : on écrit
          donc la même. (Écrire toujours des secondes déplaçait le curseur au
          1000e de la position demandée sur un lecteur qui compte en
          millisecondes.) */
-      var value = this.scale() === 1 ? ms : ms / 1000;
-      var seconds = clamp(value, 0, max);
+      var value = this.msToTicks(ms);
+      var seconds = max > 0 ? clamp(value, 0, max) : Math.max(0, value);
       try {
         var proto = window.HTMLInputElement && window.HTMLInputElement.prototype;
         var desc = proto && Object.getOwnPropertyDescriptor(proto, "value");
@@ -1139,6 +1214,23 @@
     return clamp(State.anchorPos + dt, 0, State.duration || Infinity);
   }
 
+  /**
+   * La durée de la piste, en millisecondes — **avec un repli mesuré**.
+   *
+   * `State.duration` vaut 0 tant que la page n'a rien annoncé : tout ce qui est
+   * proportionnel à la durée (aperçu du geste, temps affiché) tombait alors à 0,
+   * et poser le doigt sur la barre de progression ramenait au début du morceau.
+   * La course du curseur de Spotify, elle, est connue dès que le curseur existe:
+   * c'est son `max`.
+   */
+  function trackDurationMs() {
+    var known = Number(State.duration) || 0;
+    if (known > 0) return known;
+    var input = Spotify.progressInput();
+    var max = input ? parseFloat(input.getAttribute("max")) : 0;
+    return isFinite(max) && max > 0 ? Spotify.ticksToMs(max) : 0;
+  }
+
   /* ------------------------------------------------------------------ *
    * 5. Mirror — DOM → State (event driven, no 2 s polling loop)
    * ------------------------------------------------------------------ */
@@ -1196,15 +1288,32 @@
         attributes: true,
         attributeFilter: ["aria-checked", "aria-label", "src", "value"],
       });
-      // The progress <input> fires native input events while playing.
-      var input = Spotify.progressInput();
-      if (input) {
-        input.addEventListener("input", function () {
-          State.anchorPos = (parseFloat(input.value) || 0) * 1000;
-          State.anchorAt = performance.now();
-        });
+      /* **La position suit le curseur de Spotify.** Le nœud `<input>` est
+         recréé à chaque fois que React redessine la barre (changement de piste,
+         ouverture d'une page) : un écouteur posé une fois sur le nœud du moment
+         survivait sur un nœud détaché, et la progression restait figée jusqu'au
+         prochain relevé. On écoute donc `bar` en **délégation** — l'événement
+         `input` remonte, le nœud importé ou non — et on convertit avec la
+         graduation **mesurée** : multiplier systématiquement par 1000 ancrail
+         la position 1000 fois trop loin sur une page graduée en millisecondes
+         (la barre partait à 100 % dès le premier relevé). */
+      if (!Mirror.cursorBound) {
+        Mirror.cursorBound = true;
+        /* `document`, en capture : le conteneur lui-même peut être remplacé,
+           l'événement `input` de la page y passe toujours. */
+        document.addEventListener("input", Mirror.onCursor, true);
       }
       return true;
+    },
+    /** Le nœud écouté n'a pas d'importance : c'est l'événement qui parle. */
+    onCursor: function (ev) {
+      var node = ev && ev.target;
+      var input = Spotify.progressInput();
+      /* Un autre curseur de la page (volume, défilement) ne doit pas ancrer la
+         position : on vérifie que c'est bien **celui de la lecture**. */
+      if (!input || (node && node !== input && !(node.closest && node.closest('[data-testid="playback-progressbar"]')))) return;
+      State.anchorPos = Spotify.ticksToMs(input.value);
+      State.anchorAt = performance.now();
     },
   };
 
@@ -1442,8 +1551,11 @@
         '">' +
         svg(ICONS.shuffleLine) +
         "</button>" +
+        /* `labels.previous` n'existe pas (la clé s'appelle `prev`) : l'appui
+           restait correct mais le bouton s'annonçait « undefined » à voix haute,
+           et l'audit de la feuille signalait un contrôle sans nom. */
         '<button class="sd-iconbtn sd-mini-prev" type="button" aria-label="' +
-        Settings.labels.previous +
+        Settings.labels.prev +
         '">' +
         svg(ICONS.prev) +
         "</button>" +
@@ -1780,7 +1892,96 @@
       };
       this.built = true;
       this.bind();
+      this.watchSize();
       this.paint(State, "build");
+    },
+
+    /**
+     * **La place réservée en bas de l'écran = la hauteur réelle du mini-lecteur.**
+     *
+     * Les feuilles fixent une hauteur *espérée* (`--sd-mini-h`, par taille
+     * d'écran) ; le mini-lecteur, lui, se dimensionne seul (sa pochette suit la
+     * largeur de l'écran, ses deux rangées de commandes ont leur propre taille,
+     * la densité change tout). Quand les deux divergeaient, la page passait
+     * sous la barre — une bande de 60 px de contenu injoignable, le défaut
+     * signalé le 25/09.
+     *
+     * Trois cas, et pas un de plus :
+     *   • le mini-lecteur n'est pas affiché (page de connexion, écran d'accueil,
+     *     `hidden`) → **0**, rien à réserver ;
+     *   • il est affiché et mesure quelque chose → **sa hauteur réelle** ;
+     *   • il est affiché mais ne mesure rien (pas encore de mise en page :
+     *     premier rendu, banc sans moteur de layout) → on **retire** notre
+     *     valeur en ligne et la feuille reprend la main. Écrire `0px` ici
+     *     serait exactement l'autre moitié du même bug : la page glisserait
+     *     sous la barre.
+     */
+    measure: function () {
+      var e = this.el;
+      if (!e || !e.mini) return false;
+      var html = document.documentElement;
+      var h = 0;
+      try {
+        h = Math.ceil(e.mini.getBoundingClientRect().height || 0);
+      } catch (err) {
+        h = 0;
+      }
+      var gone = !!e.mini.hidden || !e.mini.isConnected;
+      if (!gone) {
+        try {
+          gone = window.getComputedStyle(e.mini).display === "none";
+        } catch (err) {
+          /* feuille illisible : on considère qu'il est affiché */
+        }
+      }
+      var value = null;
+      if (gone) value = "0px";
+      else if (h > 0) value = h + "px";
+      var current = html.style.getPropertyValue("--sd-mini-h-current");
+      if (value === null) {
+        if (!current) return false;
+        html.style.removeProperty("--sd-mini-h-current");
+        return true;
+      }
+      if (current === value) return false;
+      html.style.setProperty("--sd-mini-h-current", value);
+      return true;
+    },
+
+    /** Mesurer **une fois par image**, pas à chaque écriture du repeint :
+        `paint` tourne aussi sur le défilement, et une lecture de boîte par
+        frame suffit à faire bégayer la page. */
+    askMeasure: function () {
+      if (this._measureQueued || !this.built) return false;
+      this._measureQueued = true;
+      var self = this;
+      requestAnimationFrame(function () {
+        self._measureQueued = false;
+        if (self.measure()) self.paintChrome(State);
+      });
+      return true;
+    },
+
+    /** Toute taille de boîte qui change se traduit en réserve : un seul
+        observateur, posé une fois, sans boucle de sondage. */
+    watchSize: function () {
+      var self = this;
+      if (this.sizeWatched || !window.ResizeObserver) return false;
+      this.sizeWatched = true;
+      var ro = new ResizeObserver(function () {
+        if (self.measure()) self.paintChrome(State);
+      });
+      [this.el.mini, this.el.tabbar, this.el.nav].forEach(function (node) {
+        if (node) {
+          try {
+            ro.observe(node);
+          } catch (e) {
+            /* un nœud détaché entre-temps : la mesure du ticker suffira */
+          }
+        }
+      });
+      this.ro = ro;
+      return true;
     },
 
     /* ---------------- painting ---------------- */
@@ -1901,6 +2102,10 @@
 
       /* route chrome */
       this.paintChrome(s);
+      /* Les rangées du mini-lecteur apparaissent et disparaissent selon ce que
+         la page expose (paroles, karaoké, appareils, volume) : la réserve du bas
+         suit ce changement, à l'image suivante. */
+      this.askMeasure();
       pushToAndroid();
     },
 
@@ -1908,7 +2113,11 @@
       if (!this.built) return;
       var s = State;
       var pos = livePosition();
-      var ratio = s.duration > 0 ? clamp(pos / s.duration, 0, 1) : 0;
+      /* La durée **annoncée** par la page vaut 0 pendant un instant (première
+         seconde d'un titre, reprise en cours de lecture) : la barre restait
+         plate alors que la position avançait. La course du curseur sert de repli. */
+      var total = s.duration > 0 ? s.duration : trackDurationMs();
+      var ratio = total > 0 ? clamp(pos / total, 0, 1) : 0;
       this.el.miniProgress.style.width = (ratio * 100).toFixed(2) + "%";
       if (this.el.miniCur && !s.seeking) this.el.miniCur.textContent = fmtTime(pos);
       if (this.el.miniSeek) {
@@ -1940,6 +2149,10 @@
       if (!this.built || !this.el || !this.el.mini) return false;
       var html = document.documentElement;
       var fixed = false;
+      /* La réserve du bas suit la hauteur rendue : vérifiée au même rythme que
+         l'affirmation du lecteur (une fois par seconde), donc rien ne reste
+         décalé après un changement de police, de densité ou de rangées. */
+      if (this.measure()) fixed = true;
       if (!html.classList.contains("sd-mini-on")) {
         html.classList.add("sd-mini-on");
         fixed = true;
@@ -1988,11 +2201,15 @@
       if (!Spotify.isSubPagePath()) return false;
       var html = document.documentElement;
       var changed = false;
-      if (this.el.home && !this.el.home.hidden) {
+      /* Les deux écrans ne sont pas des enfants de notre coque (ils vivent dans
+         la page) : `this.el.home` et `this.el.lib` n'ont donc jamais existé, et
+         ce garde-fou ne s'est **jamais déclenché** — l'écran noir signalé
+         passait malgré lui. On interroge les modules eux-mêmes. */
+      if (Home.el && !Home.el.hidden) {
         Home.hide();
         changed = true;
       }
-      if (this.el.lib && !this.el.lib.hidden) {
+      if (Library.el && !Library.el.hidden) {
         Library.leave();
         changed = true;
       }
@@ -2295,9 +2512,14 @@
       e.topbarClose.addEventListener("click", function () {
         Router.tab("home");
       });
+      /* Le voile ne s'affiche que sous la file d'attente et les menus : un clic
+         dessus ferme ce qui est réellement ouvert (le lecteur plein écran, lui,
+         se ferme par son chevron ou par le bouton retour — il n'y a rien « à côté
+         de lui » à toucher). `Queue.close` sans ce garde-fou tournait à vide et
+         repeignait les barres pour rien. */
       e.scrim.addEventListener("click", function () {
         if (Sheets.active) Sheets.close();
-        else Queue.close();
+        else if (Queue.open) Queue.close();
       });
 
       /* keyboard */
@@ -2623,9 +2845,19 @@
     },
     prev: function () {
       buzzer();
-      // Native behaviour: restart the track first if we're past 3 seconds.
-      if (livePosition() > 3000) Spotify.seek(0);
-      else if (!Spotify.prev()) {
+      /* Comportement natif : au-delà de trois secondes, « précédent » remet
+         d'abord le titre au début. **Mais seulement si cela marche** : le curseur
+         de progression peut être momentanément absent (page en cours de
+         remplacement), et le résultat était un bouton qui ne faisait absolument
+         rien — l'utilisateur croyait la commande perdue, alors qu'il attendait
+         simplement la piste précédente. Sans curseur, on revient donc au
+         comportement normal. */
+      if (livePosition() > 3000 && Spotify.seek(0)) {
+        emit({ anchorPos: 0, position: 0, anchorAt: performance.now() }, "optimistic");
+        Actions.settle(900);
+        return;
+      }
+      if (!Spotify.prev()) {
         this.fallback("ArrowLeft", "track");
         return;
       }
@@ -2679,18 +2911,43 @@
       Bridge.mediaStatus(State);
       this.settle(1200);
     },
+    /**
+     * Se déplacer dans la piste.
+     *
+     * Deux défauts corrigés ici :
+     *  • la **confirmation relisait le curseur en secondes** (`valeur * 1000`)
+     *    pendant que l'écriture suivait l'unité mesurée : sur une page graduée
+     *    en millisecondes, 40 s posées sur la barre rendaient « 11 h 06 » et
+     *    la progression repartait de là — le geste était juste, l'affichage
+     *    mentait jusqu'à la prochaine seconde ;
+     *  • `seeking: false` était rendu **avant** de savoir si la commande était
+     *    passée, et l'échec ne disait rien : un appui sans effet ressemblait à
+     *    un curseur cassé. On rouvre donc la vérification comme pour les autres
+     *    commandes (relire, puis parler si rien n'a bougé).
+     */
     seek: function (ms) {
-      emit({ anchorPos: ms, position: ms, anchorAt: performance.now(), seeking: false }, "seek");
+      var target = Math.max(0, Number(ms) || 0);
+      emit({ anchorPos: target, position: target, anchorAt: performance.now(), seeking: false }, "seek");
+      buzz(6);
       // Spotify needs a moment to confirm; re-anchor from the DOM after that.
-      if (!Spotify.seek(ms)) return;
+      if (!Spotify.seek(target)) {
+        this.blame();
+        this.settle(300);
+        return false;
+      }
       setTimeout(function () {
         var input = Spotify.progressInput();
         if (input) {
-          var p = (parseFloat(input.value) || 0) * 1000;
+          var p = Spotify.ticksToMs(input.value);
           emit({ anchorPos: p, anchorAt: performance.now() }, "seek-confirm");
           Bridge.mediaPosition(p);
         }
       }, 400);
+      return true;
+    },
+    /** Le geste donne une proportion : c'est ici qu'elle devient une position. */
+    seekRatio: function (ratio) {
+      return this.seek(clamp(Number(ratio) || 0, 0, 1) * trackDurationMs());
     },
     share: function () {
       /* Share the *real* track URL (the old layer shared the open.spotify.com
@@ -2771,6 +3028,12 @@
       if (!anchor || !anchor.parentNode) return 0;
       var fixed = 0;
       var node = anchor.parentNode;
+      /* La liste de ce qui a été rétabli sert au diagnostic ; `apply` tourne à
+         chaque changement de vue, donc sans contrôle elle grossissait sans fin
+         (une longue session empilait des milliers d'entrées identiques et le
+         diagnostic devenait illisible). On garde **un exemplaire de chaque
+         nœud**, dans l'ordre où il a été rétabli, avec un plafond. */
+      var restored = Content.restored;
       while (node && node.nodeType === 1 && node !== document.body && node !== document.documentElement) {
         var cs = window.getComputedStyle(node);
         var hidden = cs.display === "none" || cs.visibility === "hidden";
@@ -2778,7 +3041,10 @@
           node.style.setProperty("display", "block", "important");
           node.style.setProperty("visibility", "visible", "important");
           node.setAttribute("data-sd-unhidden", "1");
-          Content.restored.push(node.id || node.getAttribute("class") || node.tagName);
+          var who = node.id || node.getAttribute("class") || node.tagName;
+          /* Le style en ligne reste posé après coup : cette liste dit ce qui est
+             **encore** maintenu visible, pas ce qui l'a été un jour. */
+          if (restored.indexOf(who) < 0 && restored.length < 12) restored.push(who);
           fixed++;
         }
         node = node.parentNode;
@@ -3069,6 +3335,17 @@
     el: null,
     timer: 0,
     show: function (text, ms) {
+      /* **Un message qui n'existe pas ne s'affiche pas.** Un libellé oublié
+         dans la liste des textes envoyait `undefined` à l'écran — la bulle
+         affichait littéralement « undefined », ce qui a fait croire à une panne
+         du réseau (« ça écrit undefined quand je lance une musique »). Mieux
+         vaut se taire que mentir ; le banc, lui, le voit (aucun texte, aucun
+         appel). */
+      if (text === undefined || text === null || text === "") return false;
+      if (typeof text !== "string") text = String(text);
+      /* Pas de coque, pas de bulle : `Toast` est appelé par des chemins qui
+         peuvent précéder `UI.build` (une alarme de session, un réglage). */
+      if (!UI.layer) return false;
       if (!this.el) {
         this.el = document.createElement("div");
         this.el.className = "sd-toast";
@@ -3082,6 +3359,7 @@
       this.timer = setTimeout(function () {
         self.el.classList.remove("is-visible");
       }, ms || 1800);
+      return true;
     },
   };
 
@@ -3157,7 +3435,12 @@
     reduceMotion: false,
     takeControl: true,
     resume: false,
-    tabbar: true,
+    /* **La barre d'onglets du bas est éteinte par défaut**, comme dans
+       `Settings` (la navigation est celle de l'application d'origine, en haut).
+       Elle était notée `true` ici : « Réinitialiser les réglages » la
+       rallumait, et l'utilisateur se retrouvait avec deux barres de navigation —
+       l'une en haut, l'autre en bas, et une bande de 64 px réservée en trop. */
+    tabbar: false,
     stats: true,
     haptics: true,
     homeBoard: true,
@@ -3327,6 +3610,9 @@
     var html = document.documentElement;
     html.classList.remove("sd-density-compact", "sd-density-normal", "sd-density-large");
     html.classList.add("sd-density-" + (value === "compact" || value === "large" ? value : "normal"));
+    /* La densité change la hauteur rendue du mini-lecteur : la réserve du bas
+       se remet à l'heure à l'image suivante (le temps que la feuille ait suivi). */
+    if (UI.built) UI.askMeasure();
   }
 
   /** Single entry point for every setting change (UI + public API). */
@@ -3338,6 +3624,29 @@
     if (key === "density") applyDensity(value);
     if (key === "reduceMotion") document.documentElement.classList.toggle("sd-reduce-motion", !!value);
     if (key === "tabbar") UI.paintChrome(State);
+    /* **Un réglage qui ne prend effet qu'après avoir changé d'onglet est un
+       réglage qui ne fait rien** (« je décoche l'accueil SpotiDuck, rien ne
+       bouge ») : nos deux pages maison et les statistiques ne se regardent que
+       sur un changement de vue. On les redemande donc ici, pour que l'appui se
+       voie tout de suite — et dans les deux sens, éteindre comme rallumer. */
+    if (key === "homeBoard" || key === "libraryBoard" || key === "stats") {
+      UI.lastRouteKey = "";
+      UI.paintChrome(State);
+      /* Les deux pages se rangent ou se montrent d'elles-mêmes selon le réglage
+         (`Home.refresh` éteint la sienne, `Library.apply` idem) ; `Stats.load`
+         remet la mesure en route quand on la rallume. */
+      Home.refresh("réglage");
+      Library.enter();
+      if (key === "stats") Stats.load();
+    }
+    if (key === "accentFromArt") {
+      /* La couleur reprise de la pochette : l'éteindre doit rendre sa couleur
+         de base au lecteur, pas laisser le dégradé en place. */
+      if (!value) {
+        document.documentElement.style.removeProperty("--sd-player-bg");
+        document.documentElement.style.removeProperty("--sd-mini-bg");
+      } else Accent.apply(State.cover, State.title);
+    }
     UI.paint(State, "settings");
     Sheets.paint();
     return true;
@@ -3458,7 +3767,7 @@
              Play Store, et le réglage qui le désactive est enterré dans le Play
              Store : cette ligne y mène directement. */
           self.actionRow("playprotect", Settings.labels.playProtect, ICONS.shieldLine),
-          self.actionRow("reload", Settings.labels.reload, ICONS.refreshLine),
+          self.actionRow("reload", Settings.labels.reloadPlayerAction, ICONS.refreshLine),
           self.actionRow("reset", Settings.labels.reset, ICONS.arrowUndo),
         ])
       );
@@ -7460,11 +7769,19 @@
         if (name === "search") Spotify.focusSearch();
         return;
       }
+      /* **L'onglet « Bibliothèque » doit ramener l'application quelque part.**
+         Notre page est plein écran et se range dès qu'une sous-page s'ouvre (une
+         playlist, un album) pour ne pas la recouvrir : depuis une playlist,
+         l'appui allumait donc l'onglet… et ne montrait rien du tout — « l'onglet
+         bibliothèque ne marche pas ». On repart de l'accueil, là où notre page a
+         sa place. (Au passage : `tabbar.classList.remove("is-library")`
+         n'était jamais accompagné d'un `add` — un reste d'une classe qui n'existe
+         nulle part.) */
+      var toHome = name === "library" && !Library.isLibraryPath();
       emit({ tab: name }, "route");
       var before = location.pathname + "|" + Spotify.route();
-      if (name === "home") {
+      if (name === "home" || toHome) {
         Spotify.goHome();
-        UI.el.tabbar.classList.remove("is-library");
       } else if (name === "search") {
         Spotify.goSearch();
         setTimeout(function () {
@@ -7476,7 +7793,7 @@
          **rien** est exactement ce que l'utilisateur appelle « rien n'est relié ».
          On vérifie donc, et à défaut l'application navigue elle-même — c'est ce
          que fait déjà le mode mobile (`native-mode.js`). */
-      if (name === "home" || name === "search") {
+      if (name === "home" || name === "search" || toHome) {
         setTimeout(function () {
           if (location.pathname + "|" + Spotify.route() === before) {
             try {
@@ -7487,8 +7804,10 @@
           }
         }, 900);
       }
-      // 'library' needs no navigation: it is Spotify's own sidebar, shown
-      // full-screen by CSS (§3 of the stylesheet).
+      /* Sur l'accueil et la recherche, aucun déplacement n'est nécessaire : la
+         barre latérale de Spotify est déjà là, et notre page la remplace
+         plein écran (§3 des feuilles). C'est en dehors de ces deux vues que
+         `toHome` ci-dessus remet les choses à leur place. */
       Queue.close();
       buzz(8);
     },
@@ -7572,13 +7891,15 @@
         return clamp((ev.clientX - r.left) / Math.max(1, r.width), 0, 1);
       }
       function preview(ratio) {
-        var ms = ratio * (State.duration || 0);
+        var ms = ratio * trackDurationMs();
         State.seekPreview = ms;
         fill.style.width = (ratio * 100).toFixed(2) + "%";
         if (cur) cur.textContent = fmtTime(ms);
       }
       rail.addEventListener("pointerdown", function (ev) {
-        if (!State.duration) return;
+        /* La durée annoncée par la page peut manquer (première seconde d'un
+           titre) : tant que le curseur de Spotify existe, on sait où l'on va. */
+        if (!trackDurationMs()) return;
         ev.stopPropagation(); // ne pas ouvrir le lecteur plein écran
         dragging = true;
         emit({ seeking: true }, "mini-seek-start");
@@ -7599,8 +7920,9 @@
         if (!dragging) return;
         dragging = false;
         rail.classList.remove("is-dragging");
-        Actions.seek(ratioFrom(ev) * (State.duration || 0));
-        buzz(8);
+        /* Une seule vibration, et une seule voie de sortie : `seekRatio`
+           (l'appui sur la barre ne doit pas non plus ouvrir la feuille). */
+        Actions.seekRatio(ratioFrom(ev));
       };
       rail.addEventListener("pointerup", end);
       rail.addEventListener("pointercancel", end);
@@ -7609,6 +7931,21 @@
         rail.addEventListener(type, function (ev) {
           ev.stopPropagation();
         });
+      });
+      /* Clavier, comme la barre du lecteur plein écran : une télécommande ou un
+         clavier Bluetooth doit pouvoir se déplacer dans la piste. */
+      rail.addEventListener("keydown", function (ev) {
+        var step = ev.shiftKey ? 30000 : 5000;
+        if (ev.key === "ArrowRight") {
+          ev.preventDefault();
+          Actions.seek(livePosition() + step);
+        } else if (ev.key === "ArrowLeft") {
+          ev.preventDefault();
+          Actions.seek(Math.max(0, livePosition() - step));
+        } else if (ev.key === "Home" || ev.key === "End") {
+          ev.preventDefault();
+          Actions.seek(ev.key === "Home" ? 0 : trackDurationMs());
+        }
       });
     },
 
@@ -7625,14 +7962,16 @@
         return clamp((ev.clientX - r.left) / Math.max(1, r.width), 0, 1);
       }
       function preview(ratio) {
-        var ms = ratio * (State.duration || 0);
+        var ms = ratio * trackDurationMs();
         State.seekPreview = ms;
         UI.el.seekFill.style.width = (ratio * 100).toFixed(2) + "%";
         UI.el.seekThumb.style.left = (ratio * 100).toFixed(2) + "%";
         UI.el.tCur.textContent = fmtTime(ms);
       }
       rail.addEventListener("pointerdown", function (ev) {
-        if (!State.duration) return;
+        /* Idem mini-lecteur : la durée annoncée peut manquer un instant, la
+           course du curseur de Spotify sait où l'on va. */
+        if (!trackDurationMs()) return;
         dragging = true;
         emit({ seeking: true }, "seek-start");
         seek.classList.add("is-dragging");
@@ -7651,9 +7990,7 @@
         if (!dragging) return;
         dragging = false;
         seek.classList.remove("is-dragging");
-        var ratio = ratioFrom(ev);
-        Actions.seek(ratio * (State.duration || 0));
-        buzz(8);
+        Actions.seekRatio(ratioFrom(ev));
       };
       rail.addEventListener("pointerup", end);
       rail.addEventListener("pointercancel", end);
@@ -7666,6 +8003,11 @@
         } else if (ev.key === "ArrowLeft") {
           ev.preventDefault();
           Actions.seek(Math.max(0, livePosition() - step));
+        } else if (ev.key === "Home" || ev.key === "End") {
+          /* `End` sans repli de durée retombait sur 0 : la télécommande
+             ramenait au début quand on voulait aller à la fin. */
+          ev.preventDefault();
+          Actions.seek(ev.key === "Home" ? 0 : trackDurationMs());
         }
       });
     },
@@ -7919,6 +8261,14 @@
   }
 
   var bootTries = 0;
+  /* **Le branchement ne se fait qu'une fois.** `boot` se rejoue jusqu'à soixante
+     fois en attendant que le web player soit prêt (page lente, session fermée) :
+     chaque passage ajoutait ses écouteurs et ses minuteurs — sur un téléphone
+     qui met dix secondes à démarrer, trois écouteurs de statistiques posés vingt
+     fois, soit soixante rappel à chaque changement de visibilité, et un
+     rechargement de la bibliothèque programmé soixante fois. Le lecteur
+     saccadait, et la page travaillait pour rien. */
+  var wired = false;
   function boot() {
     if (!document.body) {
       document.addEventListener("DOMContentLoaded", boot, { once: true });
@@ -7937,6 +8287,19 @@
        version précédente attendait le lecteur pour construire quoi que ce
        soit, donc l'écran de connexion restait une page web. */
     startShell();
+
+    if (wired) {
+      /* Un simple contrôle de cohérence à chaque réessai : notre feuille ne doit
+         jamais laisser la page effacée. */
+      if (bootTries % 4 === 0) Content.apply();
+      if (Spotify.ready()) {
+        startPlayer();
+      } else if (bootTries++ < 60) {
+        setTimeout(boot, Math.min(1500, 250 + bootTries * 150));
+      }
+      return;
+    }
+    wired = true;
 
     /* Notre feuille ne doit pas effacer la page : on vérifie tout de suite,
        puis à trois reprises — le contenu de Spotify arrive après la coque, et
@@ -8142,8 +8505,6 @@
     library: Library,
     /** Vos statistiques d'écoute : `summary()`, `record()`, `clear()`. */
     stats: Stats,
-    /** Les appels à l'API du lecteur : par où ils passent, et ce qui manque. */
-    net: Net,
     /** Change one setting (`theme`, `haptics`, `accentFromArt`, `tabbar`,
      *  `takeControl`, `resume`, `reduceMotion`) and persist it. */
     set: function (key, value) {
@@ -8253,6 +8614,10 @@
       Volume: Volume,
       Content: Content,
       Home: Home,
+      Toast: Toast,
+      Settings: Settings,
+      Mirror: Mirror,
+      Gestures: Gestures,
       Stats: Stats,
       Icons: ICONS,
     },

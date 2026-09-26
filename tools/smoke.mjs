@@ -1773,7 +1773,11 @@ await checkAsync("a tall, narrow page is not 'nothing displayed', and the diagno
     const width = isMain ? 29 : hasText ? 24 : 0;
     return { width, height, top: 0, left: 0, right: width, bottom: height, x: 0, y: 0 };
   };
-  w.AndBridge = { version: () => "2.11.17", session: () => false };
+  /* La version que le banc pretend etre celle de l'application est lue dans
+     `package.json` : l'ecrire a la main ici refaisait exactement le defaut que ce
+     test surveille (un numero fige, qui devient faux des le prochain saut). */
+  const pkgVersion = JSON.parse(await read("package.json")).version;
+  w.AndBridge = { version: () => pkgVersion, session: () => false };
   w.eval(await read("dist/spotiduck-ui.js"));
   await tick(250);
 
@@ -1791,7 +1795,6 @@ await checkAsync("a tall, narrow page is not 'nothing displayed', and the diagno
   );
   const diag = api.content.diagnose();
   assert(!/2\.9\.0/.test(diag), "le diagnostic annonce encore une version figée : " + diag);
-  const pkgVersion = JSON.parse(await read("package.json")).version;
   assert(
     diag.includes("SpotiDuck " + pkgVersion),
     `le diagnostic n'annonce pas la version de l'application (${pkgVersion}) : ` + diag
@@ -4163,6 +4166,417 @@ check("native consent banner is removed and the scroll lock released", () => {
   return "bannière retirée + défilement libéré ✓";
 });
 
+/* ------------------------------------------------------------------ *
+ * Le rattrapage du 26/09 — unité du curseur, place du bas d'écran, réglages.
+ *
+ * Quatre familles de défauts signalementées ou dénichées à la relecture, toutes
+ * vérifiées **comportementalement** (un état qui bouge, une valeur écrite, une
+ * adresse changée) et non en lisant le code :
+ *
+ *   1. lire et écrire le curseur de Spotify dans l'unité mesurée ;
+ *   2. réserver au bas de l'écran la hauteur **réellement affichée** du
+ *      mini-lecteur ;
+ *   3. les réglages : prendre effet tout de suite, et survivre au redémarrage ;
+ *   4. aucun bouton qui s'appelle « undefined », aucune commande muette quand
+ *      l'élément de Spotify a disparu, un branchement qui ne se répète pas.
+ * ------------------------------------------------------------------ */
+const bootWithMock = async () => {
+  const dom = new JSDOM("<!doctype html><html><head></head><body></body></html>", {
+    url: "https://open.spotify.com/",
+    pretendToBeVisual: true,
+    runScripts: "dangerously",
+  });
+  dom.window.eval(
+    "window.__bridgeCalls = []; window.AndBridge = new Proxy({}, { get: (t, p) => (...a) => {" +
+      "window.__bridgeCalls.push([String(p), a]); if (String(p) === 'isWoke') return false; return undefined; } });"
+  );
+  dom.window.eval(await read("demo/mock/spotify.js"));
+  dom.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(260);
+  return dom;
+};
+
+await checkAsync("le bas de l'écran réserve la hauteur réellement affichée du mini-lecteur", async () => {
+  /* Un règlement : la place réservée sous la page vient de la **mesure**, pas
+     d'une hauteur espérée dans la feuille. Trois pièges sont vérifiés ici — et
+     le premier est le plus vicieux : écrire `0` parce que la page n'a pas encore
+     de mise en page ferait glisser le contenu sous la barre, soit l'autre moitié
+     du défaut d'origine. */
+  const dom = await bootWithMock();
+  const w = dom.window;
+  const internal = w.SpotiDuckUI._internals;
+  const html = w.document.documentElement;
+  const readH = () => html.style.getPropertyValue("--sd-mini-h-current");
+
+  /* jsdom ne peint rien : `getBoundingClientRect()` vaut 0. Loin d'écrire « 0px
+     » (le mini-lecteur est bien affiché), la mesure doit donc **rendre la main**
+     à la feuille de styles. */
+  internal.UI.measure();
+  assert(readH() !== "0px", "la mesure écrase la réservation alors qu'elle n'a rien mesuré");
+
+  /* Une hauteur réelle, et la valeur en ligne suit le haut de l'écran. */
+  internal.UI.el.mini.getBoundingClientRect = () => ({
+    height: 183.4,
+    width: 360,
+    top: 0,
+    left: 0,
+    right: 360,
+    bottom: 183.4,
+  });
+  assert(internal.UI.measure() === true, "une hauteur nouvelle n'a rien changé");
+  assert(readH() === "184px", `hauteur réservée attendue « 184px », obtenue « ${readH()} »`);
+  assert(internal.UI.measure() === false, "la même hauteur est redite à chaque image : la page serait repeinte sans fin");
+
+  /* Mini-lecteur hors écran (page de connexion, écran d'accueil) → la
+     réservation se referme d'elle-même, plus de bande vide sous la page. Le banc
+     ne lit pas nos feuilles (pas de moteur de rendu) : on masque par l'attribut
+     `hidden`, qui suit le même chemin dans `measure()`. */
+  internal.UI.el.mini.hidden = true;
+  assert(internal.UI.measure() === true, "le mini-lecteur masqué ne libère pas la place");
+  assert(readH() === "0px", `place attendue « 0px » une fois le mini-lecteur masqué, obtenue « ${readH()} »`);
+  internal.UI.el.mini.hidden = false;
+  assert(internal.UI.measure() === true, "le mini-lecteur revenu ne reprend pas sa place");
+  assert(readH() === "184px", `place attendue « 184px » au retour du mini-lecteur, obtenue « ${readH()} »`);
+
+  /* Et les feuilles gardent une valeur de repli crédible : trois rangées, au
+     moins 140 px, sinon le premier rendu réserve une bande trop courte. */
+  const css = await read("src/inject/76-device.css");
+  const reserved = [...css.matchAll(/--sd-mini-h:\s*calc\((\d+)px/g)].map((m) => Number(m[1]));
+  assert(reserved.length >= 3, "les feuilles ne fixent plus une hauteur de repli par taille d'écran");
+  assert(reserved.every((n) => n >= 140 && n <= 260), `hauteurs de repli hors mesure : ${reserved.join(", ")}`);
+  w.close();
+  return `mesurée ${">"} 0 · repli ${reserved.join("/")} · 0 masqué ✓`;
+});
+
+await checkAsync("un réglage prend effet tout de suite, et survit au redémarrage", async () => {
+  /* Deux promesses tenues au même endroit : l'appui se voit **immédiatement**
+     (pas après avoir changé d'onglet), et le réglage retrouvé au lancement
+     suivant est bien celui qui a été choisi. » */
+  const dom = await bootWithMock();
+  const w = dom.window;
+  const api = w.SpotiDuckUI;
+  const internal = api._internals;
+
+  /* Une rangée de la page à récupérer : l'accueil n'a de raison d'être que s'il a
+     des données (`Home.shouldShow`) — ce n'est pas le sujet d'ici. */
+  w.document
+    .querySelector("#main-view, main")
+    .insertAdjacentHTML(
+      "afterbegin",
+      '<section data-testid="component-shelf"><div><h2>Vos playlists</h2>' +
+        '<a href="/playlist/aaa"><img src="https://i.scdn.co/image/aaa" alt="Mix du soir"><p>Mix du soir</p></a>' +
+        "</div></section>"
+    );
+  internal.Home.refresh("banc");
+  assert(internal.Home.el.hidden === false, "l'accueil ne se montre pas alors qu'il a des données");
+
+  api.set("homeBoard", false);
+  assert(internal.Home.el.hidden === true, "l'accueil maison reste à l'écran quand on l'éteint");
+  api.set("homeBoard", true);
+  assert(internal.Home.el.hidden === false, "l'accueil maison ne revient pas quand on le rallume");
+
+  api.state.tab = "library";
+  api.set("libraryBoard", false);
+  assert(api.library.el.hidden === true, "la bibliothèque maison reste à l'écran quand on l'éteint");
+  api.set("libraryBoard", true);
+  assert(api.library.el.hidden === false, "la bibliothèque maison ne revient pas quand on la rallume");
+
+  /* La couleur reprise de la pochette : l'éteindre rend sa base au lecteur. */
+  api.set("accentFromArt", true);
+  api.set("accentFromArt", false);
+  assert(
+    !w.document.documentElement.style.getPropertyValue("--sd-player-bg"),
+    "le dégradé de la pochette reste en place après avoir éteint le réglage"
+  );
+
+  /* Tous les réglages sont écrits, y compris les trois que la liste oubliait. */
+  const saved = JSON.parse(w.localStorage.getItem("sd.ui.settings") || "{}");
+  for (const key of [
+    "theme",
+    "density",
+    "haptics",
+    "accentFromArt",
+    "tabbar",
+    "takeControl",
+    "resume",
+    "reduceMotion",
+    "stats",
+    "homeBoard",
+    "libraryBoard",
+  ]) {
+    assert(key in saved, `le réglage « ${key} » n'est pas écrit dans le stockage`);
+  }
+  w.close();
+
+  /* **Second lancement, même stockage** : ce qui a été choisi est retrouvé — et
+     une valeur qui n'existe pas retombe sur le réglage par défaut au lieu de
+     laisser l'interface sans feuille. */
+  const again = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "https://open.spotify.com/",
+    pretendToBeVisual: true,
+    runScripts: "dangerously",
+  });
+  again.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => undefined }));
+  again.window.localStorage.setItem(
+    "sd.ui.settings",
+    JSON.stringify({ density: "large", homeBoard: false, stats: false, tabbar: true, theme: "clair", accentFromArt: "oui" })
+  );
+  again.window.eval(await read("demo/mock/spotify.js"));
+  again.window.eval(await read("dist/spotiduck-ui.js"));
+  await tick(260);
+  const back = again.window.SpotiDuckUI;
+  assert(back.settings.density === "large", `densité retrouvée attendue « large », obtenue « ${back.settings.density} »`);
+  assert(back.settings.homeBoard === false, "l'accueil éteint ne l'est plus au second lancement");
+  assert(back.settings.stats === false, "statistiques éteintes non retrouvées");
+  assert(back.settings.tabbar === true, "la barre d'onglets rallumée ne l'est plus au second lancement");
+  assert(back.settings.theme === "auto", `thème inconnu attendu « auto », obtenu « ${back.settings.theme} »`);
+  assert(back.settings.accentFromArt === true, `un réglage d'un autre type ne devrait pas s'écrire (obtenu « ${back.settings.accentFromArt} »)`);
+  assert(again.window.document.documentElement.classList.contains("sd-density-large"), "la densité retrouvée n'est pas appliquée");
+  {
+    const board = again.window.document.querySelector(".sd-home");
+    assert(!board || board.hidden, "l'accueil éteint est revenu à l'écran");
+  }
+  again.window.close();
+  return "11 réglages écrits · pris en compte séance tenante · relu au second lancement ✓";
+});
+
+await checkAsync("aucun bouton ne s'appelle « undefined », et une bulle sans texte reste muette", async () => {
+  /* Un libellé oublié dans la liste des textes ne se voit nulle part : ni à la
+     compilation, ni au banc quand il lit la liste au lieu de l'appel. Sur
+     l'écran, cela donne une bulle « undefined » ou un bouton sans nom. */
+  const dom = await bootWithMock();
+  const w = dom.window;
+  const doc = w.document;
+  const bad = [];
+  for (const el of doc.querySelectorAll(".sd-layer, .sd-layer *")) {
+    for (const attr of ["aria-label", "title", "placeholder", "alt"]) {
+      const v = el.getAttribute(attr);
+      if (v && /undefined|NaN|\[object/.test(v)) bad.push(`${el.tagName}.${el.className}[${attr}]=${v}`);
+    }
+    if (!el.children.length && /^(undefined|NaN|\[object)/.test((el.textContent || "").trim())) {
+      bad.push(`${el.tagName}.${el.className}:${el.textContent.trim()}`);
+    }
+  }
+  assert(!bad.length, `du texte accidenté est affiché : ${bad.slice(0, 4).join(" · ")}`);
+
+  /* Toutes les commandes de la coque ont un nom (lecteur d'écran, tangage). */
+  const unnamed = [...doc.querySelectorAll(".sd-layer button")].filter(
+    (b) =>
+      !b.closest("[hidden]") &&
+      !(b.getAttribute("aria-label") || "").trim() &&
+      !(b.textContent || "").trim()
+  );
+  assert(!unnamed.length, `${unnamed.length} boutons de la coque sont sans nom`);
+
+  /* Et la bulle ne se montre que si elle a quelque chose à dire. */
+  const Toast = w.SpotiDuckUI._internals.Toast;
+  assert(Toast.show(undefined) === false, "une bulle sans texte s'affiche");
+  assert(Toast.show(null) === false, "une bulle nulle s'affiche");
+  assert(Toast.show("") === false, "une bulle vide s'affiche");
+  assert(Toast.show("Notice indisponible") === true, "une bulle avec un texte ne s'affiche pas");
+  assert(Toast.el.textContent === "Notice indisponible", "le texte de la bulle n'est pas celui demandé");
+  w.close();
+  return `${unnamed.length} bouton sans nom · bulle muette sans texte ✓`;
+});
+
+await checkAsync("le curseur se lit et s'écrit dans l'unité de la page", async () => {
+  /* Le cœur du lecteur. La page de Spotify compte tantôt en secondes, tantôt en
+     millisecondes : un seul endroit convertit (`ticksToMs` / `msToTicks`), et le
+     banc le vérifie dans les deux sens — y compris ce qui se passe pendant
+     qu'on tient le doigt sur la barre, où seul l'écouteur délégué sait lire. */
+  const dom = await bootWithMock();
+  const w = dom.window;
+  const api = w.SpotiDuckUI;
+  const internal = api._internals;
+  const input = w.document.querySelector('div[data-testid="playback-progressbar"] input');
+  const dur = Number(input.getAttribute("max")); // 207 s : la page compte en secondes
+  assert(dur > 60 && dur < 400, `curseur du banc gradué en secondes attendu, obtenu ${dur}`);
+
+  /* 1. Un glissement du doigt sur le curseur de **Spotify** (notre coque n'y est
+        pour rien) doit donner la position en millisecondes, et non sa
+        millième partie. */
+  input.value = String(Math.round(dur / 2));
+  input.dispatchEvent(new w.Event("input", { bubbles: true }));
+  await tick(30);
+  const half = Math.round(dur / 2) * 1000;
+  assert(
+    Math.abs(api.state.anchorPos - half) < 1500,
+    `position attendue ≈ ${half} ms après un glissement, obtenue ${api.state.anchorPos}`
+  );
+
+  /* 2. Écrire, c'est l'inverse : la moitié du morceau vaut la moitié de la
+        course du curseur — pas 1000 fois plus ni 1000 fois moins. */
+  internal.Actions.seekRatio(0.5);
+  await tick(60);
+  assert(
+    Math.abs(Number(input.value) - dur / 2) < 2,
+    `curseur attendu ≈ ${(dur / 2).toFixed(1)}, écrit ${input.value}`
+  );
+
+  /* 3. Une demande hors du morceau reste dans le morceau. Une page qui n'a pas
+        encore annoncé sa durée ne doit pas non plus ramener la lecture à zéro. */
+  api.seek(dur * 1000 * 50);
+  await tick(40);
+  assert(Math.abs(Number(input.value) - dur) < 2, `une avance au-delà du titre doit s'arrêter à la fin, curseur à ${input.value}`);
+  api.seek(-5000);
+  await tick(40);
+  assert(Number(input.value) === 0, `une avance négative doit s'arrêter au début, curseur à ${input.value}`);
+  input.setAttribute("max", "");
+  api.state.duration = dur * 1000;
+  api.seek(10000);
+  await tick(40);
+  assert(
+    Math.abs(Number(input.value) - 10) < 1.5,
+    "un curseur sans graduation doit retomber sur la durée annoncée par la page, pas à zéro"
+  );
+  input.setAttribute("max", String(dur));
+
+  /* 4. Et la durée du titre se connaît même avant que la page l'annonce : le
+        geste ne se bloque pas, il cherche dans la course du curseur. */
+  const before = api.state.duration;
+  api.state.duration = 0;
+  assert(internal.UI && Math.abs(internal.Actions.seekRatio(1) || 1) >= 0, "seekRatio doit rester utilisable sans durée annoncée");
+  await tick(40);
+  assert(Math.abs(Number(input.value) - dur) < 2, `fin de piste attendue sans durée annoncée, curseur à ${input.value}`);
+  api.state.duration = before;
+  w.close();
+  return "glisser lu en ms · écriture dans la graduation de la page · bornes tenues ✓";
+});
+
+await checkAsync("une commande ne reste pas muette quand l'élément de Spotify a disparu", async () => {
+  /* « Précédent » remettait le titre au début **sans regarder si cela avait
+     marché** : le curseur absent (page en cours de remplacement), le bouton ne
+     faisait absolument rien. Il doit alors faire ce que l'utilisateur attend
+     depuis ce bouton : revenir au titre précédent. */
+  const dom = await bootWithMock();
+  const w = dom.window;
+  const api = w.SpotiDuckUI;
+  const mock = w.MockSpotify;
+  const doc = w.document;
+
+  /* En lecture, à quarante secondes du début : un « précédent » remet d'abord au
+     début, comme dans l'application. */
+  api.state.anchorPos = 40000;
+  api.state.anchorAt = w.performance.now();
+  const index = mock.state.trackIndex;
+  doc.querySelector(".sd-mini-prev").click();
+  await tick(200);
+  assert(mock.state.trackIndex === index, "un « précédent » en milieu de piste ne doit pas changer de titre tout de suite");
+  assert(mock.state.position < 2, `position attendue près du début, obtenue ${mock.state.position}`);
+
+  /* Curseur de progression retiré de la page : plus rien à remettre à zéro →
+     on change vraiment de piste. */
+  doc.querySelector('div[data-testid="playback-progressbar"] input').remove();
+  api.state.anchorPos = 40000;
+  api.state.anchorAt = w.performance.now();
+  doc.querySelector(".sd-mini-prev").click();
+  await tick(200);
+  assert(
+    mock.state.trackIndex !== index,
+    `« précédent » sans curseur doit revenir au titre précédent (piste ${index} toujours jouée)`
+  );
+  w.close();
+  return "remis au début si possible, piste précédente sinon ✓";
+});
+
+await checkAsync("l'onglet bibliothèque mène bien quelque part", async () => {
+  /* Depuis une playlist, l'appui sur « Bibliothèque » allumait l'onglet et ne
+     montrait rien : notre page se range devant une sous-page, et aucune
+     navigation n'était demandée. Elle doit donc ramener l'accueil, où la page a
+     sa place. */
+  const dom = await bootWithMock();
+  const w = dom.window;
+  const api = w.SpotiDuckUI;
+  const internal = api._internals;
+  w.MockSpotify.navigate("playlist");
+  await tick(80);
+  assert(w.location.pathname !== "/", "le banc n'a pas ouvert de sous-page");
+  assert(api.library.el.hidden === true, "la page bibliothèque recouvre la playlist ouverte");
+
+  internal.Router.tab("library");
+  /* La vue change quand Spotify a peint la sienne (observation du DOM, pas
+     d'attente fixe côté utilisateur) : le banc laisse le temps du relevé. */
+  await tick(600);
+  assert(w.location.pathname === "/", `appui sur « bibliothèque » attendu à l'accueil, adresse ${w.location.pathname}`);
+  assert(api.state.tab === "library", "l'onglet actif n'a pas suivi");
+  assert(api.library.el.hidden === false, "la page bibliothèque ne s'est pas montrée une fois à l'accueil");
+  w.close();
+  return "depuis une playlist : accueil + page bibliothèque ✓";
+});
+
+await checkAsync("le mini-lecteur se pilote aussi au clavier", async () => {
+  /* Barre de progression du mini-lecteur : les flèches, « début » et « fin »
+     doivent agir comme dans le lecteur plein écran (télécommande, clavier
+     Bluetooth), et le simple appui ne doit pas ouvrir la feuille. */
+  const dom = await bootWithMock();
+  const w = dom.window;
+  const api = w.SpotiDuckUI;
+  const rail = w.document.querySelector(".sd-mini-seek");
+  assert(rail, "la barre de progression du mini-lecteur est absente");
+  const input = w.document.querySelector('div[data-testid="playback-progressbar"] input');
+  const dur = Number(input.getAttribute("max"));
+
+  api.state.seeking = false;
+  rail.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Home", bubbles: true }));
+  await tick(60);
+  assert(Number(input.value) === 0, `« début » attendu, curseur à ${input.value}`);
+  rail.dispatchEvent(new w.KeyboardEvent("keydown", { key: "End", bubbles: true }));
+  await tick(60);
+  assert(Math.abs(Number(input.value) - dur) < 2, `« fin » attendue, curseur à ${input.value}`);
+  rail.dispatchEvent(new w.KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+  await tick(60);
+  assert(
+    Number(input.value) > 0 && Number(input.value) < dur,
+    `une flèche doit avancer de quelques secondes, curseur à ${input.value}`
+  );
+
+  /* Appui simple sur la barre : il déplace la lecture, mais n'ouvre pas le
+     lecteur plein écran (le geste qui gêne le plus à l'usage). */
+  assert(api.state.playerOpen !== true, "le lecteur plein écran ne doit pas s'ouvrir au toucher de la barre");
+  w.close();
+  return "flèches · début · fin · appui simple ✓";
+});
+
+await checkAsync("un redémarrage de la coque ne branche pas deux fois la page", async () => {
+  /* En attendant que le web player soit prêt, `boot` se rejoue une soixantaine
+     de fois. Chaque passage ajoutait ses écouteurs de fin de session, ses
+     alarmes et ses minuteurs : au bout d'une minute sans session, un seul
+     passage en arrière-plan écrivait des dizaines de fois, et les alarmes de
+     page blanche partaient en rafale. */
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "https://open.spotify.com/",
+    pretendToBeVisual: true,
+    runScripts: "dangerously",
+  });
+  /* Le comptage doit précéder le script : on compte les branchements, pas les
+     appels. */
+  dom.window.eval(
+    "window.__adds = {};" +
+      "['pagehide','beforeunload','visibilitychange','input'].forEach(function (name) {" +
+      "  var wa = window.addEventListener.bind(window); window.addEventListener = function (n, f, o) {" +
+      "    if (n === name) window.__adds[n] = (window.__adds[n] || 0) + 1; return wa(n, f, o); };" +
+      "  var da = document.addEventListener.bind(document); document.addEventListener = function (n, f, o) {" +
+      "    if (n === name) window.__adds[n] = (window.__adds[n] || 0) + 1; return da(n, f, o); };" +
+      "});"
+  );
+  dom.window.AndBridge = new Proxy({}, withoutAsync({ get: () => () => undefined }));
+  dom.window.eval(await read("dist/spotiduck-ui.js"));
+  /* Assez longtemps pour que `boot` se soit rejoué plusieurs fois (aucun lecteur
+     dans cette page : il attend, puis réessaie). */
+  await tick(4200);
+  const adds = dom.window.__adds;
+  const repeated = Object.keys(adds).filter((k) => adds[k] > 1);
+  assert(!repeated.length, `écouteurs branchés plusieurs fois : ${repeated.map((k) => `${k}×${adds[k]}`).join(" · ")}`);
+  assert((adds.pagehide || 0) === 1 && (adds.visibilitychange || 0) === 1, "les écouteurs de fin de session ne sont plus branchés du tout");
+  /* Une seule écoute du curseur, posée sur le document : pas une par copie du
+     curseur recréé à chaque changement de vue. */
+  assert((adds.input || 0) <= 1, `le glisser du curseur réécoute encore ${adds.input} fois`);
+  /* Et la coque, elle, est bien construite une fois. */
+  assert(dom.window.document.querySelectorAll(".sd-layer").length === 1, "deux couches injectées dans la même page");
+  dom.window.close();
+  return `branché une fois (${Object.keys(adds).length} types d'écouteurs) ✓`;
+});
+
 await checkAsync("no polling loops left behind", async () => {
   // The mock itself uses one interval for playback; the layer must not add any
   // 2s/5s DOM scraping loop (that was the main source of jank).
@@ -4654,6 +5068,121 @@ check("native mode: seek and metadata use the right units", () => {
   assert(payload.duration === 200000, "duration should be milliseconds, got " + payload.duration);
   assert(payload.cover.indexOf("i.scdn.co") > -1, "cover art not forwarded");
   return "42 s dans la barre · 200 000 ms au pont";
+});
+
+/* **Le mode livré par défaut : la page mobile de Spotify.** Nos boutons ne sont
+   plus les nôtres — la notification et l'écran de verrouillage cliquent **ceux
+   de Spotify**, trouvés par `data-testid` puis par libellé. Deux pièges, mesurés
+   sur cette page : la page *ressemble* à un lecteur partout (un onglet
+   « Suivant », un bouton « Activer la lecture aléatoire », un curseur de
+   volume), et ses curseurs ne sont pas gradués pareil selon les versions. */
+await checkAsync("native mode: les commandes de la notification ne se trompent pas de bouton", async () => {
+  const natTrapped = await (async () => {
+    const d = new JSDOM(
+      "<!doctype html><html><body>" +
+        /* Les leurres, posés **avant** le lecteur : c'est l'ordre de la vraie
+           page, et donc celui que ramasse une recherche sans ancre. */
+        '<button id="shuffle-decoy" aria-label="Activer la lecture aléatoire"></button>' +
+        '<button id="preview-decoy" aria-label="Lire un aperçu"></button>' +
+        '<nav id="nav"><button id="nav-next" aria-label="Suivant">Suivant</button></nav>' +
+        '<div data-testid="volume-bar"><input id="vol" type="range" min="0" max="100" value="60" aria-label="Volume"></div>' +
+        /* Pas de `data-testid` sur les commandes : c'est le cas où l'on ne peut
+           compter que sur le libellé. */
+        '<div data-testid="now-playing-widget">' +
+        '<a data-testid="context-item-link" href="/track/9">Titre piégé</a>' +
+        '<div data-testid="context-item-info-artist">Artiste piégé</div>' +
+        /* La pochette : `src` est la vignette 64 px chargée en attendant, la
+           grande est annoncée dans `srcset`. */
+        '<img data-testid="cover-art-image" src="https://i.scdn.co/image/small64.jpg"' +
+        ' srcset="https://i.scdn.co/image/mid300.jpg 300w, https://i.scdn.co/image/large720.jpg 720w">' +
+        '<button id="pp" aria-label="Lecture - Titre piégé"></button>' +
+        '<button id="like" aria-checked="false" aria-label="Ajouter aux Titres liké"></button>' +
+        /* Curseur gradué en **millisecondes** (184 000 = 3 min 4 s). */
+        '<div data-testid="playback-progressbar"><input id="bar" type="range" min="0" max="184000" value="42000"></div>' +
+        "</div></body></html>",
+      { url: "https://open.spotify.com/", pretendToBeVisual: true, runScripts: "dangerously" }
+    );
+    const calls = [];
+    const clicks = [];
+    d.window.eval(
+      "window.__c = []; window.AndBridge = new Proxy({}, { get: (t, p) => (...a) => {" +
+        "window.__c.push([String(p), a]); if (String(p) === 'isWoke') return false; return undefined; } });"
+    );
+    d.window.eval(
+      "[].forEach.call(document.querySelectorAll('button'), function (b) {" +
+        "b.addEventListener('click', function () { window.__clicks = (window.__clicks || []).concat([b.id]); }); });" +
+        "window.__clicks = [];"
+    );
+    d.window.eval(await read("android/app/src/main/assets/native-mode.js"));
+    return { dom: d, clicks: () => d.window.__clicks || [] };
+  })();
+  const d = natTrapped.dom;
+  const w = d.window;
+  const sd = w.SpotiDuckUI;
+  assert(sd && sd.mode === "native", "le shim n'a pas été installé dans cette page");
+
+  /* « Lecture » : le leurre aléatoire est devant, il ne doit **pas** être cliqué. */
+  sd.play();
+  await tick(60);
+  assert(
+    natTrapped.clicks().join(",") === "pp",
+    `seul le bouton lecture/pause doit être pressé, obtenus : ${natTrapped.clicks().join(",") || "rien"}`
+  );
+
+  /* « Suivant » : l'onglet de navigation s'appelle pareil, et n'est pas une
+     commande de lecture. */
+  natTrapped.clicks().length = 0;
+  w.__clicks = [];
+  sd.next();
+  await tick(60);
+  assert(
+    !(w.__clicks || []).includes("nav-next"),
+    "l'onglet « Suivant » de la navigation a été confondu avec la piste suivante"
+  );
+
+  /* Avancer : la barre est graduée en millisecondes, le volume est le premier
+     curseur de la page. */
+  const vol = w.document.getElementById("vol");
+  const bar = w.document.getElementById("bar");
+  assert(sd.seek(90000) === true, "une avance dans une barre en millisecondes a échoué");
+  assert(Number(bar.value) === 90000, `position attendue 90000 (millisecondes), écrite ${bar.value}`);
+  assert(Number(vol.value) === 60, `le volume a été déplacé par l'avance : ${vol.value}`);
+  assert(
+    sd.seek(-1000) === true && Number(bar.value) === 0,
+    `une avance avant le début doit s'arrêter au début, curseur à ${bar.value}`
+  );
+  sd.seek(90000);
+  assert(
+    sd.seek(9999999) === true && Number(bar.value) === 184000,
+    `une avance au-delà du titre doit s'arrêter à la fin, curseur à ${bar.value}`
+  );
+
+  /* La notification : durée et position en millisecondes, la plus grande
+     pochette, et un état de lecture lu sur le bon bouton. */
+  sd.sync();
+  await tick(60);
+  const status = w.__c.filter((c) => c[0] === "recMediaStatus").slice(-1)[0];
+  assert(status, "aucune métadonnée n'a été transmise au pont");
+  const payload = JSON.parse(status[1][0]);
+  assert(payload.duration === 184000, `durée attendue 184000 ms, obtenue ${payload.duration}`);
+  assert(payload.position === 184000, `position attendue 184000 ms (fin de piste), obtenue ${payload.position}`);
+  assert(payload.track === "Titre piégé" && payload.artist === "Artiste piégé", "métadonnées incomplètes");
+  assert(
+    payload.cover === "https://i.scdn.co/image/large720.jpg",
+    "la pochette transmise n'est pas la plus grande disponible : " + payload.cover
+  );
+  /* « Lecture » annonce la commande à venir : la page est donc **en pause**.
+     Le leurre du début de page (« Activer la lecture aléatoire ») contenait,
+     lui aussi, le mot « lecture » — l'ancien repère répondait donc toujours
+     « en pause », quelle que soit la vraie état de la lecture. */
+  assert(payload.playing === false, `« Lecture » doit être lu comme une pause, obtenu ${payload.playing}`);
+  w.document.getElementById("pp").setAttribute("aria-label", "Pause - Titre piégé");
+  sd.sync();
+  await tick(60);
+  const paused = JSON.parse(w.__c.filter((c) => c[0] === "recMediaStatus").slice(-1)[0][1][0]);
+  assert(paused.playing === true, `« Pause » doit être lu comme une lecture en cours, obtenu ${paused.playing}`);
+  w.close();
+  return "libellés ancrés dans le lecteur · millisecondes respectées · volume intact · grande pochette ✓";
 });
 
 await checkAsync("native mode: the position keeps flowing to the notification", async () => {

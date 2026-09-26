@@ -49,10 +49,16 @@
             android:textSize="12sp"
             android:text="@string/widget_idle" />
 
+        <!-- Les trois commandes n'ont pas la même hauteur (48 dp au milieu,
+             40 dp sur les côtés) : sans alignment vertical, les deux côtés
+             s'accrochaient au bord du haut et l'ensemble paraissait de travers
+             sur le widget. -->
         <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
+            android:baselineAligned="false"
+            android:gravity="center_vertical"
             android:orientation="horizontal">
 
             <ImageButton

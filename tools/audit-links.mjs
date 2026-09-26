@@ -917,8 +917,61 @@ const libraryCode = stripComments(runtime);
 if (!/unitFactor: function/.test(libraryCode) || !/calibrate: function/.test(libraryCode)) {
   errors.push("l'unité du curseur de progression n'est plus mesurée : les durées peuvent redevenir 1000 fois trop grandes");
 }
-if (!/dur \/ factor\) \* 1000/.test(libraryCode) || !/pos \/ factor\) \* 1000/.test(libraryCode)) {
-  errors.push("la lecture de la position ne passe plus par l'unité mesurée");
+/* Le corps de `read()` et de `seek()` : la seule façon de vérifier que **tous**
+   les passages par le curseur passent bien par la conversion mesurée, au lieu
+   de multiplier ou diviser « à la main » à un endroit et pas à un autre (c'est
+   exactement ainsi que la lecture était juste et l'écriture fausse). */
+const bodyOf = (name) => {
+  const at = libraryCode.indexOf(name);
+  if (at < 0) return "";
+  const open = libraryCode.indexOf("{", at);
+  let depth = 0;
+  for (let i = open; i < libraryCode.length; i++) {
+    if (libraryCode[i] === "{") depth++;
+    else if (libraryCode[i] === "}") {
+      depth--;
+      if (depth === 0) return libraryCode.slice(open, i + 1);
+    }
+  }
+  return "";
+};
+const readBody = bodyOf("read: function");
+const seekBody = bodyOf("seek: function");
+if (
+  !/this\.ticksToMs\(dur\)/.test(readBody) ||
+  !/this\.ticksToMs\(pos\)/.test(readBody) ||
+  /dur \* 1000/.test(readBody) ||
+  /pos \* 1000/.test(readBody)
+) {
+  errors.push("la lecture de la position ne passe plus par l'unité mesurée (conversion à la main dans Spotify.read())");
+}
+const actionsSeekBody = bodyOf("seek: function (ms) {\n      var target");
+if (!/this\.msToTicks\(ms\)/.test(seekBody)) {
+  errors.push("le déplacement du curseur n'utilise plus la graduation lue : il viserait la mauvaise position sur un lecteur en millisecondes");
+}
+if (!/Spotify\.ticksToMs\(input\.value\)/.test(actionsSeekBody)) {
+  errors.push("la vérification après un déplacement du curseur relit la position sans la conversion mesurée");
+}
+if (!/this\.blame\(\)/.test(actionsSeekBody) || !/this\.settle\(300\)/.test(actionsSeekBody)) {
+  errors.push("un déplacement du curseur qui échoue ne le dit plus ni au diagnostic ni au doigt");
+}
+if (!/setTimeout\(function \(\) \{[\s\S]{0,400}\}, 400\)/.test(actionsSeekBody)) {
+  errors.push("le curseur n'attend plus la confirmation de Spotify : la barre de progression repartirait en arrière après un saut");
+}
+if (!/var value = this\.msToTicks\(ms\);/.test(seekBody) || /var value = /.test(seekBody.replace(/var value = this\.msToTicks\(ms\);/, ""))) {
+  errors.push("le déplacement du curseur recalcule la valeur à la main au lieu d'utiliser la conversion unique");
+}
+if (!/State\.anchorPos = Spotify\.ticksToMs\(input\.value\)/.test(libraryCode)) {
+  errors.push("l'ancre posée par le glisser du curseur ne lit plus la position dans l'unité mesurée");
+}
+if (/addEventListener\(\s*"input"\s*,\s*function \(e\)/.test(libraryCode)) {
+  errors.push("le glisser du curseur réécoute encore un <input> par copie : la mise à jour du curseur se fait à l'aveugle");
+}
+if (!/maxTicks: function/.test(libraryCode) || !/var max = this\.maxTicks\(\);/.test(seekBody)) {
+  errors.push("la graduation du curseur n'a plus de borne de repli : un curseur sans `max` rendrait toute recherche impossible");
+}
+if (!/return known > 0 \? this\.msToTicks\(known\) : 0;/.test(libraryCode)) {
+  errors.push("la borne de repli du curseur ne se convertit plus dans l'unité mesurée");
 }
 if (!/plausible: function/.test(libraryCode) || !/MAX_SECONDS: 12 \* 3600/.test(libraryCode)) {
   errors.push("les durées enregistrées ne sont plus contrôlées : une valeur absurde s'afficherait telle quelle");
@@ -1358,8 +1411,30 @@ if (!/@JavascriptInterface\s+fun session\(\): Boolean/.test(netBridgeKt) || !/fu
 if (!/scale: function/.test(libraryCode)) {
   errors.push("la graduation du curseur n'a plus de repère commun : lire et écrire pourraient diverger d'un facteur 1000");
 }
-if (!/var value = this\.scale\(\) === 1 \? ms : ms \/ 1000;/.test(libraryCode)) {
-  errors.push("le déplacement du curseur n'utilise plus la graduation lue : il viserait la mauvaise position sur un lecteur en millisecondes");
+/* **La durée du titre se lit à un seul endroit.** `UI.paintProgress`, les deux
+   gestes du curseur, la touche « fin » du clavier : partout où il faut savoir
+   combien dure le titre, c'est `trackDurationMs()` — sans quoi un pointeur
+   s'arrête au premier dixième, cherche dans un titre de trois heures, ou se
+   bloque à zéro quand la page n'a pas encore annoncé sa durée. */
+if (!/function trackDurationMs\(\)/.test(libraryCode)) {
+  errors.push("la durée du titre n'a plus de source unique : le curseur peut se figer ou chercher au-delà du morceau");
+}
+for (const need of [
+  "var total = s.duration > 0 ? s.duration : trackDurationMs();",
+  "var ms = ratio * trackDurationMs();",
+  "if (!trackDurationMs()) return;",
+  "Actions.seek(ev.key === \"Home\" ? 0 : trackDurationMs());",
+  "this.seek(clamp(Number(ratio) || 0, 0, 1) * trackDurationMs())",
+]) {
+  if (!libraryCode.includes(need)) {
+    errors.push(`un affichage ou un geste du curseur ne demande plus sa durée à trackDurationMs() : ${need}`);
+  }
+}
+if (!/function trackDurationMs\(\)[\s\S]{0,400}Spotify\.ticksToMs\(max\)/.test(libraryCode)) {
+  errors.push("trackDurationMs() ne convertit plus la graduation du curseur en millisecondes");
+}
+if (/ratio \* \(State\.duration \|\| 0\)/.test(libraryCode)) {
+  errors.push("un geste du curseur multiplie encore sa proportion par la durée annoncée toute seule");
 }
 if (
   !/var secondsBand = /.test(libraryCode) ||
@@ -1578,6 +1653,188 @@ if (!/window\.__sdNavMark = "pose";/.test(probe) || !/opened\.recharge/.test(pro
 }
 if (!/const RETOUR_PROBE = \(\) => \{/.test(probe) || !/page\.evaluate\(RETOUR_PROBE\)/.test(probe) || !/Retour depuis une playlist/.test(probe)) {
   errors.push("la sonde ne mesure plus le retour : « le retour en arrière doit fonctionner » ne serait plus vérifié");
+}
+
+/* --------------------------------------------------------------------------
+   6. Les textes et les réglages : ce qui est promis doit exister.
+   Un libellé oublié dans la liste des textes ne se voit nulle part — ni à la
+   compilation (le fichier est un tout), ni au banc (le test lit la liste, pas
+   l'appel). Sur le téléphone, cela donne une bulle « undefined », une
+   « Notice indisponible » pour un simple rechargement, ou un bouton sans nom
+   pour un lecteur d'écran. Même risque pour les réglages : une clé que la
+   liste de sauvegarde oublie s'efface au redémarrage.
+   -------------------------------------------------------------------------- */
+/* Les listes ci-dessous sont lues dans le code sans ses commentaires : un mot
+   entre guillemets dans une explication ne doit pas compter comme une clé. */
+const labelsBlock = bodyOf("labels: {");
+const labelKeys = new Set([...labelsBlock.matchAll(/^\s*([a-zA-Z0-9_]+):/gm)].map((m) => m[1]));
+if (labelKeys.size < 40) {
+  errors.push(`la liste des textes n'a plus pu être lue entièrement (${labelKeys.size} libellés) : le contrôle des libellés est aveugle`);
+}
+/* Doublons dans la liste des textes : le second écrase le premier en silence,
+   et le premier devient introuvable — « Recharger » réclamait un libellé que
+   seul un doublon semblait fournir. */
+{
+  const once = new Set();
+  for (const m of labelsBlock.matchAll(/^\s*([a-zA-Z0-9_]+):/gm)) {
+    if (once.has(m[1])) errors.push(`deux libellés portent le même nom « ${m[1]} » : la première valeur est écrasée`);
+    once.add(m[1]);
+  }
+}
+/* `labels.` seul serait trop large (le module des repères a son propre tableau
+   `labels`) ; on ne surveille que les accès au règlage des textes. */
+for (const m of libraryCode.matchAll(/(?:Settings|this)\.labels\.([a-zA-Z0-9_]+)/g)) {
+  if (!labelKeys.has(m[1])) {
+    errors.push(`un libellé est demandé sous le nom « ${m[1]} », qui n'existe pas dans la liste : le bouton s'appelle « undefined »`);
+  }
+}
+/* Une clé calculée est permise, à condition que **tous** les noms qu'elle peut
+   produire existent (ici : un ou plusieurs éléments). */
+for (const m of libraryCode.matchAll(/(?:Settings|this)\.labels\[([^\]]+)\]/g)) {
+  const names = [...m[1].matchAll(/"([a-zA-Z0-9_]+)"|'([a-zA-Z0-9_]+)'/g)].map((q) => q[1] || q[2]);
+  if (!names.length) {
+    errors.push(`un libellé est demandé par une clé entièrement calculée (${m[1]}) : le contrôle des textes ne peut plus le suivre`);
+    continue;
+  }
+  for (const n of names) {
+    if (!labelKeys.has(n)) {
+      errors.push(`un libellé est demandé sous le nom « ${n} », qui n'existe pas dans la liste`);
+    }
+  }
+}
+
+/* La liste des réglages qui survivent au redémarrage doit couvrir `DEFAULTS`
+   (et réciproquement) et chaque clé doit exister dans `Settings` : une clé
+   oubliée à moitié se traduit par « mes réglages ne sont pas gardés ». */
+{
+  const defaultsBlock = bodyOf("var DEFAULTS = {");
+  const defaultKeys = [...defaultsBlock.matchAll(/^\s*([a-zA-Z0-9_]+):/gm)].map((m) => m[1]);
+  if (defaultKeys.length < 8) errors.push("les valeurs par défaut des réglages n'ont plus pu être lues");
+  const persistAt = libraryCode.indexOf("var PERSIST = [");
+  const persistBlock = persistAt < 0 ? "" : libraryCode.slice(persistAt, libraryCode.indexOf("]", persistAt));
+  const persisted = new Set([...persistBlock.matchAll(/"([a-zA-Z0-9_]+)"/g)].map((m) => m[1]));
+  if (persisted.size < 8) errors.push("la liste des réglages sauvegardés est vide ou illisible : plus aucun réglage ne survivrait");
+  for (const k of defaultKeys) {
+    if (!persisted.has(k)) errors.push(`le réglage « ${k} » a une valeur par défaut mais n'est pas sauvegardé : il s'efface au redémarrage`);
+  }
+  for (const k of persisted) {
+    if (!defaultKeys.includes(k)) errors.push(`la liste de sauvegarde connaît « ${k} », qui n'a pas de valeur par défaut : « Réinitialiser » ne l'effacerait jamais`);
+  }
+  const settingsBlock = bodyOf("var Settings = {");
+  for (const k of defaultKeys) {
+    if (!new RegExp(`^\\s{4}${k}:`, "m").test(settingsBlock)) {
+      errors.push(`le réglage « ${k} » a une valeur par défaut absente de l'objet des réglages`);
+    }
+  }
+}
+
+/* Le bas de l'écran se réserve d'après la hauteur **mesurée** du mini-lecteur ;
+   les valeurs des feuilles ne servent que au tout premier rendu. Si les deux
+   divergent, la page est recouverte d'une bande vide (vu le 25/09 : « le bas
+   de l'écran est noir », « on ne peut plus rien toucher sous la barre »). */
+{
+  const deviceCss = read("src/inject/76-device.css");
+  const reserved = [...deviceCss.matchAll(/--sd-mini-h:\s*calc\((\d+)px/g)].map((m) => Number(m[1]));
+  if (!reserved.length) errors.push("les feuilles ne fixent plus du tout la hauteur du mini-lecteur");
+  const measured = /--sd-mini-h-current/.test(read("src/inject/10-base.css")) && /measure: function/.test(libraryCode);
+  if (!measured) errors.push("la place réservée en bas ne suit plus la hauteur réelle du mini-lecteur");
+  if ((libraryCode.match(/askMeasure\(\)/g) || []).length < 2) {
+    errors.push("rien ne redemande la mesure après un changement de vue ou de densité");
+  }
+  if (!/watchSize: function/.test(libraryCode)) errors.push("un changement de taille d'écran ne redemande plus la mesure");
+  for (const n of reserved) {
+    /* Trois lignes (pochette + transport + progression) à ~44 px + marges : en
+       dessous, la place réservée est fausse et la page passe sous la barre. */
+    if (n < 140) errors.push(`hauteur de mini-lecteur annoncée trop petite en CSS (${n}px) : la page passerait sous la barre`);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   7. Le widget du bureau : la feuille XML et le code Kotlin doivent se parler,
+      et les trois commandes doivent rester alignées (40 dp · 48 dp · 40 dp).
+   -------------------------------------------------------------------------- */
+{
+  const widgetXml = read("android/app/src/main/res/layout/widget_player.xml");
+  const widgetKt = read("android/app/src/main/java/com/spotiduck/app/PlayerWidget.kt");
+  const declared = new Set([...widgetXml.matchAll(/android:id="@\+id\/(\w+)"/g)].map((m) => m[1]));
+  const used = new Set([...widgetKt.matchAll(/R\.id\.(\w+)/g)].map((m) => m[1]));
+  for (const id of used) {
+    if (!declared.has(id)) errors.push(`le widget demande « ${id} » : aucun élément de widget_player.xml ne le porte (le bouton ne répondrait pas)`);
+  }
+  for (const id of declared) {
+    if (!used.has(id)) warnings.push(`« ${id} » est dans la feuille du widget : plus personne ne l'utilise en Kotlin`);
+  }
+  const strings = read("android/app/src/main/res/values/strings.xml");
+  for (const m of widgetXml.matchAll(/@(?:string|drawable)\/(\w+)/g)) {
+    if (!new RegExp(`name="${m[1]}"`).test(strings) && !existsSync(join(root, `android/app/src/main/res/drawable/${m[1]}.xml`))) {
+      errors.push(`la feuille du widget référence « ${m[1]} », qui n'existe ni comme chaîne ni comme dessin`);
+    }
+  }
+  /* La rangée de commandes : des hauteurs différentes (40 · 48 · 40 dp), donc un
+     alignement. On cherche le conteneur qui porte le bouton « précédent », et
+     **lui seul** — le parent racine, lui, est déjà centré. */
+  {
+    const opens = [...widgetXml.matchAll(/<LinearLayout\b[^>]*>/g)];
+    const row = opens.find((m) => widgetXml.slice(m.index + m[0].length, m.index + m[0].length + 260).includes("@+id/widget_previous"));
+    if (!row) {
+      errors.push("la rangée de commandes du widget n'est plus un LinearLayout identifiable : l'alignement ne peut plus être contrôlé");
+    } else if (!/gravity="center_vertical"/.test(row[0])) {
+      errors.push("la rangée de commandes du widget n'est plus alignée au centre : 40 dp et 48 dp se toucheraient de travers");
+    }
+  }
+  for (const src of widgetXml.matchAll(/android:src="@drawable\/(\w+)"/g)) {
+    const file = join(root, `android/app/src/main/res/drawable/${src[1]}.xml`);
+    if (!existsSync(file)) errors.push(`le widget affiche « ${src[1]} », dessin absent des ressources`);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   8. Les deux modes, la même barre de progression.
+   La coque injectée et le shim « interface Spotify » pilotent le même curseur
+   de la même page. S'ils se mettaient à compter l'un en secondes et l'autre en
+   millisecondes, la notification et l'écran afficheraient deux positions
+   différentes du même morceau — et une avance de dix secondes en vaudrait dix
+   mille. Les deux fichiers doivent donc partager le seuil et le sens.
+   -------------------------------------------------------------------------- */
+{
+  const shell = libraryCode;
+  const shim = stripComments(nativeCalls);
+  for (const need of ["function cursorUnitFactor", "function ticksToMs", "function msToTicks"]) {
+    if (!shim.includes(need)) {
+      errors.push(`le shim du mode « interface Spotify » n'a plus de ${need}() : il redevine l'unité du curseur pour son propre compte`);
+    }
+  }
+  const shellThreshold = /max > (\d+)/.exec(shell);
+  const shimThreshold = /n > (\d+)/.exec(shim);
+  if (shellThreshold && shimThreshold && shellThreshold[1] !== shimThreshold[1]) {
+    errors.push(`les deux modes ne partagent plus le seuil d'unité du curseur (${shellThreshold[1]} d'un côté, ${shimThreshold[1]} de l'autre)`);
+  }
+  if (!/function progressInput/.test(shim)) {
+    errors.push("le shim n'a plus de repère borné à la barre de progression : il peut écrire dans le curseur de volume");
+  }
+  if (/q\("input\[type='range'\]"\)/.test(shim) || /querySelector\("input\[type='range'\]"\)/.test(shim)) {
+    errors.push("le shim retombe sur « le premier curseur de la page » : sur la page mobile, c'est le volume");
+  }
+  if (!/function btnText\(/.test(shim) || !/function playerRoot\(/.test(shim)) {
+    errors.push("le shim ne borne plus ses libellés au lecteur : un bouton de la page peut être pris pour une commande de lecture");
+  }
+  if (!/\bbyLabel\(res\)/.test(shim) && /byLabel\([^)]*,/.test(shim)) {
+    errors.push("le shim cherche encore ses commandes hors du lecteur");
+  }
+  /* Les deux modes doivent piloter **les mêmes boutons** de la même page :
+     `SEL.*` de la coque et les candidats du shim sont lus côte à côte. Un id
+     que le shim invente est un id que personne n'a vérifié sur la page. */
+  const shellTestids = new Set([...runtime.matchAll(/data-testid=\"([a-z0-9-]+)\"/g)].map((m) => m[1]));
+  for (const m of shim.matchAll(/playerButton\(\[([^\]]+)\]/g)) {
+    for (const id of m[1].matchAll(/\"([a-z0-9-]+)\"/g)) {
+      if (!shellTestids.has(id[1])) {
+        errors.push(`le shim cherche « ${id[1]} » comme commande du lecteur : la coque ne le connaît pas`);
+      }
+    }
+  }
+  if (!/function bestCoverUrl/.test(shim)) {
+    errors.push("le shim ne demande plus la plus grande pochette : la notification afficherait la vignette 64 px");
+  }
 }
 
 /* Rapport ------------------------------------------------------------------ */

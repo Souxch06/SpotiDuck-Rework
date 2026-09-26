@@ -1023,23 +1023,190 @@
     }
   }
 
-  function byLabel(res, root) {
-    var nodes = (root || document).querySelectorAll("button,[role='button']");
-    for (var i = 0; i < nodes.length; i++) {
-      var n = nodes[i];
-      var s = [n.getAttribute("aria-label"), n.getAttribute("title"), n.textContent]
-        .filter(Boolean)
-        .join(" ");
-      if (res.test(s)) return n;
+  /* Les trois zones qui portent le lecteur sur la page mobile de Spotify, dans
+     l'ordre où on les rencontre. */
+  var PLAYER_SCOPES = [
+    "[data-testid='now-playing-bar']",
+    "[data-testid='now-playing-widget']",
+    "[data-testid='video-player']",
+    "footer",
+    "[role='player']",
+  ];
+
+  /** Le conteneur du lecteur, s'il est dans la page. */
+  function playerRoot() {
+    for (var i = 0; i < PLAYER_SCOPES.length; i++) {
+      var node = q(PLAYER_SCOPES[i]);
+      if (node) return node;
     }
     return null;
+  }
+
+  /**
+   * Le **nom** d'un bouton : son libellé, coupé de ce qui le suit.
+   *
+   * La page mobile de Spotify nomme ses commandes « Lecture - Anuv Jain –
+   * Baarishein » : le nom de la commande, puis le morceau. Sans cette coupe,
+   * reconnaître un libellé tout entier est impossible — et reconnaître un
+   * libellé *à moitié* est justement ce qui faisait appuyer sur le mauvais
+   * bouton. Le séparateur est un tiret (demi ou entier) ou un deux-points.
+   */
+  function btnText(n) {
+    var raw = [n.getAttribute("aria-label"), n.getAttribute("title"), n.textContent]
+      .filter(Boolean)
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+    return raw.split(/\s+[\u2013\u2014-]\s+|\s+:\s+/)[0].trim();
+  }
+
+  /**
+   * **Un libellé se reconnaît tout entier, dans le lecteur.**
+   *
+   * La recherche acceptait n'importe quelle phrase *contenant* « play » ou
+   * « lecture » : « Activer la lecture aléatoire » répond présent avant
+   * « Lecture », et le bouton de la notification allait donc mélanger
+   * l'ordre des titres au lieu de les mettre en lecture (« quand j'appuie sur
+   * lecture dans la notification, ça change le mode aléatoire »). Même piège
+   * pour « Suivant », qui est aussi un onglet de navigation. D'où : un libellé
+   * comparé en entier, et une recherche bornée au lecteur — le reste de la page
+   * est à Spotify.
+   */
+  function byLabel(res) {
+    var scope = playerRoot() || document;
+    /* Les commandes du lecteur sont des boutons : on ne regarde les liens que si
+       aucun bouton ne répond — un `a[href]` de la navigation s'appelle « Suivant »
+       lui aussi, et ce n'est pas une commande de lecture. */
+    var found = pickMatching(scope.querySelectorAll("button,[role='button']"), res);
+    return found || pickMatching(scope.querySelectorAll("a[href]"), res);
+  }
+
+  function pickMatching(nodes, res) {
+    for (var i = 0; i < nodes.length; i++) {
+      if (res.test(btnText(nodes[i]))) return nodes[i];
+    }
+    return null;
+  }
+
+  /**
+   * Une commande du lecteur : d'abord ses `data-testid` connus (c'est le nom qui
+   * change le moins souvent d'une version à l'autre), ensuite son libellé
+   * **entier**. Les identifiants sont les mêmes que dans la couche injectée
+   * (`SEL.*`) : les deux modes pilotent le même bouton de la même page, et
+   * l'audit vérifie qu'ils ne divergent pas.
+   */
+  function playerButton(testids, res) {
+    var scope = playerRoot();
+    for (var i = 0; i < testids.length; i++) {
+      var sel = "button[data-testid='" + testids[i] + "']";
+      var found = q(sel) || (scope && scope.querySelector(sel));
+      if (found) return found;
+    }
+    return byLabel(res);
+  }
+
+  /* Le « j'aime » de la page mobile n'a pas de testid stable, mais son libellé
+     si — et les deux états comptent (« Jaime » comme « Retirer des titres »). */
+  var LIKE_LABEL = /^(j'aime|jaime|like|aimer|ajouter aux titres likés|retirer des titres likés)/i;
+
+  /**
+   * **Le curseur de progression, et rien d'autre.**
+   *
+   * Le premier réflexe était `document.querySelector("input[type='range']")` :
+   * sur la page mobile, ce curseur-là est celui du **volume**. Une avance de
+   * trente secondes baissait donc le son au lieu de déplacer la lecture. On ne
+   * prend un curseur que s'il est dans la barre de progression (ou annoncé
+   * comme tel).
+   */
+  function progressInput() {
+    var scope = playerRoot() || document;
+    var inBar = scope.querySelector("[data-testid='playback-progressbar'] input[type='range']");
+    if (inBar) return inBar;
+    if (document !== scope) {
+      inBar = document.querySelector("[data-testid='playback-progressbar'] input[type='range']");
+      if (inBar) return inBar;
+    }
+    /* Un curseur hors barre n'est acceptable que s'il se nomme lui-même « Seek »
+       / « progression » — jamais le volume. */
+    var all = document.querySelectorAll("input[type='range'],[role='slider'] input[type='range']");
+    for (var i = 0; i < all.length; i++) {
+      var label = btnText(all[i]) + " " + (all[i].getAttribute("aria-label") || "");
+      if (/seek|progress|position|progression|lecture/i.test(label) && !/volume|son|sound/i.test(label)) return all[i];
+    }
+    return null;
+  }
+
+  /**
+   * **Dans quelle unité le curseur compte-t-il ?** `1000` si la page compte en
+   * millisecondes (une graduation = 1 ms), `1` si elle compte en secondes
+   * (une graduation = 1 s). Le seuil et le sens sont **ceux de la couche
+   * injectée** (`Spotify.unitFactor`) : les deux modes doivent lire la même
+   * barre de la même façon, sinon la notification et l'écran diraient deux
+   * positions différentes du même morceau.
+   *
+   * Écrire dans l'unité que la page ne parle pas déplace la lecture d'un
+   * facteur 1000 : une avance de dix secondes sautait à trois heures, ou ne
+   * bougeait pas du tout — « la barre ne sert à rien ».
+   */
+  function cursorUnitFactor(max) {
+    var n = Number(max);
+    if (!isFinite(n) || n <= 0) return 0;
+    return n > 10000 ? 1000 : 1;
+  }
+
+  /** Une graduation lue sur le curseur, en millisecondes. */
+  function ticksToMs(ticks, factor) {
+    var v = Number(ticks);
+    if (!isFinite(v) || !factor) return 0;
+    return (v / factor) * 1000;
+  }
+
+  /**
+   * Une position en millisecondes, dans les graduations du curseur.
+   * `-1` quand on ne peut pas répondre (aucune graduation lisible). Une demande
+   * négative n'est pas une erreur : « revenir en arrière avant le début »,
+   * c'est le début — comme dans l'application.
+   */
+  function msToTicks(ms, factor) {
+    var v = Number(ms);
+    if (!isFinite(v) || !factor) return -1;
+    if (v < 0) v = 0;
+    return factor === 1 ? v / 1000 : v;
+  }
+
+  var PLAY_LABEL = /^(pause|play|lecture|reprendre( la lecture)?|mettre en pause|mettre en lecture|lire)$/i;
+
+  /**
+   * La plus grande adresse d'une pochette : `currentSrc` (l'image réellement
+   * chargée) puis le `srcset` annoncé, et `src` en dernier recours.
+   */
+  function bestCoverUrl(img) {
+    if (!img) return "";
+    var out = "";
+    var size = 0;
+    try {
+      var set = img.getAttribute("srcset") || img.getAttribute("data-srcset") || "";
+      set.split(",").forEach(function (part) {
+        var bits = part.trim().split(/\s+/);
+        var url = bits[0];
+        if (!url) return;
+        var w = parseInt(bits[1] || "0", 10) || 0;
+        if (w >= size) {
+          size = w;
+          out = url;
+        }
+      });
+    } catch (e) {
+      /* srcset absent ou malformé : on retombe sur `src`. */
+    }
+    return out || img.currentSrc || img.src || img.getAttribute("src") || "";
   }
 
   function playPauseBtn() {
     return (
       q("button[data-testid='control-button-playpause']") ||
-      q("[data-testid='now-playing-widget'] ~ * button[aria-label*='ause']") ||
-      byLabel(/(pause|play|lecture|reprendre)/i)
+      byLabel(PLAY_LABEL)
     );
   }
 
@@ -1090,29 +1257,30 @@
       return clickBtn(playPauseBtn());
     },
     next: function () {
-      return clickBtn(
-        q("button[data-testid='control-button-skip-forward']") ||
-          byLabel(/(next|suivant|suivante)/i)
-      );
+      return clickBtn(playerButton(["control-button-skip-forward", "control-button-next"], /^(next|suivant|suivante|titre suivant|passer à la piste suivante)$/i));
     },
     previous: function () {
-      return clickBtn(
-        q("button[data-testid='control-button-skip-back']") ||
-          byLabel(/(previous|pr[ée]c[ée]dent)/i)
-      );
+      return clickBtn(playerButton(["control-button-skip-back", "control-button-previous"], /^(previous|pr[ée]c[ée]dent|titre pr[ée]c[ée]dent|passer à la piste pr[ée]c[ée]dente)$/i));
     },
+    /* Le testid d'abord, le libellé entier ensuite : un `button[aria-checked]`
+       pris au hasard dans le lecteur pouvait aussi bien être la lecture
+       aléatoire (elle aussi « cochée ») que le « j'aime ». */
     like: function () {
-      var b =
-        q("[data-testid='now-playing-widget'] button[aria-checked]") ||
-        byLabel(/^(j'aime|like|aimer|retirer)/i);
-      return clickBtn(b);
+      return clickBtn(playerButton(["add-button", "now-playing-widget-like-button"], LIKE_LABEL));
     },
+    /* **Avancer dans l'unité de la page**, et uniquement dans la barre de
+       progression : le `input[type=range]` du document est souvent celui du
+       volume, et `Math.min(max, …)` sur une borne absente (`NaN`) écrivait
+       « NaN » dans le curseur. */
     seek: function (ms) {
-      var input = q("[data-testid='playback-progressbar'] input[type='range']") || q("input[type='range']");
+      var input = progressInput();
       if (!input) return false;
-      var max = parseFloat(input.max || input.getAttribute("max") || "0");
-      var value = ms / 1000; // Spotify exprime sa barre de progression en secondes
-      return setNativeInput(input, Math.max(0, Math.min(max, value)));
+      var max = parseFloat(input.getAttribute("max"));
+      if (!(max > 0)) return false;
+      var factor = cursorUnitFactor(max);
+      var value = msToTicks(ms, factor);
+      if (value < 0) return false;
+      return setNativeInput(input, String(Math.max(0, Math.min(max, value))));
     },
     sync: function () {
       publish(true);
@@ -1159,15 +1327,25 @@
       q("[data-testid='nowplaying-artist']") ||
       q("[data-testid='context-item-info-show']");
     var img = q("[data-testid='cover-art-image']") || q("img[data-testid='cover-art-image']");
-    var range = q("[data-testid='playback-progressbar'] input[type='range']") || q("input[type='range']");
+    var range = progressInput();
 
     var title = titleEl ? (titleEl.textContent || "").trim() : "";
     var artist = artistEl ? (artistEl.textContent || "").trim() : "";
-    var cover = img ? img.getAttribute("src") || "" : "";
-    var max = range ? parseFloat(range.max || "0") : 0;
-    var val = range ? parseFloat(range.value || "0") : 0;
-    var duration = /^\s*\d{4,}$/.test(String(range && range.max)) ? max : max * 1000;
-    var position = /^\s*\d{4,}$/.test(String(range && range.max)) ? val : val * 1000;
+    /* La pochette : `src` est parfois une image 64 px en attendant la vraie
+       (Spotify charge en différé et annonce la grande dans `srcset`) ; la
+       notification demandait donc la plus petite, floue en grand format. */
+    var cover = bestCoverUrl(img);
+    /* **La durée et la position, dans l'unité lue sur le curseur** — même règle
+       que pour l'écriture, donc même règle que la couche injectée. L'ancien
+       test (« quatre chiffres ou plus = des millisecondes ») prenait une chanson
+       de 4 000 secondes pour une duration de 4 secondes, et une de 3 minutes
+       lue en millisecondes pour 3 millisecondes : la notification affichait
+       « / 0:00 » et la barre de progression ne bougeait plus. */
+    var max = range ? parseFloat(range.getAttribute("max")) : 0;
+    var val = range ? parseFloat(range.value || range.getAttribute("value")) : 0;
+    var factor = cursorUnitFactor(max);
+    var duration = ticksToMs(max, factor);
+    var position = ticksToMs(val, factor);
     var playing = readPlaying();
     if (!title) return;
 

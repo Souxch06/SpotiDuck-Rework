@@ -3558,3 +3558,175 @@ La capture `screenshots/playlist_ouverture.png` montre les deux moments :
 pendant l'ouverture (le voile, le lecteur toujours là) et la playlist ouverte
 (barre de retour, contenu, mini-lecteur).
 
+
+## §53 — Tout ce qui traînait encore : le curseur, le bas de l'écran, les réglages, le mode livré (v2.11.18)
+
+« Fais en sorte que tous les affichages ne soient plus buggés, que le lecteur
+marche à 100 %, et teste de ton côté. » Pas de nouveau symptôme donc, mais une
+relecture complète de la coque, de ses feuilles et du shim du mode « interface
+Spotify », avec un contrôle par défaut trouvé — banc jsdom **ou** audit croisé.
+Quatorze défauts ont été corrigés ; les voici, avec la faute et ce qui la rend
+impossible maintenant.
+
+### Le curseur de progression comptait deux unités différentes
+
+La durée et la position étaient converties avec l'unité **mesurée** sur la page
+(`unitFactor()`), mais trois autres chemins multipliaient ou divisaient par 1000
+pour leur propre compte : l'écoute du glisser du doigt, la relecture après un
+`seek`, et l'écriture du `seek` lui-même. Sur une page graduée en
+millisecondes — c'est le cas le plus courant — le résultat était visible à
+l'œil : **la barre sautait à la fin du morceau dès qu'on lâchait le curseur**,
+et une avance de dix secondes pouvait en valoir dix mille.
+
+* les conversions ont un seul nom et une seule définition, `ticksToMs()` et
+  `msToTicks()`, posées à côté de `unitFactor()` — plus personne ne fait le
+  calcul à la main ;
+* la **borne haute** du curseur (`maxTicks()`) se replie sur la durée annoncée
+  par la page : sans cela, un curseur sans `max` (certaines versions)
+  clampait toute demande à `0..0` — **chercher ne faisait plus rien du tout** ;
+* `trackDurationMs()` est le seul endroit qui répond à « combien dure ce
+  titre » (durée annoncée, sinon graduation du curseur) : les deux gestes,
+  l'affichage des temps et les touches clavier l'utilisent. Avant, l'appui sur
+  la barre se **bloque** tant que la page n'a pas annoncé sa durée — soit la
+  première seconde de chaque titre ;
+* l'écoute du glisser n'était branchée que sur **la copie du curseur trouvée au
+  démarrage** : Spotify recrée son lecteur à chaque changement de vue, et
+  l'écoute restait sur le nœud remplacé — le doigt déplacait la barre de
+  Spotify, notre position ne bougeait plus. C'est maintenant **une seule**
+  écoute, déléguée sur le `document` et filtrée sur la barre de progression.
+
+### Le bas de l'écran réservait une hauteur inventée
+
+La place réservée sous la page (`--sd-bottom`) se calcule d'après la hauteur du
+mini-lecteur, et cette hauteur était **écrite à la main** dans les feuilles, en
+deux endroits qui se contredisaient (`10-base.css` posait 60 px, `76-device.css`
+le corrigeait par appareil). Le mini-lecteur, lui, se dimensionne seul : sa
+pochette suit la largeur de l'écran, ses deux rangées de commandes ont leur
+propre taille, la densité change tout. D'où la bande de contenu **passée sous la
+barre** — 63 px à 412×915, 56 px en paysage — que l'on ne pouvait plus toucher.
+
+* `UI.measure()` lit la hauteur **rendue** du mini-lecteur et l'écrit dans
+  `--sd-mini-h-current`, sur le même support que la feuille ;
+* trois cas seulement : masqué → `0`, mesuré → sa hauteur, pas encore de mise
+  en page → **on retire notre valeur** et la feuille reprend la main. Le
+  troisième cas est le piège : écrire `0` parce qu'on n'a rien mesuré aurait
+  produit l'inverse exact du défaut corrigé ;
+* la mesure est redemandée à chaque peinture (`askMeasure`, coalescé en une
+  image), à un changement de taille d'écran (`ResizeObserver` sur le
+  mini-lecteur, la barre d'onglets, la barre du haut) et à chaque
+  réaffirmation ;
+* les valeurs de feuille ne restent que le **premier rendu** : 168 / 184 / 200
+  px (150 en paysage), et la mesure gagne dès qu'elle existe. Un commentaire le
+  dit maintenant dans `76-device.css`, et l'audit refuse un repli inférieur à
+  140 px (trois rangées tiennent difficilement en dessous).
+
+### Les réglages : trois oublis et un effet retard
+
+* **`Statistiques`, `Accueil SpotiDuck`, `Bibliothèque SpotiDuck` n'étaient pas
+  dans la liste des réglages sauvegardés** — ils changeaient, l'application
+  obéissait, et le redémarrage suivant les remettait en place (« mes réglages ne
+  sont pas gardés »). La liste de lecture et la liste d'écriture étaient écrites
+  à la main, en deux endroits : c'est maintenant **une seule** liste
+  (`PERSIST`), qui fournit aussi les types et les valeurs par défaut, avec
+  contrôle du thème et de la densité (une valeur inconnue laissait la page sans
+  feuille de couleurs) ;
+* `DEFAULTS.tabbar` valait `true` alors que `Settings.tabbar` vaut `false` :
+  « Réinitialiser les réglages » rallumait la barre d'onglets du bas, en plus de
+  la barre du haut, avec 64 px de place réservée en trop ;
+* changer `Accueil`, `Bibliothèque` ou `Statistiques` ne repeignait **rien** :
+  nos deux pages maison et la mesure ne se regardent que sur un changement de
+  vue. L'appui est maintenant suivi d'un rafraîchissement, dans les deux sens ;
+* éteindre « Couleur reprise de la pochette » laissait le dégradé en place.
+
+### Deux boutons qui ne faisaient pas ce qu'ils disaient
+
+* **« Précédent »** : au-delà de trois secondes, la commande remettait le titre
+  au début **sans vérifier que cela avait marché**, et ne faisait rien d'autre —
+  curseur absent (page en cours de remplacement) = bouton muet. Sans curseur,
+  elle demande maintenant la piste précédente, comme l'application ;
+* **l'onglet « Bibliothèque »**, depuis une playlist : notre page est plein
+  écran et se range devant une sous-page, donc l'appui allumait l'onglet et
+  **ne montrait rien**. L'onglet ramène l'application à l'accueil (par le bouton
+  de Spotify, adresse en repli), et la page s'affiche ;
+* le mini-lecteur n'avait pas de clavier sur sa barre de progression (le lecteur
+  plein écran, si) : flèches, `Début`, `Fin` sont branchés sur les deux ;
+* `Toast.show()` affichait le mot `undefined` quand un libellé manquait ; une
+  bulle sans texte ne se montre plus.
+
+### Des feuilles qui ne correspondaient plus au DOM
+
+Quatre règles du mini-lecteur visaient `.sd-mini-controls` et
+`.sd-mini-progress`, avec un état `is-seeking` — trois noms que le runtime ne
+pose plus (`.sd-mini-row`, `.sd-mini-seek > i`, `is-dragging`) : la ligne de
+progression n'avait pas de fond et le glisser du doigt ne changeait que sa
+largeur. Un `aria-label` du mode paysage était écrit à la main au lieu de venir
+de la liste des textes ; `SEL.npBar` alignait un candidat reste de brouillon
+(`…now-playing-bar"] root`) ; la liste des textes contenait **deux `reload`**
+(dont un introuvable) ; `reassertSurfaces` se gardait avec `this.el.home` /
+`this.el.lib`, deux clés qui n'existent pas — le garde-fou tournait donc à vide ;
+`Content.apply()` empilait ses entrées de diagnostic sans plafond ; le public
+`window.SpotiDuckUI` déclarait `net:` deux fois ; et `UI.el.tabbar` se retirait
+une classe `is-library` que personne n'a jamais posée.
+
+### Le mode « interface Spotify », livré par défaut
+
+C'est l'écran que voit un lancement neuf, et son shim avait quatre défauts, tous
+du même genre : chercher large.
+
+* `playPauseBtn()` acceptait **tout libellé contenant** « play » ou « lecture » :
+  « Activer la lecture aléatoire » est posé avant, sur la page mobile — un appui
+  sur lecture dans la notification changeait donc le mode aléatoire, et la
+  notification répondait « en pause » quelle que soit la lecture réelle ;
+* `seek()` supposait une unité, et son `input[type='range']` isolé pouvait
+  tomber sur le **curseur de volume** (le premier de la page) : une avance de
+  trente secondes baissait le son ;
+* `publish()` devinait l'unité au nombre de chiffres (`184000` = millisecondes,
+  `202` = secondes, `4000` = secondes aussi) : la notification affichait
+  « / 0:00 » et sa barre ne bougeait plus ; la pochette était demandée en `src`,
+  c'est-à-dire la vignette 64 px chargée en attendant la grande ;
+* `like()` cherchait un `button[aria-checked]` dans le widget — la lecture
+  aléatoire est `aria-checked` elle aussi.
+
+Les commandes sont donc désormais trouvées par `data-testid`, puis par **libellé
+entier** (coupé du nom du morceau que Spotify y accole), **à l'intérieur du
+lecteur** ; l'unité est la même fonction, au même seuil, que dans la coque ; la
+pochette vient du `srcset` quand il existe. Le widget, lui, alignait ses trois
+commandes de 40 · 48 · 40 dp sans centre vertical — elles paraissaient de
+travers sur le bureau.
+
+### Ce qui surveille ces corrections
+
+* **banc jsdom : 149/149** (neuf vérifications nouvelles) : unité du curseur
+  lue/écrite/née hors plage, place réservée mesurée et rendue à la feuille quand
+  il n'y a rien à mesurer, onze réglages écrits et relus au second lancement
+  (avec une valeur invalide qui retombe sur le défaut), zéro bouton nommé
+  « undefined » dans toute la coque, « précédent » sans curseur, onglet
+  bibliothèque depuis une playlist, clavier du mini-lecteur, branchement qui ne
+  se répète pas à travers les soixante réessais de `boot`, et — côté shim —
+  leurre « aléatoire » jamais pressé, volume intact, millisecondes respectées,
+  grande pochette ;
+* **audit croisé : 0 erreur**, avec les garde-fous nouveaux qui vont avec :
+  chaque `labels.<nom>` doit exister dans la liste des textes (et n'y être
+  déclaré qu'une fois), chaque clé de `DEFAULTS` doit être dans `PERSIST` et
+  dans `Settings`, les hauteurs de repli du mini-lecteur doivent rester
+  crédibles, la liste des ids du widget doit correspondre à `PlayerWidget.kt`,
+  les deux modes doivent partager le seuil d'unité du curseur, et les
+  identifiants de boutons que cherche le shim doivent être connus de la coque.
+
+  Chaque garde-fou est **éprouvé** en réintroduisant le défaut : `node
+  tools/regress-audit.mjs` applique une à une vingt-trois régressions volontaires
+  (conversion à la main dans `read()`, écoute du curseur rebranchée par copie,
+  `max` sans repli, `trackDurationMs()` contourné, libellé inventé, doublon de
+  texte, réglage retiré de la sauvegarde, repli de hauteur ridicule, mesure qui
+  ne redemande plus, seuil d'unité qui diverge entre les deux modes, pochette
+  non choisie, libellé non ancré, alignement du widget enlevé, id d'un bouton du
+  widget renommé, repère de bouton inventé par le shim…) et exige que l'audit en signale **une sur deux** — le bilan du
+  run : **23/23 détectées**.
+
+### Ce qui n'est pas vérifiable ici
+
+Le banc n'a pas de moteur de rendu : il valide la **logique** (unités, états,
+adresses, valeurs écrites), pas les pixels. La mesure réelle de la hauteur du
+mini-lecteur, l'alignement du widget et le rendu des nouvelles règles CSS
+demandent un appareil ; ils sont vérifiés par la sonde Chrome de CI
+(`tools/probe-*.mjs`), pas par cette machine.
