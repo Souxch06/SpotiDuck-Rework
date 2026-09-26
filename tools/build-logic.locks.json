@@ -1,0 +1,40 @@
+{
+  "bundle": {
+    "len": 16338,
+    "md5": "3d4b942004"
+  },
+  "blocks": {
+    "état": {
+      "len": 363,
+      "md5": "da562e5365"
+    },
+    "capteur": {
+      "len": 3174,
+      "md5": "055f5a1345"
+    },
+    "playFromUri": {
+      "len": 959,
+      "md5": "50d9662164"
+    },
+    "manageWake": {
+      "len": 250,
+      "md5": "e0cec65422"
+    },
+    "trigUnlock": {
+      "len": 310,
+      "md5": "7551615c84"
+    },
+    "act": {
+      "len": 2193,
+      "md5": "0746d315af"
+    },
+    "manageAll": {
+      "len": 519,
+      "md5": "a9e69bea1b"
+    },
+    "updMedia": {
+      "len": 584,
+      "md5": "ea9be6efc0"
+    }
+  }
+}

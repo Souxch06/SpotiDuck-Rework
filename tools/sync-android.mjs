@@ -26,6 +26,10 @@ const jobs = [
   { from: join(root, "dist/spotiduck-original.js"), to: join(assets, "spotiduck-original.js") },
   { from: join(root, "dist/original-fingerprint.js"), to: join(assets, "original-fingerprint.js") },
   { from: join(root, "dist/spotiduck-identity.js"), to: join(assets, "spotiduck-identity.js") },
+  /* Le **moteur** de lecture (blocs d'origine repris tels quels) : sans lui, la
+     coque retombe sur le seul markup de Spotify — et « le lecteur ne fait rien »
+     revient dès qu'un repère change de nom. */
+  { from: join(root, "dist/spotiduck-logic.js"), to: join(assets, "spotiduck-logic.js") },
   { from: join(root, "adblock_hosts.txt"), to: join(assets, "adblock_hosts.txt") },
 ];
 

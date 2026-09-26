@@ -3878,3 +3878,67 @@ feuille de style, pas en changeant de page.
 détectées, `npm run android` 5/5 ressources. Ce que la CI ne peut pas prouver :
 la page **connectée** sur le téléphone — la largeur réelle après ces changements,
 la position des commandes et l'effet des appuis restent à confirmer sur l'appareil.
+
+## §56 — La logique revient à l'application d'origine ; l'affichage attendra (v2.11.21)
+
+Demande de l'utilisateur, dans l'ordre : **d'abord toute la logique, reprise du
+code d'origine ; l'interface après**. Cette passe pose la logique.
+
+`docs/UI-REWORK.md` §55 laissait un aveu : la coque relit Spotify dans son markup
+et clique ses boutons. L'application d'origine ne fait pas ça. Ses huit blocs
+d'origine, **recopiés octet pour octet** dans `dist/spotiduck-logic.js`
+(`tools/build-logic.mjs`, longueurs + md5 verrouillés dans
+`tools/build-logic.locks.json`) :
+
+| Bloc repris | Ce qu'il fait, que la coque ne faisait pas |
+| --- | --- |
+| état + capteur | lit dans le **trafic de la page** l'identifiant d'appareil (`/track-playback/v1/devices`), le `Client-Token`, le `Bearer`, l'URI en cours (`pathfinder` `isCurated`) ; route les requêtes `connect-state` de Spotify **par le pont Android** ; sur « Player Locked » (404 sur une commande), recharge la page après l'avoir annoncé au pont |
+| `playFromUri` | démarre une piste par l'**API Connect** (`endpoint: play`, `license: "tft"`) — un chemin qui ne dépend d'aucun bouton |
+| `manageWake` · `trigUnlock` | l'écran (verrouillé seulement si la lecture tourne en arrière-plan) et le secours du lecteur verrouillé (`disabled` persistant → rechargement) |
+| `act*` (six commandes) | la commande de l'origine, jugée sur **l'icône du bouton de Spotify**, avec son réveil avant un saut |
+| `manageAll` · `updMedia` | la machine d'état : notification, minuteries d'arrêt, rapport à Android dédupliqué |
+
+Ce qui est **resté dehors, volontairement** : tout ce qui dessine dans ces blocs
+(sa barre du haut, son `npBtn`, ses coupures de rangées d'accueil, `addCSSJSHack`)
+— la coque est seule à dessiner, tant que l'affichage n'est pas rouvert. Les
+fonctions que les blocs citent et qui dessinaient sont fournies vides ou minces,
+et marquées « coque » dans le fichier généré.
+
+**Pourquoi un découpage et pas le script entier** : `spotiduck-original.js` est
+un seul IIFE où l'affichage et la logique partagent les mêmes variables de
+closure ; l'injecter en entier redonnerait l'interface d'origine par-dessus la
+nôtre. Le wrapper ne fait donc que **nourrir** le moteur (`feed` : `track`,
+`position`, `repmode`, `isfav`, et le bouton de lecture que l'original cherche
+lui-même), et ne **double pilote rien** : la notification et les minuteries
+restent à la coque (le pont Kotlin les déduit déjà de `recMediaStatus`), `manageAll`
+n'est pas appelé en boucle, et le capteur d'origine ne se déclenche qu'une fois.
+
+**La porte, dans la coque** : module `Engine` (`src/inject/spotiduck-ui.js`).
+`Spotify.playPause` tente maintenant, dans l'ordre : ses candidats de markup →
+`actPlayPause` de l'origine (jugé sur l'icône) → `playFromUri` sur l'URI du
+contexte affiché → l'élément `<audio>`. Deux gardes, mesurés l'un et l'autre :
+`playContext()` **refuse** de commander tant que le capteur n'a pas vu
+d'appareil (sinon l'URL partirait en `from/undefined/to/undefined`, ce qui
+masquerait le secours), et `actSeek` de l'original **lève** sans curseur de
+progression — d'où l'enveloppe `call()` qui avale et répond faux.
+
+**Pose dans l'application** : `logicScript = readAsset("spotiduck-logic.js")` et
+injection dans `onPageStarted` **avant** l'identité et avant la page — le capteur
+rate tout sinon. `MODE_ORIGINAL` n'est pas touché : il reçoit le script d'origine
+complet, qui contient déjà ces blocs.
+
+**Vérifications** : `node tools/smoke-logic.mjs` **26/26** (capteur sur trafic
+simulé, corps de la commande Connect, déduplication du rapport, mécanique des
+`act*`, les trois gardes de la coque) — harnais en contexte `vm` **fidèle** :
+`window` y est l'objet global, sinon les lectures nues de l'original
+(`playing`, `manageWake`) ne signifient plus rien et le test ment ;
+`npm run smoke` 154/154 · audit 0/0 · `regress-audit` 38/38 ·
+`npm run android` 6/6 ressources (dont `spotiduck-logic.js`, 16 338 car.).
+
+**Ce qui reste ouvert, par ordre** : 1) `updMedia`/`manageAll` comme unique
+rapporteur (il faudra retirer le chemin de la coque, pas additionner) ; 2) le
+curseur de position écrit par l'origine (`actSeek` en secondes, la page mobile en
+millisecondes — la coque mesure déjà l'unité, elle doit la passer au moteur) ;
+3) `Net`/`Api` qui devinent leurs jetons pourraient lire `Engine.tokens()` ;
+4) l'affichage, repris plus tard — la page de bureau dans 412 px (§55) garde son
+chiffre à faire tomber à zéro.

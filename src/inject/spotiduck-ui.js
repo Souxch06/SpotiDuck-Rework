@@ -658,6 +658,88 @@
     pageSection: ["main section[data-testid]", "#main-view section[data-testid]"],
   };
 
+  /* ------------------------------------------------------------------ *
+   * Engine — la porte vers le **moteur d'origine** (`spotiduck-logic.js`,
+   * huit blocs de `src/original/spotiduck-original.js` repris tels quel,
+   * injectés par l'application avant la page).
+   *
+   * Ce que la coque ne sait pas faire sans lui, et qui n'a rien d'un détail :
+   * lire dans le trafic de la page l'identifiant d'appareil, le `Client-Token`
+   * et le `Bearer` de la session (le capteur d'origine), et commander la
+   * lecture à l'API Connect de Spotify par le pont Android — donc **sans
+   * dépendre d'un bouton que Spotify renomme chaque mois**. Ce que le moteur
+   * pourrait faire de plus (ses minuteries, son rapport `updMedia`) reste de
+   * son côté : la coque les pilote déjà, et deux pilotes sur la même minuterie
+   * est précisément le genre de bug qui redonne « la lecture se coupe ».
+   *
+   * Sur le banc de démonstration et dans les tests, le moteur est absent :
+   * chaque chemin retombe sur celui de la coque, et `live()` répond faux.
+   * ------------------------------------------------------------------ */
+  var Engine = {
+    get: function () {
+      return window.SpotiDuckLogic || null;
+    },
+    live: function () {
+      return !!window.SpotiDuckLogic;
+    },
+    /* L'original juge l'état sur l'icône du bouton de Spotify ; il lui faut
+       donc **ce bouton**. La coque le lui passe au moment où elle l'a trouvé,
+       et `playLoaded` part une seule fois (le pont l'attend pour l'écran
+       d'accueil du lecteur). */
+    sawButton: function () {
+      var e = Engine.get();
+      if (!e) return false;
+      var el = pick(SEL.play);
+      if (el && el !== Engine._btn) {
+        Engine._btn = el;
+        e.feed({ pBtn: el });
+      }
+      return !!el;
+    },
+    /* L'état mesuré par la coque, dans les variables que les blocs d'origine
+       lisent (`track`, `position`, `repmode`, `isfav`…). Nul rapport n'est
+       émis ici : `updMedia` n'est appelé que si l'on demande `manageAll`. */
+    feed: function () {
+      var e = Engine.get();
+      if (!e) return false;
+      return e.feed({
+        track: State.title || "",
+        artist: State.artist || "",
+        duration: State.duration || 0,
+        position: State.position || 0,
+        cover: State.cover || "",
+        repeat: String(!!State.repeat),
+        liked: !!State.liked,
+      });
+    },
+    /* Un appui via le moteur : `actPlayPause` est jugé sur l'icône, et répond
+       faux si le bouton d'origine n'est pas là — la coque reprend alors. */
+    toggle: function (want) {
+      var e = Engine.get();
+      if (!e) return false;
+      if (!Engine.sawButton()) return false;
+      return e.call("actPlayPause", !!want);
+    },
+    /* L'URI du contexte affiché — `spotify:playlist:…`, `spotify:album:…`.
+       C'est ce que l'application d'origine envoie à `playFromUri`, et le seul
+       chemin qui démarre la lecture quand la page n'a **aucun** bouton. */
+    contextUri: function () {
+      var m = (location.pathname || "").match(/\/(playlist|album|track|artist|episode)\/([A-Za-z0-9]+)/);
+      return m ? "spotify:" + m[1] + ":" + m[2] : null;
+    },
+    playContext: function () {
+      var e = Engine.get();
+      var uri = e && Engine.contextUri();
+      if (!uri) return false;
+      if (!e.tokens().device) return false; /* le capteur n'a encore rien vu */
+      return e.playUri(uri);
+    },
+    tokens: function () {
+      var e = Engine.get();
+      return e ? e.tokens() : null;
+    },
+  };
+
   var Spotify = {
     /* ---- locate the live progress <input type=range> (position/duration) ---- */
     progressInput: function () {
@@ -1027,6 +1109,14 @@
     },
     playPause: function (want) {
       if (this.click(SEL.play)) return true;
+      /* Aucun bouton vivant **pour la coque** : le moteur d'origine, lui, juge
+         l'icône du bouton qu'il a revendiqué — et s'il n'y a ni l'un ni
+         l'autre, `playFromUri` commande la lecture à l'API Connect par le pont
+         Android, ce qui ne dépend d'aucun repère de markup. Ces deux chemins
+         sont exactement ceux de l'application d'origine ; l'élément `<audio>`
+         reste le secours de la coque. */
+      if (want !== undefined && Engine.toggle(want)) return true;
+      if (want === true && Engine.playContext()) return true;
       /* Aucun bouton vivant : on agit sur l'élément. C'est la même chose que
          pressez le bouton de Spotify du point de vue de la lecture. */
       var go = want === undefined ? null : !!want;
@@ -3007,6 +3097,7 @@
       /* Le bouton de Spotify d'abord ; s'il n'y en a pas de vivant, le clavier
          du lecteur — et on ne revient sur l'affichage optimiste que si rien ne
          joue, seule situation où l'on sait que rien n'a pu se passer. */
+      Engine.feed();
       if (!Spotify.playPause(want)) {
         /* La référence est la **vérité du DOM avant l'affichage optimiste** :
            c'est avec elle qu'on jugera si le raccourci a changé quelque chose. */

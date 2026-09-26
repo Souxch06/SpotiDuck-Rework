@@ -85,6 +85,7 @@ class MainActivity : AppCompatActivity() {
     /* L'identité « bureau » de la coque : agent + navigator (client hints,
        greffons, plateforme). Voir `src/original/spotiduck-identity.js`. */
     private var identityScript: String = ""
+    private var logicScript: String = ""
     private var uiMode: String = MODE_DEFAULT
     /** Dernier lien non-web traité (converti, ou avalé) : affiché par la sonde. */
     private var lastHandledLink: String = ""
@@ -125,6 +126,12 @@ class MainActivity : AppCompatActivity() {
         originalScript = readAsset("spotiduck-original.js")
         originalFingerprint = readAsset("original-fingerprint.js")
         identityScript = readAsset("spotiduck-identity.js")
+        /* Le moteur de lecture de l'application d'origine (capteur de jetons,
+           `mngFetch`, `playFromUri`, `manageWake`, `act*`, `manageAll`,
+           `updMedia`) : huit blocs recopiés tels quel par
+           `tools/build-logic.mjs`. Il ne dessine rien — la coque dessine et lui
+           passe l'état qu'elle mesure. */
+        logicScript = readAsset("spotiduck-logic.js")
 
         nativeScript = runCatching { assets.open("native-mode.js").bufferedReader().use { it.readText() } }
             .getOrElse {
@@ -322,6 +329,16 @@ class MainActivity : AppCompatActivity() {
                         view.evaluateJavascript(originalFingerprint, null)
                     }
                     return
+                }
+                /* Le moteur **avant** l'identité et avant la page : son capteur
+                   est un `window.fetch` posé sur la toute première requête —
+                   c'est là que passent le `Client-Token`, le `Bearer` et
+                   l'identifiant d'appareil de la session. Injecté après, il n'a
+                   rien vu passer et `playFromUri` n'a plus d'appareil où
+                   commander : la coque retomberait sur le seul clic de bouton,
+                   ce qui est exactement la fragilité qu'on répare. */
+                if (logicScript.isNotEmpty()) {
+                    view.evaluateJavascript(logicScript, null)
                 }
                 /* L'identité avant tout le reste : la WebView annonce déjà
                    Chrome Windows, mais `navigator` répondait encore
