@@ -4141,3 +4141,75 @@ graves) · smoke 154/154 · assertions du moteur 29/29 · audit 0/0 · regress 4
 `npm run android` 6/6 · bundle 501 661 car. portant la version 2.11.25. Ce qui manque
 toujours, et ne peut venir que de ton téléphone : la ligne `· commandes …` du
 diagnostic.
+
+## §61 — La coque est découpee : un fichier par section (v2.11.26)
+
+« J'avais dit de structurer au maximum, chaque action, chaque logique dans son
+fichier dédié. » C'était bien la demande, et mon tour précédent s'était arrêté à la
+vérification sans faire la découpe. La voici, et la raison pour laquelle elle est
+acceptable alors qu'une réécriture de 9 108 lignes ne l'est pas : **elle est
+mécanique et prouvée par les octets**.
+
+**La règle de la passe** : après découpe, le bundle reconstruit doit être
+*identique octet pour octet* à celui d'avant. `cmp` sur `dist/spotiduck-ui.js`.
+Si un seul octet bouge, la découpe est rejetée. C'est la mesure qui peut échouer —
+et elle a échoué une première fois pour la bonne raison : le build avait planté sur
+un filtre de noms (`\d\d-` au lieu de `\d{2,3}-`), donc `cmp` comparait l'ancien
+fichier et passait vacuument. La preuve a été refaite en **supprimant la sortie
+avant** de la reconstruire :
+
+    rm -f dist/spotiduck-ui.js && node tools/build.mjs && cmp /tmp/bundle-avant.js dist/spotiduck-ui.js
+    → 505 547 octets, identiques.
+
+**Ce qui vit maintenant où**
+
+- `src/inject/ui/NNN-slug.js` — **39 modules**, un par section de la coque telle
+  qu'elle était déjà écrite (les bannières de section existaient depuis le début,
+  numérotées pour les premières — `0. Tiny helpers`, `10. Actions — optimistic UI +
+  verification` — et muettes pour les autres, nées des passes ultérieures : `Net`,
+  `Home`, `Library`, `Stats`, `Sheets`, `Viewport`, `Device`…). Les fichiers sont
+  **bruts** : le morceau de la coque, indentation comprise. Aucun en-tête ajouté,
+  aucun déindentage — c'est ce qui rend la recollade triviale et vérifiable.
+- `src/inject/spotiduck-ui.js` — réduit à **57 lignes / 2 908 octets** (contre
+  379 371) : le contrat en en-tête, l'ouverture de l'IIFE, le marqueur
+  `/* @@MODULES@@ */`, la fermeture.
+- `tools/ui-source.mjs` — l'assembleur, **unique définition de l'ordre** (tri par
+  nom, donc par numéro gravé dans la bannière). Six outils lisaient le fichier
+  source à la main (audit, deux fumées, régressions, sonde, générateur du moteur,
+  portique) : ils passent tous par lui. Sans ça, la découpe aurait remplacé un
+  monolithe par six monolithes en désaccord — et l'audit aurait déclaré « plus de
+  module X » alors que X est vivant dans un fichier.
+- `tools/split-ui.mjs` — le découpeur, rejouable (`--dry` pour voir le plan). Il
+  **vérifie avant d'écrire** : le recollement doit reproduire le fichier d'origine,
+  sinon rien n'est touché. Il refuse aussi une section qui ne se parse pas seule,
+  ce qui est la définition d'une frontière mal posée.
+- `src/inject/native-mode.js` — le mode « page d'origine habillée » avait **une
+  source dans le dossier livré** : cinq passes de correctifs y avaient été posées
+  directement dans `android/app/src/main/assets/`, si bien que rien ne pouvait dire
+  si l'asset était à jour de quoi que ce soit. C'est un asset **copié** depuis
+  `src/` comme les autres ; les octets livrés sont restés identiques (`cmp` ✓), le
+  téléphone ne verra aucune différence.
+
+**Ce qui empêche la découpe de se refermer** — `npm run check` règle 9, quatre
+contrôles nouveaux, tous déterministes : la forme du nom (`NNN-slug.js` — un module
+mal nommé n'est **pas** assemblé, et le bundle restant valide, rien ne le dit
+avant le téléphone) ; la contiguïté de la numérotation (l'ordre est un contrat :
+`State` avant `Mirror`, `Mirror` avant `UI`) ; chaque module se parse **seul** ;
+l'enveloppe ne contient plus aucune bannière de section et reste sous 8 000 octets.
+L'auto-test du portique (`--selftest`) a gagné une mutation : déposer
+`src/inject/ui/_selftest-oublie.js` doit être signalé. **6/6**.
+
+**Ce que la découpe ne fait pas**, et c'est délibéré : elle ne découpe **pas à
+l'intérieur** d'une section. `Actions` reste un fichier de 311 lignes parce que ses
+membres sont les propriétés d'un objet, pas des unités indépendantes — les sortir
+chacune dans son fichier imposerait de réécrire l'objet en assembleur de morceaux,
+c'est-à-dire de toucher à la sémantique (portée, `this`, ordre d'initialisation)
+pour un gain de découpage nul. La granularité utile est la section ; là où une
+section est grosse, elle l'est pour une raison (`002-spotify-adapter-only`,
+178 lignes qui sont *le* contrat avec le DOM de Spotify).
+
+**Mesures** : bundle identique octet pour octet · smoke **154/154** · assertions du
+moteur **29/29** · audit **0/0** · regress **43/43** (les cas qui visaient la coque
+mutent désormais **le module qui contient le texte** : le motif est localisé, pas
+recollé à la main) · `check` 0 erreur · auto-test **6/6** · asset `native-mode.js`
+livré inchangé.

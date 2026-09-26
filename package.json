@@ -1,6 +1,6 @@
 {
   "name": "spotiduck-ui",
-  "version": "2.11.25",
+  "version": "2.11.26",
   "private": true,
   "description": "Mobile UI layer (Spotify-app-like shell) injected into the SpotiDuck WebView",
   "type": "module",
@@ -13,13 +13,14 @@
     "smoke:logic": "node tools/smoke-logic.mjs",
     "audit": "node tools/audit-links.mjs",
     "regress-audit": "node tools/regress-audit.mjs",
-    "verify": "npm run build && npm run check && npm run smoke && npm run audit && npm run regress-audit",
+    "verify": "npm run build && npm run check && npm run check:selftest && npm run smoke && npm run audit && npm run regress-audit",
     "sync:android": "node tools/sync-android.mjs",
     "build:original": "node tools/build-original.mjs && node tools/build-original-fit.mjs",
     "build:logic": "node tools/build-logic.mjs",
     "demo": "node tools/serve.mjs",
     "shots": "node tools/screenshots.mjs",
-    "silence": "node tools/make-silence.mjs"
+    "silence": "node tools/make-silence.mjs",
+    "split:ui": "node tools/split-ui.mjs"
   },
   "keywords": [
     "spotiduck",

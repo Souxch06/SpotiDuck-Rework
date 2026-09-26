@@ -30,7 +30,8 @@
  *      un XML de ressource mal formé, une signature Kotlin déclarée deux fois, une
  *      référence §NN vers une section de doc qui n'existe plus.
  *
- * Détail de la conception et justifications : docs/UI-REWORK.md §60.
+ * Détail de la conception et justifications : docs/UI-REWORK.md §60, et §61 pour
+ * la découpe de la coque en modules (règle 9).
  *
  * Les règles 1 à 5 ne demandent aucun outil lourd : acorn (déjà dépendance de
  * l'audit) tient lieu de compilateur pour le JS, jsdom pour le XML, git pour la
@@ -49,6 +50,7 @@ import { join, dirname, relative, resolve, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 
+import { uiModules, uiSource, MARKER, UI_SUBDIR, SHELL_SUBPATH } from "./ui-source.mjs";
 const HERE = fileURLToPath(import.meta.url);
 const root = resolve(dirname(HERE), "..");
 
@@ -79,7 +81,7 @@ function runOnce() {
  * on ne peut pas prouver qu'il tombe n'est pas un portique, c'est une décoration.
  * -------------------------------------------------------------------------- */
 if (process.argv.includes("--selftest")) {
-  const TMP = ["src/inject/_selftest.js", "src/inject/_selftest-orphan.css"];
+  const TMP = ["src/inject/_selftest.js", "src/inject/_selftest-orphan.css", "src/inject/ui/_selftest-oublie.js"];
   const STALE = "android/app/src/main/assets/spotiduck-ui.js";
   const mutations = [
     {
@@ -101,6 +103,11 @@ if (process.argv.includes("--selftest")) {
       name: "entrée de construction non suivie par git (règle 3)",
       apply: () => writeFileSync(join(root, TMP[1]), ".x { color: red }\n", "utf8"),
       must: "pas suivis par git",
+    },
+    {
+      name: "module mal nommé, donc non assemblé (règle 9)",
+      apply: () => writeFileSync(join(root, "src/inject/ui/_selftest-oublie.js"), "var oublie = 1;\n", "utf8"),
+      must: "que l'assembleur ignore",
     },
     {
       name: "référence de doc pendante (règle 6)",
@@ -273,10 +280,7 @@ if (!pairs.length) {
   const ktFiles = walk(join(root, "android/app/src/main/java"));
   const kt = ktFiles.map((f) => readFileSync(f, "utf8")).join("\n").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
   const provided = new Set([...kt.matchAll(/\bfun\s+([A-Za-z0-9_]+)\s*\(/g)].map((m) => m[1]));
-  const js = ["src/inject/spotiduck-ui.js", "dist/spotiduck-logic.js", "android/app/src/main/assets/native-mode.js"]
-    .filter(has)
-    .map(read)
-    .join("\n")
+  const js = [uiSource(root), ["dist/spotiduck-logic.js", "android/app/src/main/assets/native-mode.js"].filter(has).map(read).join("\n")].join("\n")
     .replace(/\/\*[\s\S]*?\*\//g, "");
   const wanted = new Set();
   for (const m of js.matchAll(/\bAndBridge\.([A-Za-z0-9_]+)\s*\(/g)) wanted.add(m[1]);
@@ -377,10 +381,19 @@ if (!pairs.length) {
 
   const engines = pkg.engines && pkg.engines.node;
   if (!engines) warnings.push("package.json sans « engines.node » : un générateur qui exige une syntaxe récente ne le dit qu'à l'exécution.");
-  const orphans = readdirSync(join(root, "tools"))
-    .filter((f) => f.endsWith(".mjs"))
-    .map((f) => `tools/${f}`)
-    .filter((p) => !referenced.has(p) && !wfText.includes(p) && !readFileSync(join(root, p), "utf8").includes("depuis un script npm"));
+  /* Un outil que personne n'appelle est un outil qui meurt en silence. Mais un
+     outil **importé par un autre outil** est appelé : le qualifier d'orphelin
+     pousserait à câbler un faux script npm pour faire taire le portique. */
+  const toolTexts = new Map();
+  for (const f of readdirSync(join(root, "tools")).filter((x) => x.endsWith(".mjs"))) {
+    toolTexts.set(`tools/${f}`, readFileSync(join(root, "tools", f), "utf8"));
+  }
+  const imported = new Set();
+  for (const [path, text] of toolTexts) {
+    for (const m of text.matchAll(/from\s+"\.\/([\w.-]+\.mjs)"/g)) imported.add(`tools/${m[1]}`);
+  }
+  const orphans = [...toolTexts.keys()]
+    .filter((p) => !referenced.has(p) && !imported.has(p) && !wfText.includes(p) && !toolTexts.get(p).includes("depuis un script npm"));
   if (orphans.length) warnings.push(`outil(s) dans tools/ que ni npm ni les workflows n'appellent : ${orphans.join(", ")} — entrée humaine à citer dans docs/ARCHITECTURE.md, ou à retirer`);
 }
 
@@ -399,6 +412,82 @@ if (!pairs.length) {
     if (!bundle.includes(String(version))) errors.push(`le bundle ne porte pas la version ${version} : il n'est pas reconstruit depuis ce package.json.`);
     if (!read("tools/build.mjs").includes("__SD_VERSION__")) errors.push("tools/build.mjs ne pose plus window.__SD_VERSION__ : plus rien, sur un téléphone, ne permet de savoir quelle version tourne.");
     else ok.push(`version ${version} portée par le bundle (le diagnostic du téléphone la cite)`);
+  }
+}
+
+/* 9 · la coque découpée reste assemblable ---------------------------------- */
+/* Depuis la découpe (v2.11.26), `src/inject/spotiduck-ui.js` est une enveloppe et
+   le corps vit un fichier par section dans `src/inject/ui/`. Un découpage sans
+   règles de tenue est un découpage qui se referme : quelqu'un recolle une section
+   dans l'enveloppe, ou dépose un `utils.js` que l'assembleur ignore. Six contrôles,
+   tous déterministes :
+     · la forme du nom — trois chiffres, un slug, `.js` : un module mal nommé n'est
+       PAS livré, et le bundle restant valide, rien ne le dit avant le téléphone ;
+     · numérotation contiguë depuis 000 : l'ordre d'assemblage est le nom de fichier,
+       et l'ordre est un contrat (State avant Mirror, Mirror avant UI) ;
+     · chaque module se parse **seul** : une frontière au milieu d'une déclaration
+       donne un bundle qui marche aujourd'hui et un module que plus personne n'ose
+       éditer ;
+     · chaque module commence par sa bannière : le nom du fichier et le contenu
+       doivent raconter la même section ;
+     · l'enveloppe ne contient plus de bannière et reste petite (elle est faite pour
+       l'en-tête et les deux accolades de l'IIFE, pas pour un 40e module oublié) ;
+     · l'assemblage réussit — c'est `ui-source.mjs` qui porte les contrôles de
+       tête/queue et de longueur, donc ici on appelle et on rapporte. */
+{
+  const dir = join(root, UI_SUBDIR);
+  if (!existsSync(dir)) {
+    errors.push(`${UI_SUBDIR}/ absent : la coque n'a plus de modules — \`node tools/split-ui.mjs\`.`);
+  } else {
+    const names = readdirSync(dir).sort();
+    const FORM = /^\d{3}-[a-z0-9][a-z0-9-]*\.js$/;
+    const stray = names.filter((n) => !FORM.test(n));
+    if (stray.length) {
+      errors.push(
+        `${UI_SUBDIR} contient des fichiers que l'assembleur ignore : ${stray.join(", ")}. ` +
+          "Un module mal nommé n'est pas livré dans le bundle — et comme le bundle reste valide, rien ne le dit."
+      );
+    }
+    const nums = names.filter((n) => FORM.test(n)).map((n) => Number(n.slice(0, 3)));
+    const trous = [];
+    for (let i = 0; i < nums.length; i++) if (nums[i] !== i) trous.push(`attendu ${String(i).padStart(3, "0")}, trouvé ${String(nums[i]).padStart(3, "0")}`);
+    if (trous.length) {
+      errors.push(
+        `numérotation des modules non contiguë (${trous[0]}) : l'ordre d'assemblage est le nom de fichier. Relancer \`node tools/split-ui.mjs\`.`
+      );
+    }
+    let frontieres = 0;
+    for (const m of uiModules(root)) {
+      try {
+        parse("(function () {" + m.text + "})", { ecmaVersion: "latest", sourceType: "script" });
+      } catch (e) {
+        errors.push(`${m.path} ne se lit pas seul (${String(e.message).slice(0, 70)}) : frontière de section mal posée — relancer tools/split-ui.mjs plutôt que d'éditer les bannières.`);
+        frontieres++;
+      }
+      if (!m.text.startsWith("  /* ---")) {
+        errors.push(`${m.path} ne commence pas par une bannière de section : le nom du fichier et son contenu ne racontent plus la même chose.`);
+        frontieres++;
+      }
+    }
+    const shell = read(SHELL_SUBPATH);
+    if ((shell.split(MARKER).length - 1) !== 1) {
+      errors.push(`${SHELL_SUBPATH} ne contient pas exactement un marqueur ${MARKER.trim()} : l'assemblage ne sait plus où poser les modules.`);
+    }
+    if (new RegExp("^ {2}/\\* -{60,} \\*$", "m").test(shell.replace(MARKER, ""))) {
+      errors.push(`${SHELL_SUBPATH} contient encore une bannière de section : du code de la coque est revenu dans l'enveloppe au lieu de rester dans son module.`);
+    }
+    if (shell.length > 8000) {
+      errors.push(`${SHELL_SUBPATH} pèse ${shell.length} octets (8 000 au plus) : l'enveloppe n'est pas un module de plus, c'est la tête et la queue de l'IIFE.`);
+    }
+    try {
+      const a = uiSource(root);
+      const vus = uiModules(root).length;
+      if (vus !== names.filter((n) => FORM.test(n)).length) errors.push("l'assembleur ne voit pas le même nombre de modules que le répertoire");
+      else ok.push(`${vus} modules assemblés en ${a.length} octets de source, frontières vérifiées`);
+    } catch (e) {
+      errors.push(`assemblage de la coque impossible : ${String(e.message).slice(0, 170)}`);
+    }
+    if (!stray.length && !trous.length && !frontieres) ok.push("noms, numérotation et bannières des modules tiennent le découpage");
   }
 }
 

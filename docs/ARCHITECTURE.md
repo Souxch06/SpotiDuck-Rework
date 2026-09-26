@@ -17,9 +17,12 @@ livraison** (`npm run sync:android`, appelé par `npm run android`). Avant la pa
 une porte : on pouvait livrer des ressources construites par une chaîne partielle.
 
 ```
-src/inject/*.css ─┐ (14 feuilles, dans l'ordre des numéros de fichier)
+src/inject/ui/NNN-*.js ─┐ (39 modules, un par section ; assemblés par
+                        │  tools/ui-source.mjs — l'ordre vient du nom du fichier)
+src/inject/*.css ─┐     │
                   ├─ tools/build.mjs ──────────────► dist/spotiduck-ui.js   [LA COQUE]
-src/inject/spotiduck-ui.js ─┘   (+ window.__SD_VERSION__ depuis package.json)
+src/inject/spotiduck-ui.js ─┘ (enveloppe : en-tête, ouverture de l'IIFE,
+                               marqueur @@MODULES@@, fermeture, + __SD_VERSION__)
 
 src/original/spotiduck-original.js ─┬─ tools/build-original-fit.mjs ─► dist/original-fingerprint.js
                                     │                                 ► dist/spotiduck-original.js
@@ -67,7 +70,9 @@ Trois propriétés sont voulues, et `npm run check` les vérifie :
 
 | Fichier | Rôle | Ce qu'il ne fait pas |
 | --- | --- | --- |
-| `src/inject/spotiduck-ui.js` | la coque : 41 modules dans une IIFE, `Engine` (porte vers le moteur), `Bridge`, `Spotify.click/press/key`, `Actions.*`, `Gestures`, `diagnose()` | ne connaît aucune règle métier de l'original |
+| `src/inject/ui/NNN-*.js` | **la coque, un fichier par section** (39) : `002-spotify-adapter-only` (tout ce qui lit la page), `012-actions-optimistic-verification` (les commandes), `027-les-appels-api` (le réseau), `034-gestures-swipe-mini`, etc. Assemblées dans l'ordre par `tools/ui-source.mjs` | ne se livre pas seule : seul `dist/` est injecté |
+| `src/inject/spotiduck-ui.js` | l'**enveloppe** : contrat en en-tête, ouverture de l'IIFE, marqueur `@@MODULES@@`, fermeture | ne contient plus de code de section — 8 000 octets maximum, contrôlé |
+| `src/inject/native-mode.js` | le mode « page d'origine habillée » (défaut d'un compte gratuit) ; **source** de l'asset livré du même nom | hors bundle : asset séparé, copié par `sync:android` |
 | `src/inject/NN-*.css` | l'habillage, numéroté dans l'ordre d'application | rien de comportemental |
 | `dist/spotiduck-logic.js` (généré) | le moteur : capteur de jetons, `playFromUri`, veille, réveils, `act*`, `manageAll`, `updMedia` | **ne dessine rien** ; ses sorties d'origine qui touchaient la page (`updNpbState`, `clickNP`, `closeNowPlay`, `addCSSHacks`) restent des no-ops fournis par la coque |
 | `native-mode.js` | repli « page desktop habillée », utilisé par les comptes gratuits | ne touche pas au moteur |
@@ -117,6 +122,8 @@ Règles de la coque (rappelées en tête de `src/inject/spotiduck-ui.js`) :
 | Grammaire Kotlin complète | `android.yml` → `compileDebugKotlin` (le seul à avoir raison) |
 | XML de ressource mal formé | `check` (jsdom en `text/xml`) — faute avant `aapt2`, donc avant quatre minutes de build |
 | Référence `§NN` vers une section de doc inexistante | `check` (les deux formes de titres sont admises : `## 6.` et `## §30 —`) |
+| Module de coque mal nommé (donc **non livré**), numérotation à trou, frontière au milieu d'une déclaration, code revenu dans l'enveloppe | `check` règle 9 ; et `node tools/split-ui.mjs` refuse d'écrire si son recollement ne reproduit pas l'original |
+| Ressource livrée sans source (le mode habillé, avant la 2.11.26) | `sync-android.mjs` la copie depuis `src/`, donc `check` règle 2 la compare |
 | `scripts` npm / workflows qui pointent dans le vide | `check` règle 7 |
 | Feuille CSS absente du bundle, bundle sans la version du dépôt | `check` règle 8 |
 | Régression de comportement (gestes, file d'attente, mini-lecteur, moteur) | `smoke` (154) + `smoke-logic` (29) |

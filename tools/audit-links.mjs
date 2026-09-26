@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 import { readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 
+import { uiSource } from "./ui-source.mjs";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p) => readFileSync(join(root, p), "utf8");
 
@@ -40,7 +41,10 @@ const bridgeKt = read("android/app/src/main/java/com/spotiduck/app/Bridge.kt");
 const kotlinMethods = new Set(
   [...bridgeKt.matchAll(/@JavascriptInterface\s+fun\s+(\w+)/g)].map((m) => m[1])
 );
-const runtime = read("src/inject/spotiduck-ui.js");
+/* La coque est assemblee depuis src/inject/ui/ : lire lenveloppe ne verrait que le
+   marqueur, et l audit declarerait « plus de module X » alors que X existe. On passe
+   donc par le meme assembleur que la construction. */
+const runtime = uiSource(root);
 const usedBridgeNames = new Set();
 for (const m of runtime.matchAll(/Bridge\.call\(\s*"(\w+)"/g)) usedBridgeNames.add(m[1]);
 /* Les raccourcis (`mediaStatus`, `sleepLock`…) appellent `call("<nom>")` : on
@@ -55,7 +59,7 @@ for (const m of originalCalls.matchAll(/AndBridge\.(\w+)\s*\(/g)) usedBridgeName
    elle qui annonce l'état de connexion et qui demande le nettoyage de l'état du
    formulaire. Sans cette lecture, l'audit réclamerait la suppression de méthodes
    bien utilisées. */
-const nativeCalls = read("android/app/src/main/assets/native-mode.js");
+const nativeCalls = read("src/inject/native-mode.js");
 for (const m of nativeCalls.matchAll(/AndBridge\.(\w+)\s*\(/g)) usedBridgeNames.add(m[1]);
 
 for (const name of usedBridgeNames) {
@@ -607,7 +611,7 @@ if (!/PlayerWidget\.refresh/.test(service)) {
   errors.push("PlaybackService : le widget n'est plus redessiné quand la lecture change");
 }
 
-const nativeAsset = read("android/app/src/main/assets/native-mode.js");
+const nativeAsset = read("src/inject/native-mode.js");
 if (!/showUiChooser/.test(nativeAsset)) {
   errors.push("native-mode.js : plus rien n'ouvre le sélecteur d'interface (appui long)");
 }
@@ -815,10 +819,10 @@ if (!/request\.deny\(\)/.test(activity)) {
 if (!/VIEWPORT_META_JS/.test(activity) || !/device-width/.test(activity)) {
   errors.push("MainActivity : le meta viewport n'est plus forcé");
 }
-if (!/width=device-width/.test(read("src/inject/spotiduck-ui.js"))) {
+if (!/width=device-width/.test(runtime)) {
   errors.push("la couche injectée ne pose plus le meta viewport");
 }
-if (!/width=device-width/.test(read("android/app/src/main/assets/native-mode.js"))) {
+if (!/width=device-width/.test(read("src/inject/native-mode.js"))) {
   errors.push("le mode bêta ne pose plus le meta viewport");
 }
 
@@ -2000,7 +2004,7 @@ for (const m of libraryCode.matchAll(/(?:Settings|this)\.labels\[([^\]]+)\]/g)) 
   /* La source, pas le bundle : `regress-audit` mutera ces fichiers pour prouver
      que ces garde-fous tombent — et un contrôle qui lit `dist/` ne verrait
      jamais la main mise sur `src/`. */
-  const shell = read("src/inject/spotiduck-ui.js");
+  const shell = runtime;
   const kt = activitySource;
   /* 1 · la porte du moteur doit juger l'appui, pas l'appel. */
   if (!/addEventListener\("click", spy, true\)/.test(shell) || !/return pressed;/.test(shell)) {

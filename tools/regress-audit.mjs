@@ -8,12 +8,13 @@
 import { readFileSync, writeFileSync, renameSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { join } from "node:path";
+import { uiModules, UI_SUBDIR, SHELL_SUBPATH } from "./ui-source.mjs";
 
 const root = process.cwd();
 const files = {
   ui: "src/inject/spotiduck-ui.js",
   dev: "src/inject/76-device.css",
-  shim: "android/app/src/main/assets/native-mode.js",
+  shim: "src/inject/native-mode.js",
   widget: "android/app/src/main/res/layout/widget_player.xml",
   shell: "src/inject/20-shell.css",
   kt: "android/app/src/main/java/com/spotiduck/app/MainActivity.kt",
@@ -21,8 +22,29 @@ const files = {
   probe: "tools/probe-coop.mjs",
   logi: "dist/spotiduck-logic.js",
 };
+/* « ui » n'est plus un fichier : depuis la découpe en modules, la coque est la
+   coquille (src/inject/spotiduck-ui.js) plus les 39 modules de src/inject/ui/. Un
+   cas de régression qui cible du texte de la coque doit donc être rejoué **sur le
+   fichier qui contient ce texte**, sinon la mutation ne change rien et le cas tombe
+   pour la mauvaise raison. On localise la pièce, on ne recolle rien. */
+const SHELL = SHELL_SUBPATH;
+const uiPaths = () => [SHELL].concat(uiModules(root).map((m) => m.path));
 const originals = {};
-for (const k of Object.keys(files)) originals[k] = readFileSync(join(root, files[k]), "utf8");
+for (const k of Object.keys(files)) if (k !== "ui") originals[k] = readFileSync(join(root, files[k]), "utf8");
+const uiOriginals = new Map();
+for (const p of uiPaths()) uiOriginals.set(p, readFileSync(join(root, p), "utf8"));
+originals.ui = [...uiOriginals.values()].join("\n");
+
+/** La pièce de la coque qui contient `from` (et `after` si l'ancre est donnée). */
+function uiTarget(from, after) {
+  const parts = [{ path: SHELL, text: uiOriginals.get(SHELL) }].concat(
+    uiModules(root).map((m) => ({ path: m.path, text: m.text }))
+  );
+  const hits = parts.filter((p) => p.text.includes(from));
+  const withAnchor = after ? hits.filter((p) => p.text.includes(after)) : hits;
+  const chosen = (withAnchor.length ? withAnchor : hits)[0];
+  return chosen || null;
+}
 
 const CASES = [
   ["ui", "out.duration = this.ticksToMs(dur);", "out.duration = dur * 1000;", "unité mesurée"],
@@ -75,14 +97,26 @@ const CASES = [
 ];
 
 const restore = () => {
-  for (const k of Object.keys(files)) writeFileSync(join(root, files[k]), originals[k]);
+  for (const k of Object.keys(files)) if (k !== "ui") writeFileSync(join(root, files[k]), originals[k]);
+  for (const [p, text] of uiOriginals) writeFileSync(join(root, p), text, "utf8");
 };
 process.on("exit", restore);
 
 let caught = 0;
 let missed = [];
 for (const [file, from, to, expect, after] of CASES) {
-  let text = originals[file];
+  let text = file === "ui" ? uiOriginals.get(SHELL) : originals[file];
+  let cible = files[file];
+  if (file === "ui") {
+    const part = uiTarget(from, after);
+    if (!part) {
+      missed.push(`${expect} :: motif introuvable dans la coque (ni coquille ni modules)`);
+      console.log(`? ${expect} — motif introuvable dans les modules`);
+      continue;
+    }
+    text = part.text;
+    cible = part.path;
+  }
   if (after) {
     const cut = text.indexOf(after);
     if (cut < 0) {
@@ -102,7 +136,7 @@ for (const [file, from, to, expect, after] of CASES) {
     console.log(`? ${expect} — motif introuvable`);
     continue;
   }
-  writeFileSync(join(root, files[file]), text.replace(from, to));
+  writeFileSync(join(root, cible), text.replace(from, to));
   let out = "";
   try {
     out = execSync("node tools/audit-links.mjs", { encoding: "utf8" });

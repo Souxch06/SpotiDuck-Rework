@@ -17,6 +17,7 @@ import { dirname, resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { JSDOM } from "jsdom";
 
+import { uiSource } from "./ui-source.mjs";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p) => readFile(join(ROOT, p), "utf8");
 
@@ -1258,7 +1259,7 @@ await checkAsync("the mini player carries the original app's fourth row", async 
   ]) {
     assert(row.querySelector("." + cls), `commande manquante dans le mini-lecteur : ${cls}`);
   }
-  const src = await read("src/inject/spotiduck-ui.js");
+  const src = uiSource(ROOT);
   assert(/miniQueue\.addEventListener/.test(src), "le bouton file d'attente n'est pas câblé");
   assert(/miniVol\.addEventListener|miniVol\.addEventListener/.test(src), "le volume n'est pas câblé");
   assert(
@@ -1274,7 +1275,7 @@ await checkAsync("the nav bar and the title bar never cover each other", async (
      temps. La règle a changé le 25/09 — la navigation gagne (elle est seule à
      permettre de revenir), la barre de titre n'est plus que pour les sous-pages,
      qui ont leur bouton retour. */
-  const src = await read("src/inject/spotiduck-ui.js");
+  const src = uiSource(ROOT);
   assert(/var navOn = !isSubPage;/.test(src), "la barre de navigation n'est plus liée aux seules sous-pages");
   assert(
     /e\.topbar\.classList\.toggle\("is-visible", isSubPage\)/.test(src),
@@ -1371,7 +1372,7 @@ await checkAsync("the shell can never blank the page it dresses", async () => {
   const api = dom.window.SpotiDuckUI;
   assert(api && api.content && api.content.restored.length >= 1, "le garde-fou n'est pas joignable");
   assert(
-    /data-sd-unhidden/.test(await read("src/inject/spotiduck-ui.js")),
+    /data-sd-unhidden/.test(uiSource(ROOT)),
     "le marqueur du garde-fou a disparu de la coque"
   );
   dom.window.close();
@@ -4083,7 +4084,7 @@ await checkAsync("the bottom tab bar is off by default", async () => {
   // La disposition d'origine a la navigation en haut : la barre du bas reste
   // disponible (réglage) mais ne s'affiche pas d'elle-même. Le défaut se lit
   // dans la source — les tests précédents ont pu le basculer à l'exécution.
-  const src = await read("src/inject/spotiduck-ui.js");
+  const src = uiSource(ROOT);
   assert(/tabbar:\s*false/.test(src), "the default for `tabbar` must be false");
   SD.set("tabbar", false);
   assert(doc.documentElement.classList.contains("sd-no-tabbar"), "sd-no-tabbar missing");
@@ -4769,7 +4770,7 @@ await checkAsync("un redémarrage de la coque ne branche pas deux fois la page",
 await checkAsync("no polling loops left behind", async () => {
   // The mock itself uses one interval for playback; the layer must not add any
   // 2s/5s DOM scraping loop (that was the main source of jank).
-  const raw = await read("src/inject/spotiduck-ui.js");
+  const raw = uiSource(ROOT);
   const src = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, ""); // strip comments
   const loops = (src.match(/setInterval\(/g) || []).length;
   assert(loops === 0, `runtime still uses setInterval (${loops}×)`);
