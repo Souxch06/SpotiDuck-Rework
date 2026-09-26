@@ -34,11 +34,14 @@ const DESKTOP_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " +
   "Chrome/150.0.0.0 Safari/537.36";
 
-/** L'agent que `MainActivity.userAgentFor` donne à la coque depuis la 2.11.20
- *  (`MOBILE_UA`) : c'est lui qui fait servir à Spotify la page du **mobile**,
- *  celle pour laquelle la coque est dessinée. Mesurer la coque avec l'agent de
- *  bureau ne mesurait plus l'application — et laissait passer « la page est
- *  rognée des deux tiers » sous un verdict « tout atteignable ». */
+/** L'agent que `MainActivity.userAgentFor` réserve à `MODE_NATIVE`, et qui
+ *  sert ici à mesurer **l'alternative** : la page du téléphone, que la coque
+ *  ne reçoit pas — le lecteur web mobile de Spotify refuse la lecture à un
+ *  compte gratuit (`docs/UI-REWORK.md` §42), et c'est ce refus qui a fait
+ *  choisir la page de bureau. Ce qui reste vrai, et qui est la leçon de la
+ *  2.11.20 : la sonde doit mesurer **l'agent que l'application donne
+ *  vraiment**. Mesurer la coque avec un agent qu'elle n'utilise pas, c'est
+ *  valider une configuration que personne ne voit. */
 const MOBILE_UA =
   "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) " +
   "Chrome/150.0.0.0 Mobile Safari/537.36";
@@ -1372,6 +1375,20 @@ async function main() {
       label: "coque-mobile",
       url: "https://open.spotify.com/intl-fr/",
       mode: "notre",
+      agent: "tel",
+      mobile: true,
+    },
+    /* **La configuration livrée, mesurée telle quelle** : la vraie page en
+       `/intl-fr/`, l'agent de bureau que l'application annonce à Spotify pour
+       les modes habillés, le meta `device-width` posé par l'application — donc
+       une page de bureau mise en page sur 412 px. C'est **la** mesure qui
+       répond à « tous les affichages sont buggés » : si la page déborde du
+       cadre ici, la règle « mise en page trop large pour l'écran » fait échouer
+       la course, avec l'élément fautif nommé. */
+    {
+      label: "coque-bureau",
+      url: "https://open.spotify.com/intl-fr/",
+      mode: "notre",
       mobile: true,
     },
   ];
@@ -1492,7 +1509,12 @@ async function main() {
       /* L'interface d'origine sert la page de bureau (agent de bureau + son
          empreinte de géométrie) ; la coque, elle, est mesurée dans les
          conditions de l'application : agent Android, meta `device-width`. */
-      await page.setUserAgent(target.mode === "original" ? DESKTOP_UA : MOBILE_UA);
+      /* L'agent suit le contrat de `MainActivity.userAgentFor` : page de
+         bureau pour les modes habillés (`DESKTOP_UA`), agent du téléphone pour
+         `MODE_NATIVE` et pour les contextes marqués `agent: "tel"`. Un contexte
+         qui ignorerait ce champ mesurerait une configuration que l'application
+         ne livre pas. */
+      await page.setUserAgent(target.agent === "tel" ? MOBILE_UA : DESKTOP_UA);
       /* `isMobile: true` = les règles de mise en page de Chrome mobile, donc la
          même que la WebView : sans meta, largeur de mise en page de 980 px et
          dézoom pour tenir à l'écran. Les autres pages restent en mode bureau

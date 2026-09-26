@@ -1920,38 +1920,67 @@ for (const m of libraryCode.matchAll(/(?:Settings|this)\.labels\[([^\]]+)\]/g)) 
 }
 
 /* --------------------------------------------------------------------------
-   10. L'agent envoyé à Spotify, la coque et la sonde doivent se tenir.
-   `userAgentFor` décide quelle page est servie (mobile ou bureau) ; la coque
-   est dessinée pour la page mobile ; l'empreinte Windows ne doit plus être
-   posée que pour l'interface d'origine ; et la sonde de CI doit mesurer la
-   configuration réellement livrée, pas une autre. Chacun de ces quatre fils
-   coupés redonne le défaut de la 2.11.19 (« la page est rognée des deux tiers,
-   le lecteur ne fait rien ») sans qu'aucun test de la coque ne bronche.
+   10. L'agent servi à Spotify, la feuille de la coque et la sonde de CI.
+   `userAgentFor` décide quelle page est servie. La règle est un **arbitrage
+   mesuré**, pas un goût : la page du téléphone rend la mise en page exacte du
+   téléphone mais refuse la lecture à un compte gratuit (§42), la page de
+   bureau joue mais est mise en page sur 412 px — d'où `05-original-fit.css`
+   et le stationnement de sa barre. Ces trois fils se coupent sans qu'aucun
+   test de la coque ne bronche, parce qu'ils ne sont dans aucun fichier que la
+   coque importe. Ce groupe est là pour ça.
    -------------------------------------------------------------------------- */
 {
   const kt = activitySource;
-  const uaFor = /private fun userAgentFor\(mode: String\): String =\s*\n?\s*if \(([^)]*)\) (DESKTOP_UA|MOBILE_UA) else (DESKTOP_UA|MOBILE_UA)/.exec(kt);
+  const uaFor =
+    /private fun userAgentFor\(mode: String\): String =\s*\n?\s*if \(([^)]*)\)\s*(DESKTOP_UA|MOBILE_UA)\s+else\s+(DESKTOP_UA|MOBILE_UA)/.exec(kt);
   if (!uaFor) {
-    errors.push("`userAgentFor` n'est plus reconnaissable : la coque peut redevenir servie par la page de bureau sans que rien ne le dise");
-  } else if (uaFor[2] === "DESKTOP_UA" && /MODE_ORIGINAL/.test(uaFor[1])) {
-    /* le bon sens : bureau seulement pour l'interface d'origine */
-  } else if (uaFor[2] === "MOBILE_UA" && /MODE_NATIVE/.test(uaFor[1])) {
-    errors.push("`userAgentFor` ne donne l'agent de bureau qu'au mode natif : la coque (MODE_INJECT) redemande la page de bureau dans un écran de téléphone");
+    errors.push(
+      "`userAgentFor` n'est plus reconnaissable : vérifier qu'elle sert toujours la page de bureau aux modes habillés, puis étendre ce garde-fou volontairement"
+    );
   } else {
-    errors.push("`userAgentFor` n'envoie plus l'agent mobile à la coque : Spotify servirait la mise en page du bureau dans 412 px");
-  }
-  if (!/if \(uiMode == MODE_ORIGINAL && identityScript\.isNotEmpty\(\)\)/.test(kt)) {
-    errors.push("l'empreinte Windows est reposée à tous les modes : `navigator` se contredit avec l'agent Android, et Spotify répond « navigateur non compatible » (lecture désactivée)");
-  }
-  const parked = read("src/inject/10-base.css");
-  for (const tag of ["aside", "footer", "div"]) {
-    if (!new RegExp(`html\\.sd-mobile ${tag}\\[data-testid="now-playing-bar"\\]`).test(parked)) {
-      errors.push(`la feuille ne met de côté la barre de lecture que sous l'étiquette « aside » : la page mobile (${tag}) réapparaîtrait sous la nôtre`);
+    const cond = uaFor[1].replace(/\s+/g, "");
+    const yes = uaFor[2], elseBranch = uaFor[3];
+    const okNativeMobile = /MODE_NATIVE\)?$/.test(cond) && yes === "MOBILE_UA" && elseBranch === "DESKTOP_UA";
+    const okNotNative = /!={0,1}MODE_NATIVE/.test(cond) && yes === "DESKTOP_UA" && elseBranch === "MOBILE_UA";
+    const okWhen = /when/.test(cond) && /MODE_NATIVE[\s\S]{0,40}MOBILE_UA/.test(kt);
+    if (!(okNativeMobile || okNotNative || okWhen)) {
+      errors.push(
+        "`userAgentFor` ne sert plus la page de bureau aux modes habillés : la coque recevrait le lecteur web mobile, qui refuse la lecture à un compte gratuit (« Lecture désactivée », §42) — l'inverse ferait servir la mise en page du bureau dans un écran de 412 px"
+      );
     }
   }
+  /* La règle sans sa raison se fait retourner au tour suivant : celui qui
+     l'a écrite croyait bien faire. Le motif doit rester collé au code. */
+  const doc = kt.slice(Math.max(0, kt.indexOf("private fun userAgentFor") - 1800), kt.indexOf("private fun userAgentFor"));
+  if (!/mwp\.playback\.error\.protected\.content|Lecture désactivée/.test(doc) || !/§42/.test(doc)) {
+    errors.push(
+      "l'explication de l'agent n'est plus écrite au-dessus de `userAgentFor` : sans la cause mesurée (page mobile = lecture refusée hors Premium), la règle est inversée à la prochaine passe"
+    );
+  }
+  /* La barre de lecture de Spotify doit rester de côté **quelle que soit
+     l'étiquette** que la page lui donne : `aside` sur la page de bureau,
+     `footer`/`div` sur celle du téléphone. Ne connaître que `aside`, c'est
+     laisser la sienne réapparaître sous la nôtre dès que l'agent change. */
+  const parked = read("src/inject/10-base.css");
+  for (const tag of ["aside", "footer", "div"]) {
+    if (!new RegExp(`${tag}\\[data-testid="now-playing-bar"\\]`).test(parked)) {
+      errors.push(`la feuille ne met de côté la barre de lecture que sous l'étiquette « aside » : la page ${tag === "div" ? "du téléphone" : tag} la rendrait sous la nôtre`);
+    }
+  }
+  /* La sonde doit mesurer **la configuration livrée** : l'agent vient du champ
+     `agent` de la cible (et non d'un goût par défaut), et un contexte existe
+     pour chacune des deux pages en cause, sur la vraie URL. */
   const probe = read("tools/probe-coop.mjs");
-  if (!/setUserAgent\(target\.mode === "original" \? DESKTOP_UA : MOBILE_UA\)/.test(probe)) {
-    errors.push("la sonde de CI ne mesure plus la configuration de l'application : elle peut valider une page que le téléphone ne reçoit pas");
+  if (!/setUserAgent\(target\.agent === "tel" \? MOBILE_UA : DESKTOP_UA\)/.test(probe)) {
+    errors.push("la sonde de CI ne choisit plus l'agent par cible : elle peut valider une page que le téléphone ne reçoit pas");
+  }
+  for (const label of ['label: "coque-bureau"', 'label: "coque-mobile"']) {
+    if (!probe.includes(label)) {
+      errors.push(`la sonde de CI n'a plus de contexte ${label} : la mise en page réellement livrée n'est plus mesurée sur la vraie page`);
+    }
+  }
+  if (!/d\u00e9passe|trop large pour l'\u00e9cran/.test(probe)) {
+    errors.push("la sonde de CI n'a plus de règle « mise en page trop large pour l'écran » : le défaut de la 2.11.19 redeviendrait invisible");
   }
 }
 

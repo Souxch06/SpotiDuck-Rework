@@ -3832,74 +3832,49 @@ quoi jouer : sur une page sans session, la coque retombe sur ses autres chemins
 
 ---
 
-## §55 — L'agent et la page ne se correspondent plus (v2.11.20)
+## §55 — Quelle page l'application reçoit, et comment le prouver (v2.11.20)
 
-Le signalement tenait en deux lignes : « le lecteur ne fait rien » et « onglet
-bibliothèque → une playlist → pas d'affichage, ou juste une image buggée ». Ni la
-coque ni ses testids n'y étaient pour quelque chose : **l'application demandait
-à Spotify la page du bureau, et la mettait en page sur la largeur du
-téléphone.**
+**Le reproche.** « Tous les affichages sont buggés. » Le signe mesuré depuis deux
+passes : la page de Spotify est **mise en page plus large que l'écran** — sur le
+banc, `div` de 3830 px pour 412 px de viewport (`dépasse=3404`), `control-button-skip-forward`
+rejeté de 75 px hors écran, et un `div` de 412 px coupé par un parent de 555 px.
+L'utilisateur voit une bande vide à droite et des commandes hors du cadre.
 
-Le choix est dans `MainActivity.userAgentFor` : depuis la 2.11.18,
-`MODE_INJECT` (notre coque) recevait `DESKTOP_UA`, `MOBILE_UA` n'étant réservé
-qu'au mode natif. Et `FAKE_DESKTOP_VIEWPORT = false` : la géométrie de 1920 px
-que l'empreinte d'origine utilise pour *loger* cette page n'est pas posée.
-Résultat mesuré par la sonde Chrome : une mise en page conçue pour 1280 px et
-plus dans 412 px — `div 3830px dépasse=3404`, `control-button-skip-forward 62px
-dépasse=75`, `coupes-par-un-parent: div 412<555 (35%)`. Une playlist ouverte
-depuis la bibliothèque n'est alors plus qu'un en-tête et sa pochette : le reste de
-la grille est hors champ. Et les commandes de la barre de bureau tombent à
-droite, hors de l'écran : le bouton existe, l'appui n'y parvient pas.
+**Ce que j'ai mesuré ici, avec Chrome sur la vraie page** (deux courses, 36243902642
+puis 36250802636). En donnant à la WebView l'agent **du téléphone**, Spotify sert
+son lecteur web mobile (`mobile-web-player.447f0d93.js`, 6 scripts) : la mise en
+page tombe à `412px`, `débordement=0` — le défaut d'affichage disparaît. Mais
+`#main-view`, `#global-nav-bar`, `#Desktop_LeftSidebar_Id` y sont **absents** (la
+coque n'y a plus d'ancre) et, surtout, `docs/UI-REWORK.md` §42 a déjà établi,
+mesure après connexion à l'appui, que **cette page refuse la lecture à un compte
+gratuit** (`mwp.playback.error.protected.content`, « Lecture désactivée »).
 
-`src/original/README.md` posait la règle sans que personne n'en tire la
-conséquence : l'interface d'origine habille la page **bureau** *parce qu'elle
-croit* à un écran 1920×1080 ; « la coque maison met la page en page sur la
-largeur réelle du téléphone ». Les deux ensemble, c'était le défaut. La §43
-avait pourtant déjà touché ce fil en retirant l'imposture de géométrie — sans
-retirer l'agent avec.
+**Donc : essayé et annulé.** L'inversion de `userAgentFor` a été écrite, vérifiée,
+puis **revertée** dans la même passe. Changer d'agent réglait la largeur en
+cassant le lecteur — et le lecteur passe avant : c'est l'arbitrage §42. La règle
+est maintenant écrite **avec sa raison** au-dessus de `userAgentFor`, et l'audit
+refuse une règle sans sa raison (« sans la cause mesurée, la règle est inversée à
+la prochaine passe ») — parce que c'est exactement ce qui vient de m'arriver.
 
-### Ce qui est changé
+**Ce qui est gardé**, mesuré et sans contrepartie :
 
-1. `userAgentFor` : `DESKTOP_UA` pour `MODE_ORIGINAL` **seule** ; la coque et le
-   mode natif reçoivent `MOBILE_UA`. Spotify sert alors
-   `mobile-web-player.447f0d93.js`, la page pensée pour la largeur du
-   téléphone — vérifié en CI : `mobile : 200, 309 052 o, 6 scripts`, et côté
-   DRM `widevine=ok / MediaKeys=function` avec cet agent, donc la lecture n'est
-   pas bloquée pour autant.
-2. L'empreinte Windows (`spotiduck-identity.js`, `navigator.userAgent`,
-   `platform: Win32`, client hints) n'est plus injectée que pour l'interface
-   d'origine. La laisser sur la coque reviendrait à servir la page mobile en
-   affirmant être un navigateur de bureau — le mélange précis que Spotify
-   appelle « votre navigateur n'est pas compatible », avec le message de lecture
-   désactivée qui va avec.
-3. La feuille met désormais la barre de Spotify de côté **par son repère**, plus
-   par son étiquette : `aside`, `footer` et `div` portant
-   `data-testid="now-playing-bar"`. La page mobile ne loge pas sa barre dans un
-   `<aside>` ; l'ancienne règle ne la touchait pas, et sa barre — avec ses
-   commandes — réapparaissait sous la nôtre.
+| Changement | Pourquoi |
+| --- | --- |
+| `10-base.css` stationne la barre de lecture **par repère** — `aside`, `footer`, `div` portant `data-testid="now-playing-bar"` | la page du téléphone ne la nomme pas `aside` ; ne connaître que `aside`, c'est la laisser réapparaître sous la nôtre dès qu'un agent change. L'élément reste vivant (1 px, transparent) pour que la coque puisse le commander |
+| la sonde choisit l'agent **par cible** (`agent: "tel"`) | un contexte qui force l'agent de bureau ne mesure pas l'application ; c'est comme ça que « tout atteignable » a pu couvrir une page rognée des deux tiers |
+| deux contextes sur la vraie page : `coque-bureau` (livré) et `coque-mobile` (l'alternative mesurée) | la question est tranchée par un relevé, plus par une préférence |
+| 6ᵉ règle du garde-fou : une mise en page plus large que l'écran, sans ancêtre rognant et hors `position:fixed` → **faute** | le défaut de l'utilisateur devient une course CI qui échoue, avec l'élément fautif nommé |
+| audit groupe 10 + 5 cas de `regress-audit` | ces fils ne passent par aucun fichier que la coque importe : sans eux, la 2.11.19 serait repartie telle quelle |
 
-### Et la vérification, dans l'ordre
+**Ce que cette version ne prétend pas avoir réglé.** La largeur de la page de
+bureau dans un cadre de 412 px reste le vrai sujet ; elle est confiée à
+`05-original-fit.css`, et le nombre est désormais **publié à chaque course** par
+le contexte `coque-bureau` (`accueil → mise en page=…px débordement=…`). La
+prochaine passe se juge là-dessus : faire tomber ce débordement à zéro côté
+feuille de style, pas en changeant de page.
 
-* La sonde de CI (`tools/probe-coop.mjs`) **mesure maintenant la configuration
-  livrée** : agent mobile, meta `device-width`, notre coque, sur la vraie page
-  (`coque-mobile`). Elle ne peut plus valider en silence une page que le
-  téléphone ne reçoit pas — c'était exactement l'angle mort des trois versions
-  précédentes, où le feu vert voulait dire « correct, dans une configuration
-  qui n'existe pas ».
-* Règle dure nouvelle (la sixième) : un élément de la page **plus large que
-  l'écran d'un quart ou plus**, sans ancêtre qui le rogne, fait échouer le run —
-  c'est la signature d'une page de bureau dans un écran de téléphone. Les
-  débordements voulus (carrousels) ne sont pas comptés, ni les éléments fixes.
-* Les quatre garde-fous d'audit vérifiés par `node tools/regress-audit.mjs`
-  (**37/37**) : agent par mode, empreinte limitée à l'interface d'origine,
-  mise de côté de la barre sur les trois étiquettes, sonde mesurant l'agent de
-  la coque. Un garde-fous plus ancien, qui vérifiait l'agent d'origine en
-  collant à une formulation précise, a été réécrit : il serait mort à la
-  première reformulation — et c'est bien ainsi que la régression est passée.
-
-### Ce qui n'est pas vérifiable ici
-
-Le téléphone reste le seul endroit où la **page mobile connectée** se mesure :
-largeur réelle de mise en page après le changement d'agent, positions des
-commandes, et surtout l'appui qui doit enfin agir. La sonde prouve la
-configuration et la géométrie, pas la session.
+**Vérifications locales de cette passe** : build 489 866 car. (14 parties), smoke
+154/154, audit 0 erreur / 0 avertissement, `regress-audit` 38/38 régressions
+détectées, `npm run android` 5/5 ressources. Ce que la CI ne peut pas prouver :
+la page **connectée** sur le téléphone — la largeur réelle après ces changements,
+la position des commandes et l'effet des appuis restent à confirmer sur l'appareil.
