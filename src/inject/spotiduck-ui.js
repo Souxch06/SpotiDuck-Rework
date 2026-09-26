@@ -761,6 +761,30 @@
       return e ? e.tokens() : null;
     },
     /**
+     * L'état **confirmé** de la coque, passé au moteur. Ce n'est pas un rapport
+     * de plus : c'est ce qui rend vivante la logique d'origine. Ses blocs
+     * décident d'après `playing` (verrouillage d'écran, veille) et sa
+     * resynchronisation par le trafic de la page (`PUT /track-playback/`) ne
+     * s'enclenche qu'après `ffDone`, posé par l'installateur. Sans ce fil, le
+     * moteur est là mais aveugle — et la coque reste la seule à savoir si ça
+     * joue, ce qui est exactement l'état où était le téléphone hier.
+     */
+    sync: function (st) {
+      var e = Engine.get();
+      if (!e || !st) return false;
+      e.feed({
+        track: st.title || "",
+        artist: st.artist || "",
+        duration: st.duration || 0,
+        position: st.position || 0,
+        cover: st.cover || "",
+        repeat: String(!!st.repeat),
+        liked: !!st.liked,
+      });
+      e.setPlaying(!!st.playing);
+      return true;
+    },
+    /**
      * « Les touches ne fonctionnent pas » ne se discute pas, ça se **mesure**.
      * Pour chaque commande : combien de candidats la page offre, si le meilleur
      * est vivant, si l'appui est consommé, et ce que le moteur d'origine aurait
@@ -1475,6 +1499,12 @@
     /** Payload keys kept identical to the previous implementation so the
      *  existing Kotlin/Java notification code keeps working untouched. */
     mediaStatus: function (s) {
+      /* le moteur d'origine lit le même état (voir `Engine.sync`) */
+      try {
+        Engine.sync(s);
+      } catch (e) {
+        /* jamais au détriment du rapport */
+      }
       this.call(
         "recMediaStatus",
         JSON.stringify({

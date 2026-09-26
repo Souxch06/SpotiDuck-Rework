@@ -4027,3 +4027,39 @@ compte, pause réseau).
 **Vérifications** : build du moteur 17 585 car. · smoke 154/154 · moteur 29/29 ·
 audit 0/0 (groupe 11, six maillons de la chaîne appui → Android) · regress
 43/43 · `npm run android` 6/6.
+
+## §59 — Le réparateur de lecture revient de l'application d'origine (v2.11.24)
+
+Le dépôt officiel `23fpsz/SpotiDuck-Releases` ne contient **aucun code** : README,
+hôtes publicitaires, captures, et une release « latest-beta » construite depuis un
+dépôt privé. L'APK y est inaccessible depuis ce sandbox (l'hôte d'assets de release
+refuse la connexion), donc le code d'origine lisible reste `src/original/` — qui est
+déjà le script de l'application d'origine, assemblé depuis la déobfuscation publique.
+
+En le relisant pour le **bug de lecture**, un manque est apparu : la passe précédente
+avait porté huit blocs et **laissé dehors le corps de `firstFuck`** — or c'est lui qui
+répare. Deux blocs de plus, repris tels quel (`veille` 313 car., `installation`
+1135 car.) :
+
+- la branche d'écran (verrouiller seulement si la lecture tourne en arrière-plan,
+  jamais pendant une vidéo) ;
+- **la revendication du bouton lecture/pause de la page** (`.fuckd`, `playLoaded`),
+  et surtout la **danse de déverrouillage** : si dix secondes après une demande de
+  lecture rien ne joue, l'origine annonce `unlock` au pont, **presse suivant** — ce
+  qui force Spotify à élire un appareil de lecture, le vrai mécanisme du
+  « Sélectionnez un appareil » qui rend le lecteur muet — puis arme `trigUnlock`
+  (rechargement tant que le bouton reste désactivé) ;
+- et `ffDone`, dont dépend la resynchronisation d'état par le trafic de la page
+  (`PUT /track-playback/` → `manageAll`) : sans lui le capteur **lit sans décider**.
+
+L'installateur (côté coque, marqué comme tel) rejoue ces deux blocs sur les mutations
+de la page et garde l'intervalle de 5 s d'origine comme filet : le rythme d'origine
+était trop lent pour un premier appui. `Engine.sync`, branché sur le seul endroit où
+l'état part vers Android, tient le moteur au courant de ce qui joue — sans double
+rapport (`updMedia` déduplique, le pont aussi).
+
+**Vérifications** : moteur 21 709 car. (10 blocs verrouillés) · smoke 154/154 ·
+assertions du moteur 29/29 · audit 0/0 · regress 43/43 · `npm run android` 6/6.
+Ce qui manque toujours, et ne peut venir que de ton téléphone : la ligne
+`· commandes …` du diagnostic, qui dira si la page offre des candidats, s'ils sont
+vifs, et si l'appui est consommé.

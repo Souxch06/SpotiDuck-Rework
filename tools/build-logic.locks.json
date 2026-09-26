@@ -1,7 +1,7 @@
 {
   "bundle": {
-    "len": 17585,
-    "md5": "a5fd68c32a"
+    "len": 21709,
+    "md5": "194cc149ad"
   },
   "blocks": {
     "état": {
@@ -35,6 +35,14 @@
     "updMedia": {
       "len": 584,
       "md5": "ea9be6efc0"
+    },
+    "veille": {
+      "len": 313,
+      "md5": "83ef026a63"
+    },
+    "installation": {
+      "len": 1135,
+      "md5": "4305820bb1"
     }
   }
 }

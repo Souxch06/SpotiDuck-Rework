@@ -85,6 +85,20 @@ const SLICES = [
     to: "window.updNpbState = function",
   },
   {
+    name: "veille",
+    why: "la branche de l'intervalle d'origine qui décide de l'écran : verrouillé seulement si la lecture tourne en arrière-plan, et jamais pendant une vidéo",
+    from: 'if (playing && document.visibilityState == "hidden" && !!document.querySelector(".VideoPlayer__container video")) {',
+    to: 'if (typeof npBtn == "undefined") {',
+    wrap: "runVeille",
+  },
+  {
+    name: "installation",
+    why: "LE réparateur de lecture : il revendique le bouton lecture/pause de la page (pBtn, marqué .fuckd), prévient Android que le lecteur est vivant, et — si dix secondes après une demande de lecture rien ne joue — annonce « unlock » au pont, presse suivant (c'est ce qui force Spotify à élire un appareil de lecture) et arme trigUnlock. Il pose aussi ffDone, condition de la resynchronisation d'état par le trafic de la page. Sans lui, le capteur lit sans jamais décider et la coque reste seule à cliquer.",
+    from: 'let _0x48ace8 = document.querySelector("aside button[data-testid=control-button-playpause]:not(.fuckd)");',
+    to: 'document.querySelectorAll("section[data-testid=home-page]',
+    wrap: "runInstallation",
+  },
+  {
     name: "manageWake",
     why: "l'écran : verrouillé seulement si la lecture tourne en arrière-plan",
     from: "window.manageWake = function",
@@ -253,6 +267,7 @@ const glueTop = `
      recouvre : c'est elle qui répond si le capteur lève. */
   var originalFetch = window.fetch;
   var captureErrors = 0;
+  var installeErrors = 0;
   var emit = function (kind, value) {
     var list = cbs[kind] || [];
     for (var i = 0; i < list.length; i++) { try { list[i](value); } catch (e) {} }
@@ -281,7 +296,15 @@ const glueTop = `
    l'absence de `"use strict"` dans le wrapper, et le fait que la nourriture
    fournie plus bas de simples **affectations**, jamais des `var`. */
 const body = blocks
-  .map((b) => `\n  /* ---- bloc « ${b.name} » — ${b.why} ---- */\n` + b.body)
+  .map((b) => {
+    const head = `\n  /* ---- bloc « ${b.name} » — ${b.why} ---- */\n`;
+    /* un bloc « wrap » est un morceau **du corps** d'une fonction de l'original
+       (le corps de son intervalle) : on le nomme, on n'y touche pas, et c'est
+       l'installateur du bas du fichier qui décide quand le rejouer. */
+    return b.wrap
+      ? head + `  function ${b.wrap}() {\n` + b.body + "\n  }\n"
+      : head + b.body;
+  })
   .join("\n");
 
 const glueBottom = `
@@ -395,6 +418,52 @@ const glueBottom = `
     };
   }
 
+  /* ------------------------------------------------------------ *
+   * L'installateur (coque). Les deux blocs « veille » et « installation » sont
+   * le corps de l'intervalle d'origine, qui tournait toutes les 5 secondes :
+   * trop lent pour un premier appui — le temps que l'intervalle se réveille, la
+   * coque a déjà déclaré la commande manquée. On les rejoue donc sur les
+   * mutations de la page, et l'intervalle d'origine reste comme filet.
+   *
+   * Rien n'est réécrit : le geste est celui de l'application d'origine
+   * (revendication .fuckd, playLoaded, danse de déverrouillage à 10 s), seule
+   * la cadence vient de nous. Le classList.add("fuckd") est une écriture dans
+   * un nœud de la page — exception assumée au repos « on n'écrit pas dans
+   * l'arbre de React », parce que c'est un marqueur inerte qui empêche
+   * l'origine de revendiquer deux fois le même bouton.
+   * ------------------------------------------------------------ */
+  var installe = function () {
+    try {
+      runVeille();
+      runInstallation();
+    } catch (e) {
+      installeErrors++;
+    }
+  };
+  var observer = null;
+  var watchBodies = function () {
+    try {
+      if (!document.body || observer) return;
+      observer = new MutationObserver(function () {
+        if (typeof window.requestAnimationFrame === "function") {
+          window.requestAnimationFrame(installe);
+        } else {
+          installe();
+        }
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+    } catch (e) {}
+  };
+  /* Le filet d'origine : la cadence de son intervalle, à l'identique. */
+  setInterval(installe, 5000);
+  if (typeof document !== "undefined") {
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", watchBodies);
+    } else {
+      watchBodies();
+    }
+    installe();
+  }
   /* Le moteur est là : la coque peut cesser de compter sur le seul markup. */
   emit("state", { ready: true });
 })();
