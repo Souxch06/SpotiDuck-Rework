@@ -269,16 +269,29 @@ function load(sandbox) {
   ok("coque : un appui du moteur n'est cru réussi que s'il a pressé",
     /addEventListener\("click", spy, true\)[\s\S]{0,200}return pressed;/.test(shell),
     "sans ce spy, `actPlayPause` répond vrai même sans presser");
-  ok("coque : la commande API ne se fait jamais passer pour un succès",
-    /e\.playUri\(uri\);\s*return false;/.test(shell));
+  /* Contrat de la 2.11.27 : `playContext` a le droit de dire « commande engagée »
+     — jamais « la musique joue ». Le `return false` d'origine n'était pas une
+     pudeur, c'était une garde : il empêchait que l'envoi soit pris pour un
+     résultat. Rendre vrai sans marque de commande ferait revenir le défaut avec un
+     signe inverse : la coque croirait la lecture lancée et ne la vérifierait plus. */
+  ok("coque : la commande API est annoncée engagée, et jamais jouée",
+    /e\.playUri\(uri\);[\s\S]{0,1400}?Engine\._sent = \{ want: true[^}]*\};\s*return true;/.test(shell)
+      && !/e\.playUri\(uri\);\s*return true;/.test(shell),
+    "ni marque `_sent`, ou un succès affirmé sur un simple envoi");
+  ok("coque : le verdict de la page est rapporté au moteur",
+    /syncFromDom\("(verify-play|await-engine)"\);\s*(\/\*[\s\S]{0,220}?\*\/\s*)?Engine\.feed\(\);/.test(shell),
+    "un moteur qu'on ne remet pas à l'état mesuré rejoue d'après un souvenir");
   /* Et le capteur ne doit **pas** détourner le trafic de la page : c'est ce
      détourage (flux d'état du lecteur via `HttpURLConnection`, sans
      `AbortSignal`) qui rendait toutes les touches du bas muettes. */
   ok("moteur : le capteur écoute, il n'intercepte pas",
     !/resp\s*=\s*await mngFetch\(url,opts\)/.test(src) && /return oriFetch\.apply\(this, args\);/.test(src),
     "la page doit rester maître de ses requêtes");
+  /* L'ordre compte, pas l'adjacence : un commentaire ne doit pas faire tomber
+     cette vérification — elle est tombée une fois pour ce motif, ce qui n'a rien
+     cassé d'autre que la confiance dans le banc. */
   ok("l'état mesuré est bien repassé au moteur à chaque appui",
-    /Engine\.feed\(\);\n\s*if \(!Spotify\.playPause\(want\)\)/.test(shell));
+    /Engine\.feed\(\);[\s\S]{0,420}if \(!Spotify\.playPause\(want\)\)/.test(shell));
 }
 
 const failed = results.filter((r) => !r.pass);

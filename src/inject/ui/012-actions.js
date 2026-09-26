@@ -75,7 +75,11 @@
     fallback: function (key, watch, avant) {
       var self = this;
       var ref = typeof avant === "string" ? avant : this.snapshot(watch);
-      Spotify.key(key);
+      /* Une touche `null` est un cas voulu : « juge, et parle si rien ne joue,
+         mais n'envoie aucune commande ». C'est ce dont l'escalade a besoin quand
+         une commande est déjà en route — deux pilotes, ici, c'est la lecture qui
+         s'annule. */
+      if (key) Spotify.key(key);
       /* **Vérifier, comme partout ailleurs.** Le raccourci a très bien pu agir :
          on relit le lecteur peu après, et on ne parle que si rien n'a bougé —
          une alarme à tort est un défaut, un bouton muet aussi.
@@ -93,6 +97,81 @@
         if (self.snapshot(watch) === ref) self.blame();
       }, 800);
     },
+    /**
+     * **Le secours séquencé.** Utilisé quand une commande est déjà partie : on
+     * laisse la page répondre, on relit, et seulement si rien n'a bougé on presse
+     * le clavier du lecteur. Le délai n'est pas une fantaisie : `playFromUri` est
+     * un aller-retour réseau hors WebView (le pont Android), 1,6 s est ce que
+     * l'application d'origine se donnait avant de considérer la commande perdue.
+     */
+    awaitEngine: function (key, watch, ref, delay) {
+      var self = this;
+      this._later(function () {
+        syncFromDom("await-engine");
+        /* Rapporter au moteur ce que la page vient de dire : sans cela, il juge ses
+           propres décisions d'après un état qui a changé sans lui. */
+        Engine.feed();
+        var dom = Spotify.readPlaying();
+        if (Engine.inFlight() && (dom === null || String(dom) === ref)) {
+          /* La commande n'a pas été servie : elle est soldée, et le clavier
+             reprend ses droits — mais lui seul, plus deux pilotes. */
+          Engine._sent = null;
+          self.fallback(key, watch, ref);
+          return;
+        }
+        if (dom !== null && String(dom) !== ref) {
+          Engine.settleSent(!!(dom === "true" || dom === true));
+          return; /* la page a obéi : rien à dire, rien à ajouter */
+        }
+        self.fallback(key, watch, ref);
+      }, delay || 1600);
+    },
+    /**
+     * Vérifier que la page obéit, puis escalader s'il le faut. `ref` est la
+     * vérité du DOM **avant** l'appui ; la page est dite obéissante quand elle
+     * répond autre chose. Un délai de 1,5 s : assez pour un aller-retour de
+     * l'API par le pont, assez court pour que l'utilisateur n'ait pas encore
+     * relâché son doigt sur l'écran.
+     */
+    verifyPlay: function (ref) {
+      var self = this;
+      this._later(function () {
+        syncFromDom("verify-play");
+        /* Rapporter au moteur ce que la page vient de dire : sans cela, il juge ses
+           propres décisions d'après un état qui a changé sans lui. */
+        Engine.feed();
+        var dom = Spotify.readPlaying();
+        if (dom !== null && String(dom) !== ref) return; /* la page a obéi */
+        if (Engine.inFlight()) return; /* une commande du moteur roule déjà */
+        if (Engine.playContext()) {
+          /* L'API prend le relais : on la juge, sans seconde commande à côté.
+             `null` comme touche = « pas de clavier, seulement un verdict ». */
+          self.awaitEngine(null, "playing", ref, 1600);
+          return;
+        }
+        self.fallback(" ", "playing", ref);
+      }, 1500);
+    },
+    /* Les jugements à venir. Une minuterie anonyme qui survit à la commande
+       suivante est un pilote fantôme : le verdict d'un appui antérieur se met à
+       écrire dans un état qui ne le concerne plus. `playPause` vide donc le
+       registre à chaque appui — un appui, une échéance — et le banc s'en sert
+       pour rendre une page calme. */
+    _pending: [],
+    _later: function (fn, ms) {
+      var self = this;
+      var id = setTimeout(function () {
+        var i = self._pending.indexOf(id);
+        if (i >= 0) self._pending.splice(i, 1);
+        fn();
+      }, ms);
+      this._pending.push(id);
+      return id;
+    },
+    _clearPending: function () {
+      for (var i = 0; i < this._pending.length; i++) clearTimeout(this._pending[i]);
+      this._pending = [];
+    },
     /** Ce qu'on regarde pour savoir si la commande a fait quelque chose. */
     snapshot: function (watch) {
       if (watch === "playing") return String(State.playing);
@@ -101,6 +180,7 @@
       return (State.title || "") + "|" + (State.artist || "");
     },
     playPause: function () {
+      this._clearPending(); /* un appui = un verdict : celui d'avant n'a plus rien à juger */
       var want = !State.playing;
       Auto.wantPlay = want;
       Auto.selfPaused = !want;
@@ -114,14 +194,30 @@
          du lecteur — et on ne revient sur l'affichage optimiste que si rien ne
          joue, seule situation où l'on sait que rien n'a pu se passer. */
       Engine.feed();
+      /* La référence est la **vérité du DOM avant l'affichage optimiste** : c'est
+         avec elle qu'on jugera si quoi que ce soit a changé quelque chose. */
+      var ref = String(!want);
       if (!Spotify.playPause(want)) {
-        /* La référence est la **vérité du DOM avant l'affichage optimiste** :
-           c'est avec elle qu'on jugera si le raccourci a changé quelque chose. */
-        this.fallback(" ", "playing", String(!want));
+        if (want && Engine.inFlight()) {
+          /* **Ne rien envoyer maintenant.** Une commande du moteur est en cours :
+             presser Espace par-dessus, c'est l'annuler. On attend l'échéance, on
+             relit la page, et ce n'est que si rien n'a bougé que le clavier du
+             lecteur est pressé — une fois, après, jamais en parallèle. */
+          this.awaitEngine(" ", "playing", ref);
+        } else {
+          this.fallback(" ", "playing", ref);
+        }
       } else if (want) {
-        /* Starting playback may require the "Écouter sur cet appareil"
-           hand-off first, and Spotify sometimes swallows the first request
-           entirely — both cases are handled by the Auto module. */
+        /* **Un appui obtenu n'est pas une lecture obtenue.** Le bouton était là,
+           l'événement a été consommé — et la page ne joue toujours pas, parce que
+           la WebView n'est pas l'appareil de lecture ou que Spotify a avalé la
+           demande. Ce n'est pas un échec de la chaîne de commande, donc rien ne
+           s'escaladait : l'affichage optimiste se rollbackait tout seul, et le
+           seul filet restait `Auto.armStuck`, dix secondes plus tard, qui passe
+           par « piste suivante ». On vérifie donc la page, puis on escalade
+           **dans l'ordre** — l'API du moteur d'abord, le clavier ensuite, jamais
+           les deux en même temps. */
+        this.verifyPlay(ref);
         setTimeout(function () {
           Auto.maybeTakeover();
         }, 400);

@@ -80,7 +80,15 @@ const CASES = [
      sans appui, et le trafic de la page détourné par le capteur. */
   ["ui", 'return pressed;', "return true;", "ne vérifie plus que le bouton a réellement reçu"],
   ["ui", '      if (want !== undefined && Engine.toggle(want)) return true;\n', "", "markup → moteur → élément → API"],
-  ["ui", "e.playUri(uri);\n      return false;", "e.playUri(uri);\n      return true;", "annonce un succès sur un simple envoi"],
+  /* Les cinq fils de la 2.11.27 : chacun est coupé séparément, et l'audit doit le
+     nommer. Un fil de la chaîne de commande qui se coupe sans que rien ne le dise,
+     c'est exactement comment « la musique ne se lance pas » a survécu à trois
+     versions. */
+  ["ui", "      Engine._sent = { want: true, uri: uri, at: Date.now() };\n", "", "ne marque plus la commande « partie »"],
+  ["ui", "      Engine.settleSent(!!st.playing);\n", "", "solde de commande n'est plus branché"],
+  ["ui", "      if (want && Engine.inFlight()) {\n", "      if (true) {\n", "n'est plus séquencé derrière la commande"],
+  ["ui", "        this.verifyPlay(ref);\n", "", "plus de `verifyPlay`"],
+  ["ui", "    awaitEngine: function (key, watch, ref, delay) {\n", "    awaitEngine: function () {\n", "plus d'`awaitEngine`"],
   ["logi", "  return oriFetch.apply(this, args);", "  resp = await mngFetch(url,opts);\n  return oriFetch.apply(this, args);", "intercepte à nouveau le trafic"],
   ["kt", 'view.evaluateJavascript(logicScript, null)', '/* retiré */', "n'est plus injecté **avant**"],
   /* Les secours de lecture de la 2.11.19 (« les boutons ne font rien »). */

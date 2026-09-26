@@ -128,6 +128,11 @@
     /* exposed for tests / the demo harness */
     _internals: {
       Spotify: Spotify,
+      /* Le moteur, exposé comme le reste : le banc doit pouvoir solder une commande
+         en cours entre deux tests. Sans cela, une marque de 4 s survivait au test
+         qui l'avait posée et muetait le secours du test suivant — un vert obtenu
+         parce que rien n'a été vérifié. */
+      Engine: Engine,
       Bridge: Bridge,
       Actions: Actions,
       UI: UI,

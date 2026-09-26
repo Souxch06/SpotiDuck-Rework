@@ -1544,11 +1544,25 @@ if (!/blame: function \(\)/.test(stripComments(runtime)) || !/State\.title \? Se
   errors.push("le message ne distingue plus « rien ne joue » de « cette page n'expose pas la commande »");
 }
 for (const [appel, quoi] of [
-  ['this.fallback(" ", "playing", String(!want));', "lecture/pause"],
+  ['this.fallback(" ", "playing", ref);', "lecture/pause"],
   ['this.fallback("ArrowRight", "track");', "suivant"],
   ['this.fallback("ArrowLeft", "track");', "précédent"],
 ]) {
   if (!runtime.includes(appel)) errors.push(`${quoi} n'a plus de repli clavier : sur une page sans bouton vivant, le bouton ne ferait rien`);
+}
+/* Un appui = une commande. Le secours clavier ne doit jamais partir pendant
+   qu'une commande réseau roule : c'est précisément ce qui faisait « j'appuie sur
+   lire, la musique ne démarre pas » — la touche appuyait deux fois, une fois pour
+   lancer, une fois pour mettre en pause, dans le même tour de boucle. La garde est
+   donc un fil aussi solide que le repli lui-même. */
+if (!/if \(want && Engine\.inFlight\(\)\) \{[\s\S]{0,260}?this\.awaitEngine\(/.test(stripComments(runtime))) {
+  errors.push("le secours clavier n'est plus séquencé derrière la commande en cours : deux pilotes peuvent se contredire et annuler la lecture (défaut corrigé en 2.11.27)");
+}
+if (!/awaitEngine: function \(key, watch, ref, delay\)/.test(stripComments(runtime))) {
+  errors.push("plus d'`awaitEngine` : rien n'attend le résultat de la commande avant de la juger perdue, et le premier secours venu écrase la lecture");
+}
+if (!/verifyPlay: function \(ref\)/.test(stripComments(runtime)) || !/this\.verifyPlay\(ref\);/.test(runtime)) {
+  errors.push("plus de `verifyPlay` : un appui consommé par la page sera cru suffisant, alors qu'un bouton pressé n'est pas une musique qui joue");
 }
 if (!/transportNoTrack: "Rien ne joue/.test(runtime) || !/transportMissing: "Ces commandes ne répondent pas/.test(runtime)) {
   errors.push("les deux messages du transport ont changé de sens : l'utilisateur n'apprendrait plus pourquoi ça ne répond pas");
@@ -2019,8 +2033,15 @@ for (const m of libraryCode.matchAll(/(?:Settings|this)\.labels\[([^\]]+)\]/g)) 
   if (!(iToggle > 0 && iMedia > iToggle && iApi > iMedia)) {
     errors.push("l'ordre markup → moteur → élément → API Connect n'est plus tenu (la voie réseau ne doit jamais couper court aux voies vérifiées)");
   }
-  if (!/e\.playUri\(uri\);\s*return false;/.test(shell)) {
-    errors.push("`Engine.playContext` annonce un succès sur un simple envoi : plus rien ne jugera la page après la commande API");
+  if (!/e\.playUri\(uri\);[\s\S]{0,1400}?Engine\._sent = \{ want: true, uri: uri, at: Date\.now\(\) \};\s*return true;/.test(shell)) {
+    errors.push("`Engine.playContext` ne marque plus la commande « partie » : playPause ne peut plus savoir qu'un secours immédiat tuerait la lecture, et « j'appuie, rien » revient");
+  }
+  /* Le solde, pas la promesse : `settleSent` branché sur `Engine.sync` est la seule
+     raison pour laquelle une lecture réussie ne laisse pas la coque muette quatre
+     secondes, le temps que la commande expire. Couper ce fil ne casse rien de
+     visible — la touche de pause ne répond plus une fois, et rien ne le dit. */
+  if (!/Engine\.settleSent\(!!st\.playing\);/.test(shell)) {
+    errors.push("le solde de commande n'est plus branché sur `Engine.sync` : après une lecture réussie, la coque croit la commande encore en cours et ne presse plus rien");
   }
   /* 3 · le capteur écoute, il n'intercepte pas. */
   const logic = read("dist/spotiduck-logic.js");

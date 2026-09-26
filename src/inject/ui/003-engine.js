@@ -90,11 +90,34 @@
       var uri = e && Engine.contextUri();
       if (!uri) return false;
       if (!e.tokens().device) return false; /* le capteur n'a encore rien vu */
-      /* La commande part, mais rien ne dit à la coque qu'elle a été servie :
-         elle répond **faux** et laisse le watch juger la page. C'est le veilleur
-         (`Auto`, `fallback`) qui dira si la piste a démarré — jamais l'envoi. */
-      e.playUri(uri);
-      return false;
+      var ok = e.playUri(uri);
+      if (!ok) return false;
+      /* Réponse **vraie** depuis la 2.11.27, et le sens de cette vérité est
+         strictement celui-ci : « une commande est en cours ». Ce n'est toujours
+         pas « la page joue » — l'envoi ne le dit pas, et la coque ne doit pas le
+         faire dire. Avant ce patch, `playContext` répondait faux parce qu'il ne
+         pouvait rien prouver ; et comme `Actions.playPause` interroge la chaîne
+         de commande pour savoir s'il doit envoyer son secours, un `keydown
+         Espace` synthétique partait dans le même tour de boucle que le
+         `playFromUri` : deux pilotes sur un doigt, la lecture s'annulait
+         elle-même. `inFlight()` est maintenant la réponse unique à « faut-il un
+         secours, et quand ». */
+      Engine._sent = { want: true, uri: uri, at: Date.now() };
+      return true;
+    },
+    /** Une commande du moteur est-elle en cours ? (Vérité bornée dans le temps :
+     *  après l'échéance, la commande est considérée perdue et les secours
+     *  reprennent leurs droits — rien ne doit rester bloqué « en cours ».) */
+    inFlight: function (ms) {
+      var sent = Engine._sent;
+      if (!sent) return false;
+      if (Date.now() - sent.at > (ms || 4000)) { Engine._sent = null; return false; }
+      return true;
+    },
+    /** Ce qui solde une commande : la page a répondu ce qu'on voulait. */
+    settleSent: function (playing) {
+      var sent = Engine._sent;
+      if (sent && playing === sent.want) Engine._sent = null;
     },
     tokens: function () {
       var e = Engine.get();
@@ -112,6 +135,11 @@
     sync: function (st) {
       var e = Engine.get();
       if (!e || !st) return false;
+      /* Le compte rendu de la page solde la commande en cours : c'est ici, et pas
+         ailleurs, parce que `sync` est appelé par le seul tunnel où l'état part
+         vers Android (`Bridge.mediaStatus`) — donc par chaque chemin qui change
+         l'état, bouton de la notification ou widget compris. */
+      Engine.settleSent(!!st.playing);
       e.feed({
         track: st.title || "",
         artist: st.artist || "",

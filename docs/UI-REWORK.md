@@ -4230,3 +4230,83 @@ font avec `npm run split:ui`, jamais à la main dans `src/inject/ui/`). Mesure a
 le renommage : `cmp` du bundle avant/après — **identique**, donc **aucune nouvelle
 release n'est justifiée** : c'est la règle 2 du portique qui l'affirme, et tant
 mieux, elle prouve par là même qu'elle n'est pas qu'un rituel.
+
+
+## §62 — Un appui = une commande (v2.11.27)
+
+La demande était la plus large de toutes : « corrige la lecture des musiques sur
+l'application (boutons etc) ». Plutôt que de réécrire la chaîne de commande au
+juger, j'ai suivi celle qui était livrée, et je l'ai mesurée — avec un test écrit
+**avant** le correctif, qui échouait dessus.
+
+Deux défauts s'y trouvaient, et le second masquait le premier.
+
+**Un appui envoyait deux commandes.** `Engine.playContext()` répondait `false` par
+design — une commande réseau ne prouve rien, et la chaîne ne devait rien affirmer
+que la page n'ait confirmé. Cette pudeur avait un coût non prévu : `Actions.playPause`
+interroge la chaîne pour savoir s'il faut son secours clavier, voit `false`, et
+appelle `fallback(" ", …)` — dont la première ligne envoie un `keydown` Espace
+synthétique, **dans le même tour de boucle** que le `playFromUri` qui venait de
+partir. Deux pilotes sur un doigt : la page démarre, la touche la met en pause.
+Cela ne se voyait que là où la page n'offre pas de bouton de lecture vivant —
+c'est-à-dire précisément dans les configurations où l'utilisateur ne voit rien se
+passer. Mesure avant correctif : `Espace envoyé 1 fois` alors qu'il devait être tu.
+
+**Un appui obtenu n'était pas une lecture obtenue.** Quand le bouton existe et
+consomme l'événement, la chaîne répond `true` — et là, plus rien : pas de secours,
+pas de commande API, pas de verdict. Si Spotify n'est pas l'appareil de lecture,
+l'affichage optimiste se rollbacke tout seul et le seul filet qui reste est
+`Auto.armStuck`, dix secondes plus tard, qui passe par « piste suivante ». Un
+utilisateur qui appuie sur *Lire* et qui obtient un changement de morceau dix
+secondes plus tard a raison de dire que les boutons ne marchent pas.
+
+Ce qui a été changé, dans cet ordre :
+
+| Endroit | Ce qui est désormais vrai |
+| --- | --- |
+| `Engine.playContext` | répond « commande engagée » (et non plus « échec ») et **marque** cette commande dans `Engine._sent` ; jamais « la musique joue » |
+| `Engine.inFlight` / `settleSent` | la marque expire à 4 s, et `Engine.sync` la solde dès que la page dit ce qu'on voulait — un seul endroit, le tunnel qui parle déjà à Android |
+| `Actions.playPause` | si la chaîne échoue **alors qu'une commande roule**, le secours est séquencé (`awaitEngine` : on attend 1,6 s, on relit, on ne corrige que si rien n'a bougé) ; s'il n'y a pas de commande en cours, il part **tout de suite** — zéro latence ajoutée |
+| `Actions.verifyPlay` | après un appui réussi, la page est relue à 1,5 s ; si elle ne joue pas, escalade dans l'ordre : API du moteur, puis clavier, jamais les deux |
+| `Actions.fallback` | accepte une touche nulle : « juge, dis si rien ne joue, n'envoie rien » |
+| les deux verdicts | préviennent le moteur de l'état mesuré (`Engine.feed()`), sinon il rejoue d'après un souvenir |
+| `Actions._pending` | un appui vide le registre des échéances : le verdict d'un appui antérieur n'écrit plus dans un état qui ne le concerne plus |
+
+Le réflexe a été gardé d'exiger la preuve par le test. Trois cas sont entrés au banc
+jsdom, et chacun a été vu **échouer avant** le correctif : 155/156 (le secours
+concurrent), puis 156/157 (l'escalade absente). Le cas complémentaire compte
+autant que les autres : *sans* moteur, le secours doit partir immédiatement — il a
+passé à chaque exécution, ce qui interdit d'avoir réglé le premier défaut en
+endormant le bouton.
+
+Trois accidents de mesure, notés parce qu'ils disent plus que le correctif :
+
+1. un test temporisé écrit avec `check()` rendait une promesse que le harnais ne
+   pouvait pas attendre — **vert affiché, assertion jamais exécutée**. Depuis,
+   `check()` refuse une promesse et renvoie l'oubli vers `await checkAsync(...)` ;
+2. mes échéances à 1,5 s et 1,6 s déborderaient du test sur le suivant et y
+   écrivaient : le banc a fabriqué un faux défaut (`sd-native-modal not cleared`,
+   sans aucun rapport avec la lecture). Le registre `_pending` sert aussi à cela ;
+3. deux assertions du banc « moteur d'origine » et trois règles d'audit défendaient
+   la forme du texte, pas l'intention — elles sont tombées quand j'ai mis le
+   `Engine.feed()` à quatre lignes de distance du `if`. Elles sont écrites à
+   l'ordre, désormais, et tolèrent un commentaire.
+
+Verrous d'audit ajoutés (cinq) : la marque `_sent` et son `return true`, le solde
+branché sur `Engine.sync`, la garde `inFlight` devant le secours, l'existence de
+`awaitEngine` et de `verifyPlay`. Chacun est coupé séparément dans
+`tools/regress-audit.mjs` : **47/47** régressions détectées, donc aucun de ces fils
+ne peut se rompre en silence.
+
+Mesure à la release : `check` 0/0 · auto-test du portique 6/6 · banc jsdom
+**157/157** (deux exécutions de suite, identiques) · assertions du moteur d'origine
+**30/30** · audit des liens 0/0 · audit de régression 47/47.
+
+Ce que cette note ne prétend pas. Les deux défauts étaient réels, reproductibles
+ici, et sont corrigés ici. Ils n'expliquent **pas** à eux seuls tout ce qui a pu
+être observé sur le téléphone : la ligne de diagnostic que la notice demande
+(« · commandes … » sous le titre du lecteur) n'est jamais revenue dans nos
+échanges, et c'est elle qui dirait quel maillon répond sur la vraie page. Sur
+v2.11.27, le texte à recopier est : bouton *Lire* pressé une fois, attendre trois
+secondes, recopier la ligne complète sous le titre. Sans elle, je continue à
+corriger ce que je peux mesurer — pas ce que tu vois.

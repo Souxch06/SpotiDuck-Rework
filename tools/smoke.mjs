@@ -25,6 +25,13 @@ const results = [];
 function check(name, fn) {
   try {
     const detail = fn();
+    /* Un test qui rend une promesse sans qu'on l'attende ne vérifie rien : la
+       promesse est tenue, l'assertion à l'intérieur n'a pas encore eu le temps de
+       tomber, et le banc affiche un vert mentant. Vu ici, à la première version
+       d'un test temporisé — d'où la règle, écrite dans l'outil et non dans la doc. */
+    if (detail && typeof detail.then === "function") {
+      throw new Error("test async déclaré avec check() : utilise `await checkAsync(...)` — une promesse rendue n'est pas une vérification");
+    }
     results.push({ name, ok: true, detail: detail === undefined ? "" : String(detail) });
   } catch (e) {
     results.push({ name, ok: false, detail: e.message });
@@ -5697,6 +5704,146 @@ check("coop: the player reports a confirmed session", () => {
 check("origine : aucune erreur d'exécution", () => {
   assert(origErrors.length === 0, origErrors.join(" | "));
   return "0 erreur";
+});
+
+/* ------------------------------------------------------------------ 2.11.27
+   Un appui = une commande. Ce bloc est né du défaut que la découpe a rendu
+   lisible : `Engine.playContext()` renvoie **faux** par conception (une commande
+   réseau ne prouve pas l'état de la page) — et comme `Actions.playPause` appelle
+   son secours quand la chaîne de commande a répondu faux, il envoyait un
+   `keydown Espace` synthétique **dans le même tour de boucle** que le
+   `playFromUri` qu'il venait de commander. Deux pilotes, un seul doigt : la
+   page se mettait à lire, l'Espace la remettait en pause. C'est « j'appuie sur
+   lire et il se passe rien » sur exactement la configuration où la page n'offre
+   pas de bouton vivant — et le test ci-dessous échouait sur le code d'avant. */
+const engineHarness = (fn) => {
+  const savedHtml = doc.body.innerHTML;
+  const savedLogic = window.SpotiDuckLogic;
+  const savedPlaying = SD.state.playing;
+  const savedTitle = SD.state.title;
+  let keys = 0;
+  let uriCalls = 0;
+  let actCalls = [];
+  const spy = (e) => { if (e.key === " ") keys++; };
+  doc.body.addEventListener("keydown", spy, true);
+  doc.body.innerHTML =
+    '<div data-testid="now-playing-widget"><span data-testid="context-item-info-title">Morceau</span></div>';
+  dom.reconfigure({ url: "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M" });
+  SD.state.playing = false;
+  SD.state.title = "Morceau";
+  SD.state.artist = "Artiste";
+  window.SpotiDuckLogic = {
+    feed: () => true,
+    setPlaying: () => true,
+    has: () => true,
+    tokens: () => ({ device: "DEV-1", client: "cli…", auth: "Bearer …abc12", uri: null }),
+    playUri: (uri) => { uriCalls++; return true; },
+    call: (name) => { actCalls.push(name); return false; },
+  };
+  try {
+    return fn({ keys: () => keys, uriCalls: () => uriCalls, actCalls });
+  } finally {
+    /* **Rendre la page seulement quand plus rien ne lui tombera dessus.** Un appui
+       sur « lire » arme `settle`, `armStuck`, `verifyPlay`, `awaitEngine` : des
+       rappels à 700 ms, 1,5 s, 1,6 s et 10 s qui écrivent dans le DOM et posent des
+       classes. Les laisser courir par-dessus le test suivant, c'est fabiquer un
+       faux défaut — vérifié ici : `sd-native-modal not cleared`, sans rapport avec
+       la lecture. On vide donc les minuteries et on rend l'état tel qu'on l'a pris. */
+    SD._internals.Actions._clearPending();
+    clearTimeout(SD._internals.Actions._t);
+    clearTimeout(SD._internals.Auto._stuck);
+    SD._internals.Actions.fallbackAbort && SD._internals.Actions.fallbackAbort();
+    SD._internals.Auto.wantPlay = false;
+    SD._internals.Auto.stuckTries = 0;
+    SD._internals.Engine._sent = null;
+    doc.body.removeEventListener("keydown", spy, true);
+    window.SpotiDuckLogic = savedLogic;
+    doc.body.innerHTML = savedHtml;
+    SD.state.playing = savedPlaying;
+    SD.state.title = savedTitle;
+    dom.reconfigure({ url: "https://open.spotify.com/" });
+  }
+};
+
+check("une commande déjà partie ne reçoit pas une seconde commande", () => {
+  return engineHarness((h) => {
+    SD._internals.Actions.playPause();
+    assert(h.uriCalls() === 1, "le moteur n'a pas été consulté pour démarrer la lecture");
+    assert(h.keys() === 0, "un appui sur Espace a été envoyé pendant que playFromUri était en cours (" + h.keys() + " fois)");
+    return "0 secours concurrent";
+  });
+});
+
+check("sans moteur, le secours clavier part tout de suite", () => {
+  const savedHtml = doc.body.innerHTML;
+  const savedLogic = window.SpotiDuckLogic;
+  let keys = 0;
+  const spy = (e) => { if (e.key === " ") keys++; };
+  doc.body.addEventListener("keydown", spy, true);
+  doc.body.innerHTML = '<div data-testid="now-playing-widget"><span>x</span></div>';
+  window.SpotiDuckLogic = null;
+  SD.state.playing = false;
+  SD.state.title = "Morceau";
+  try {
+    SD._internals.Actions.playPause();
+    assert(keys === 1, "le clavier du lecteur n'a pas été pressé (il est le seul chemin restant)");
+    return "1 appui, 0 attente";
+  } finally {
+    doc.body.removeEventListener("keydown", spy, true);
+    window.SpotiDuckLogic = savedLogic;
+    doc.body.innerHTML = savedHtml;
+  }
+});
+
+/* Un bouton pressé n'est pas une musique qui joue. Ce cas est le plus fréquent
+   des deux : la page OFFRE son bouton, l'appui est consommé (donc la chaîne de
+   commande répond « vrai »), mais Spotify ne démarre rien — l'application n'est
+   pas l'appareil de lecture, ou la page a avalé l'événement. Avant la 2.11.27,
+   rien n'était alors consulté : la coque croyait avoir commandé, l'affichage
+   optimiste se rollbackait tout seul, et le seul filet était `Auto.armStuck`,
+   dix secondes plus tard, qui passe par « piste suivante ». Le test ci-dessous
+   échouait sur le code d'avant : 0 commande envoyée. */
+await checkAsync("un bouton qui ne joue pas est escaladé au moteur, pas rollbacké", async () => {
+  const savedHtml = doc.body.innerHTML;
+  const savedLogic = window.SpotiDuckLogic;
+  const savedPlaying = SD.state.playing;
+  let uriCalls = 0;
+  let keys = 0;
+  const spy = (e) => { if (e.key === " ") keys++; };
+  doc.body.addEventListener("keydown", spy, true);
+  /* Un bouton vivant : l'appui est bien reçu. Mais derrière, rien : la page ne
+     joue toujours pas — exactement ce que produit une WebView qui n'est pas
+     l'appareil élu. */
+  doc.body.innerHTML =
+    '<footer data-testid="now-playing-bar"><button data-testid="play-pause" aria-label="Lecture"></button></footer>';
+  dom.reconfigure({ url: "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M" });
+  SD.state.playing = false;
+  SD.state.title = "Morceau";
+  window.SpotiDuckLogic = {
+    feed: () => true,
+    setPlaying: () => true,
+    has: () => true,
+    tokens: () => ({ device: "DEV-1", client: "cli…", auth: "Bearer …abc12", uri: null }),
+    playUri: () => { uriCalls++; return true; },
+    call: () => false,
+  };
+  try {
+    SD._internals.Actions.playPause();
+    assert(uriCalls === 0, "la commande ne doit pas partir avant la vérification (sinon deux pilotes)");
+    /* 1,5 s : le verdict de `verifyPlay`. + 1,6 s : le jugement du secours engagé
+       par `awaitEngine`. On attend les deux, sinon ils déborderaient sur le
+       test suivant avec la page déjà rendue. */
+    await tick(3400);
+    assert(uriCalls === 1, "le bouton a été pressé sans que la page joue : aucune escalade au moteur (uriCalls=" + uriCalls + ")");
+    assert(keys <= 1, "escalade + clavier en même temps : deux secours concurrents (" + keys + ")");
+    return "escaladé après vérification, un seul secours à la fois";
+  } finally {
+    doc.body.removeEventListener("keydown", spy, true);
+    window.SpotiDuckLogic = savedLogic;
+    doc.body.innerHTML = savedHtml;
+    SD.state.playing = savedPlaying;
+    dom.reconfigure({ url: "https://open.spotify.com/" });
+  }
 });
 
 /* ------------------------------------------------------------------ report */
