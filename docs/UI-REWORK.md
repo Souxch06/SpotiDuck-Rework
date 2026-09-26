@@ -4213,3 +4213,20 @@ moteur **29/29** · audit **0/0** · regress **43/43** (les cas qui visaient la 
 mutent désormais **le module qui contient le texte** : le motif est localisé, pas
 recollé à la main) · `check` 0 erreur · auto-test **6/6** · asset `native-mode.js`
 livré inchangé.
+
+**Prolongement immédiat (même passe).** Une découpe se lit par ses noms : seize
+modules portaient un nom déformé par les accents (`026-notre-biblioth-que.js`) ou
+réduit à `module` parce que le numéro de passe (`11e-quinquies-bis.`) mangeait le
+mot suivant. Le nom est donc **re-tiré** du titre de section — premier segment avant
+le tiret demi-cadratin, numéro de passe retiré par un motif borné (pas une liste
+d'exceptions à tenir à jour), deux mots au plus. La liste des 39 fichiers est
+désormais une carte de la coque : `002-spotify-adapter`, `003-engine`, `012-actions`,
+`018-device`, `025-home`, `026-library`, `027-net`, `028-stats`, `034-gestures`,
+`038-public-api`.
+
+Et pour que ça le reste, `tools/split-ui.mjs` lit la coque **assemblée** et non
+l'enveloppe : il est rejouable (renommer, renuméroter, rééquilibrer une frontière se
+font avec `npm run split:ui`, jamais à la main dans `src/inject/ui/`). Mesure après
+le renommage : `cmp` du bundle avant/après — **identique**, donc **aucune nouvelle
+release n'est justifiée** : c'est la règle 2 du portique qui l'affirme, et tant
+mieux, elle prouve par là même qu'elle n'est pas qu'un rituel.

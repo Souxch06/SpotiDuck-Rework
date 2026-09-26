@@ -36,10 +36,11 @@
  * défaut que la règle 1 du portique attrape, et c'est en écrivant cet outil qu'on
  * l'a rencontré trois fois.
  */
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, existsSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "acorn";
+import { uiSource } from "./ui-source.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SRC = join(root, "src/inject");
@@ -56,7 +57,12 @@ export const MARKER = "  /* @@MODULES@@ */";
    tentative de cet outil a exactement fait. */
 const BANNER = /^ {2}\/\* -{60,} \*\n(?: {3}\*.*\n)*? {3}\* -{60,} \*\/\n/gm;
 
-const src = readFileSync(SHELL, "utf8");
+/* La source lue est la coque **assemblée**, pas le fichier de l'enveloppe : sans
+   ça, relancer cet outil après une découpe ne verrait qu'une enveloppe vide et
+   écraserait les modules. Autrement dit, l'outil est rejouable — renommer,
+   renuméroter, rééquilibrer une frontière se font ici, pas à la main dans
+   src/inject/ui/. */
+const src = existsSync(join(SRC, "ui")) ? uiSource(root) : readFileSync(SHELL, "utf8");
 const banners = [];
 for (const m of src.matchAll(BANNER)) {
   /* Le titre = les lignes entre les deux traits. La dernière ligne du bloc est le
@@ -99,17 +105,28 @@ if (glue !== src) {
   process.exit(1);
 }
 
-const STOP = new Set(["the", "and", "for", "with", "from", "that", "this", "not", "are", "was", "into", "our", "their", "its", "but", "nor", "so", "as", "at", "on", "of", "to", "in", "is", "it", "a"]);
+const STOP = new Set([
+  /* anglais */ "the", "and", "for", "with", "from", "that", "this", "not", "are", "was", "into", "our", "their", "its", "but", "nor", "so", "as", "at", "on", "of", "to", "in", "is", "it", "a",
+  /* français */ "les", "des", "une", "dans", "avec", "pour", "sur", "par", "que", "qui", "est", "sont", "nos", "notre", "votre", "leur", "aux", "ces", "cet", "plus", "tres", "tout", "toute", "chaque", "ainsi", "donc", "or", "ni", "ou", "si", "elle", "elles", "nous", "vous", "cela", "cet", "avant", "apres", "sans", "sous", "tres", "deja", "encore", "seul", "seule",
+  /* ordinalité historique des passes */ "bis", "ter", "quater", "quinquies", "ies", "suite",
+]);
 const slug = (title) => {
-  const cleaned = title
-    /* Les titres portent la numérotation historique des passes (« 10-bis. »,
-       « 11e-ter. », « 5 bis. ») : elle ne dit rien du contenu et polluerait le nom. */
-    .replace(/^\s*\d+\s*(?:[-.]?\s*[a-zà-ÿ]+)*\.?\s*/i, "")
+  /* On garde le premier segment du titre (« Home — notre page d'accueil » → home) :
+     c'est lui qui nomme la section, le reste est une explication — et une
+     explication dans un nom de fichier ne fait que le rendre pénible à taper. */
+  const first = title.split(/\s+[—·]\s+|\s+\(|\.$/)[0] || title;
+  const cleaned = first
+    /* Le numéro de passe (« 10-quater. », « 11e-ter. », « 5 bis. ») est retiré par
+       un motif borné : tout ce qui précède le premier point, à condition que ça
+       commence par un chiffre et que ce soit court. Une liste d'exceptions de
+       numérotation aurait été le genre de convention qu'on oublie de tenir à jour. */
+    .replace(/^\s*\d+[^.]{0,18}\.\s+/, "")
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-zA-Z0-9 ]/g, " ")
     .toLowerCase()
     .split(/\s+/)
-    .filter((w) => w.length > 2 && !STOP.has(w) && !/^(bis|ter|quater|quinquies|ies|suite|\d+$)/.test(w));
-  return cleaned.slice(0, 3).join("-") || "module";
+    .filter((w) => w.length > 2 && !STOP.has(w) && !/^\d+$/.test(w));
+  return cleaned.slice(0, 2).join("-") || "module";
 };
 
 const plan = pieces.map((p) => ({
